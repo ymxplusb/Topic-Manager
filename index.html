@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title>Jarvis Topic Manager</title>
+<link rel="stylesheet" href="/app/styles/main.css?v=1000">
+<!-- Vue 3 — loaded from local lib/ for offline support -->
+<script src="/lib/vue.global.prod.js"></script>
+</head>
+<body>
+<!-- Classification banners — controlled by SettingsTab.js -->
+<div id="banner-top"  class="classification-banner-top"  style="display:none"></div>
+
+<div id="app-mount"></div>
+
+<div id="banner-bot"  class="classification-banner-bottom" style="display:none"></div>
+
+<!-- Component scripts (cache-bust: increment v= on every release) -->
+<script src="/app/components/modals/AboutModal.js?v=1000"></script>
+<script src="/app/components/modals/DeleteTopicModal.js?v=1000"></script>
+<script src="/app/components/modals/CreateTopicModal.js?v=1000"></script>
+<script src="/app/components/modals/TopicConfigModal.js?v=1000"></script>
+<script src="/app/components/LoginView.js?v=1000"></script>
+<script src="/app/components/TopBar.js?v=1000"></script>
+<script src="/app/components/TopicsTab.js?v=1000"></script>
+<script src="/app/components/ConsumerGroupsTab.js?v=1000"></script>
+<script src="/app/components/AuditTab.js?v=1000"></script>
+<script src="/app/components/SettingsTab.js?v=1000"></script>
+
+<script>
+const { createApp, ref, computed, onMounted } = Vue;
+
+const App = {
+    components: { LoginView, TopBar, TopicsTab, ConsumerGroupsTab, AuditTab, SettingsTab, AboutModal },
+    setup() {
+        const user        = ref(null);
+        const currentTab  = ref('topics');
+        const clusters    = ref([]);
+        const activeCluster = ref('');
+        const brokerMeta  = ref(null);
+        const topicCount  = ref(0);
+        const showAbout   = ref(false);
+        const version     = ref('1.0.0');
+
+        async function fetchVersion() {
+            try {
+                const r = await fetch('/api/version');
+                if (r.ok) { const d = await r.json(); version.value = d.version || '1.0.0'; }
+            } catch (_) {}
+        }
+
+        async function fetchClusters() {
+            try {
+                const r = await fetch('/api/clusters');
+                if (r.ok) {
+                    const d = await r.json();
+                    clusters.value = d.clusters || [];
+                    const active = clusters.value.find(c => c.active);
+                    if (active && !activeCluster.value) activeCluster.value = active.id;
+                }
+            } catch (_) {}
+        }
+
+        async function checkSession() {
+            try {
+                const r = await fetch('/api/auth/whoami');
+                if (r.ok) { const d = await r.json(); user.value = d.user; }
+            } catch (_) {}
+        }
+
+        async function logout() {
+            await fetch('/api/auth/logout', { method: 'POST' });
+            user.value = null; currentTab.value = 'topics';
+        }
+
+        function onLoggedIn(u) {
+            user.value = u;
+            fetchClusters();
+            fetchVersion();
+        }
+
+        function onClusterChanged(id) {
+            activeCluster.value = id;
+            fetch('/api/clusters/active', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cluster_id: id }),
+            });
+        }
+
+        onMounted(() => {
+            // Apply saved theme before first paint
+            const t = localStorage.getItem('tmTheme') || 'dark';
+            document.body.classList.remove('light-mode', 'cb-mode');
+            if (t === 'light') document.body.classList.add('light-mode');
+            if (t === 'cb')    document.body.classList.add('cb-mode');
+
+            checkSession().then(() => {
+                if (user.value) { fetchClusters(); fetchVersion(); }
+            });
+        });
+
+        return { user, currentTab, clusters, activeCluster, brokerMeta, topicCount, showAbout, version,
+                 onLoggedIn, logout, onClusterChanged };
+    },
+    template: `
+<div id="app-shell" v-if="user">
+  <TopBar
+    :user="user"
+    :clusters="clusters"
+    :active-cluster-id="activeCluster"
+    :broker-meta="brokerMeta"
+    @logout="logout"
+    @cluster-changed="onClusterChanged"
+    @open-about="showAbout = true"
+  />
+  <nav class="app-nav">
+    <button class="ntab" :class="{ act: currentTab === 'topics' }"   @click="currentTab = 'topics'">
+      Topics <span class="nbadge">{{ topicCount || '' }}</span>
+    </button>
+    <button class="ntab" :class="{ act: currentTab === 'cgroups' }"  @click="currentTab = 'cgroups'">Consumer Groups</button>
+    <button class="ntab" :class="{ act: currentTab === 'audit' }"    @click="currentTab = 'audit'">Audit Log</button>
+    <button class="ntab" :class="{ act: currentTab === 'settings' }" @click="currentTab = 'settings'">Settings</button>
+  </nav>
+  <div class="app-content">
+    <TopicsTab          v-if="currentTab === 'topics'"   :cluster-id="activeCluster" @topic-count="topicCount = $event" />
+    <ConsumerGroupsTab  v-if="currentTab === 'cgroups'"  :cluster-id="activeCluster" />
+    <AuditTab           v-if="currentTab === 'audit'" />
+    <SettingsTab        v-if="currentTab === 'settings'"
+      :clusters="clusters"
+      :active-cluster-id="activeCluster"
+      :version="version"
+      @open-about="showAbout = true"
+      @cluster-changed="onClusterChanged"
+    />
+  </div>
+  <AboutModal v-if="showAbout" @close="showAbout = false" />
+</div>
+<LoginView v-else @logged-in="onLoggedIn" />
+`,
+};
+
+createApp(App).mount('#app-mount');
+</script>
+</body>
+</html>

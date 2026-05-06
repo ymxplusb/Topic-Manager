@@ -1,0 +1,39 @@
+# Jarvis Topic Manager — Configuration
+# Copy to /etc/topic-manager/config.yaml and edit before running install.sh
+# Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
+
+server:
+  host: 127.0.0.1
+  port: 5001
+  # Generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
+  secret_key: "CHANGE_ME_GENERATE_A_RANDOM_SECRET"
+
+auth:
+  ldap_server: "ldaps://dc1.int.crypticlight.com:636"
+  ldap_domain: "int.crypticlight.com"
+  ldap_base_dn: "DC=int,DC=crypticlight,DC=com"
+  # Service account for LDAP searches (read-only, no admin rights needed)
+  ldap_bind_dn: "CN=svc-kafka-ui,OU=Service Accounts,DC=int,DC=crypticlight,DC=com"
+  ldap_bind_password: "CHANGE_ME"
+  # Full DN of the AD group users must belong to
+  required_group: "CN=Kafka-Admins,CN=Users,DC=int,DC=crypticlight,DC=com"
+
+clusters:
+  - id: "bare-metal"
+    name: "Bare Metal — Legacy Jarvis"
+    bootstrap_servers: "broker1.int.crypticlight.com:9092,broker2.int.crypticlight.com:9092,broker3.int.crypticlight.com:9092"
+    security_protocol: "PLAINTEXT"
+    active: true
+
+  - id: "k8s-jarvis"
+    name: "K8s Jarvis"
+    bootstrap_servers: "192.168.202.131:9094,192.168.202.132:9094,192.168.202.133:9094"
+    security_protocol: "SSL"
+    ssl_cafile: "/etc/topic-manager/kafka-k8s-ca.crt"
+    active: false
+
+session:
+  timeout_minutes: 30
+
+audit:
+  db_path: "/opt/topic-manager/data/tm.db"

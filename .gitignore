@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+*.db
+*.sqlite3
+install/packages/python/
+install/packages/apt/
+lib/vue.global.prod.js
+topic-manager-offline-*.tar.gz
+/config/*.yaml
+!/config/config.yaml.example
+.DS_Store

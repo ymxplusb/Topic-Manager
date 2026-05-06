@@ -1,0 +1,89 @@
+# Jarvis Topic Manager — Third-Party Notices
+
+Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
+
+This product includes software developed by third parties under the following licenses.
+
+---
+
+## Vue.js
+Version: 3.5.13
+License: MIT
+Copyright (c) 2013-present, Yuxi (Evan) You
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+
+---
+
+## Flask
+Version: 3.1.0
+License: BSD-3-Clause
+Copyright 2010 Pallets
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+1. Redistributions of source code must retain the above copyright notice.
+2. Redistributions in binary form must reproduce the above copyright notice.
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+---
+
+## gunicorn
+Version: 23.0.0
+License: MIT
+Copyright 2009-2015 (c) Benoît Chesneau; 2009-2015 (c) Paul J. Davis
+
+---
+
+## ldap3
+Version: 2.9.1
+License: LGPL-3.0
+Copyright 2013-2022 Giovanni Cannata
+
+---
+
+## confluent-kafka-python
+Version: 2.6.1
+License: Apache-2.0
+Copyright 2016-2024 Confluent Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License.
+You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
+---
+
+## PyYAML
+Version: 6.0.2
+License: MIT
+Copyright (c) 2017-2021 Ingy döt Net; Copyright (c) 2006-2016 Kirill Simonov
+
+---
+
+## cryptography
+Version: 44.0.2
+License: Apache-2.0 and BSD
+Copyright (c) Individual contributors.
+
+---
+
+## Werkzeug
+Version: 3.1.3
+License: BSD-3-Clause
+Copyright 2007 Pallets
+
+---
+
+## nginx
+License: BSD-2-Clause
+Copyright (c) 2002-2021 Igor Sysoev; Copyright (c) 2011-2021 Nginx, Inc.
+
+---
+
+## Apache Kafka
+License: Apache-2.0
+Copyright (c) Apache Software Foundation
+
+Licensed under the Apache License, Version 2.0.

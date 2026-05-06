@@ -1,0 +1,33 @@
+[Unit]
+Description=Jarvis Topic Manager (gunicorn)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=topic-manager
+Group=topic-manager
+WorkingDirectory=/opt/topic-manager
+Environment="TM_CONFIG=/etc/topic-manager/config.yaml"
+ExecStart=/opt/topic-manager/venv/bin/gunicorn \
+    --workers 2 \
+    --bind 127.0.0.1:5001 \
+    --timeout 60 \
+    --access-logfile /opt/topic-manager/logs/access.log \
+    --error-logfile  /opt/topic-manager/logs/error.log \
+    --capture-output \
+    "tm.app:create_app()"
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=topic-manager
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/topic-manager/data /opt/topic-manager/logs
+
+[Install]
+WantedBy=multi-user.target

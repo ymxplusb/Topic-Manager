@@ -1,0 +1,20 @@
+"Jarvis Topic Manager — Ports Protocols and Services Management (PPSM)",,,,,
+"Version","1.0.0",,,,
+"Copyright","(c) 2025-2026 James Rodman",,,,
+,,,,,,
+"Section","Service/Component","Port","Protocol","Direction","Description"
+"--- INBOUND (Topic Manager Server) ---",,,,,
+"Web","SSH","22","TCP","Inbound","Secure shell administration (claude_admin key)"
+"Web","HTTP","80","TCP","Inbound","Redirect to HTTPS (301 permanent)"
+"Web","HTTPS","443","TCP","Inbound","Topic Manager Web UI + REST API (nginx TLS termination)"
+"--- INTERNAL LOOPBACK ---",,,,,
+"App","Flask/gunicorn","5001","TCP","Loopback","nginx → gunicorn (127.0.0.1 only, not externally accessible)"
+"--- OUTBOUND (Topic Manager Server initiates) ---",,,,,
+"Auth","Active Directory LDAPS","636","TCP","Outbound","AD credential validation and group membership check"
+"Auth","Active Directory LDAP","389","TCP","Outbound","AD fallback (plaintext — configure LDAPS where possible)"
+"Kafka","Kafka Bare Metal Brokers","9092","TCP","Outbound","Kafka AdminClient wire protocol (broker1-3.int.crypticlight.com)"
+"Kafka","Kafka K8s Cluster (SSL)","9094","TCP","Outbound","Kafka AdminClient SSL (MetalLB VIPs 192.168.202.131-133)"
+"--- DATA AT REST ---",,,,,
+"Storage","SQLite Audit DB","N/A","File","Local","/opt/topic-manager/data/tm.db — audit log (user, action, target, timestamp)"
+"Storage","Session Data","N/A","Cookie","Browser","Signed Flask session cookie (HTTPOnly, Secure, SameSite=Lax)"
+"Storage","Theme/Banner Prefs","N/A","localStorage","Browser","UI preferences only — no credentials or sensitive data"
