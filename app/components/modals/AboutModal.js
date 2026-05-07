@@ -19,10 +19,11 @@ const AboutModal = {
                 { name: 'Werkzeug',        version: '3.1.3',    license: 'BSD-3',     url: 'werkzeug.palletsprojects.com' },
             ],
             infra: [
-                { name: 'nginx',           version: 'latest',   license: 'BSD-2',     url: 'nginx.org' },
-                { name: 'Ubuntu',          version: '24.04 LTS',license: 'Various',   url: 'ubuntu.com' },
-                { name: 'Python',          version: '3.12',     license: 'PSF-2.0',   url: 'python.org' },
-                { name: 'Apache Kafka',    version: '3.8.x',    license: 'Apache-2.0',url: 'kafka.apache.org' },
+                { name: 'nginx',           version: 'latest',   license: 'BSD-2',      url: 'nginx.org' },
+                { name: 'Ubuntu',          version: '24.04 LTS',license: 'Various',    url: 'ubuntu.com' },
+                { name: 'Python',          version: '3.12',     license: 'PSF-2.0',    url: 'python.org' },
+                { name: 'Apache Kafka',    version: '3.8.x',    license: 'Apache-2.0', url: 'kafka.apache.org' },
+                { name: 'SQLite',          version: '3.x',      license: 'Public Domain', url: 'sqlite.org' },
             ],
         };
     },

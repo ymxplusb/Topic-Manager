@@ -76,6 +76,17 @@ Copyright 2007 Pallets
 
 ---
 
+## SQLite
+Version: 3.x
+License: Public Domain
+Source: sqlite.org
+
+SQLite is in the public domain. No attribution is required, but the authors
+request that credit be given where possible. The SQLite source code is
+available at https://www.sqlite.org/download.html.
+
+---
+
 ## nginx
 License: BSD-2-Clause
 Copyright (c) 2002-2021 Igor Sysoev; Copyright (c) 2011-2021 Nginx, Inc.

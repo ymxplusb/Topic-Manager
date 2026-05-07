@@ -26,6 +26,12 @@
 | cryptography     | 44.0.2  | Apache-2.0/BSD  | cryptography.io                     |
 | Werkzeug         | 3.1.3   | BSD-3-Clause    | werkzeug.palletsprojects.com        |
 
+## Database
+
+| Component | Version | License      | Source       |
+|-----------|---------|--------------|--------------|
+| SQLite    | 3.x     | Public Domain | sqlite.org  |
+
 ## Infrastructure
 
 | Component     | Version    | License    | Source            |
