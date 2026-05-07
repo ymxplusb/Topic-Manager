@@ -172,6 +172,14 @@ if [[ ! -f "${CONFIG_DIR}/tls/server.crt" ]]; then
     warn "  Then: sudo systemctl restart nginx topic-manager"
 fi
 
+# ─── firewall ────────────────────────────────────────────────────────────────
+if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
+    info "Opening firewall ports 80 and 443..."
+    ufw allow 80/tcp  --quiet
+    ufw allow 443/tcp --quiet
+    success "Firewall ports 80/443 open"
+fi
+
 # ─── nginx test ──────────────────────────────────────────────────────────────
 nginx -t 2>/dev/null && success "nginx config valid" || warn "nginx config test failed — check cert paths"
 
