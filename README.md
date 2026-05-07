@@ -38,6 +38,29 @@ Jarvis Topic Manager is a lightweight web application that provides a secure, AD
 
 ## Quick Start
 
+### Build Artifacts
+
+**Frontend tar** (for deployment without git on the target server):
+```bash
+# Run on any machine with the repo checked out + lib/vue.global.prod.js present
+# Download Vue first if needed:
+curl -fsSL https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js \
+  -o lib/vue.global.prod.js
+# Build the tar:
+tar czf topic-manager-frontend-1.0.0.tar.gz \
+  app index.html lib jarvis-favicon.ico jarvis-glyph-32.png
+# Deploy on server:
+sudo tar xzf topic-manager-frontend-1.0.0.tar.gz -C /var/www/topic-manager/
+sudo chown -R www-data:www-data /var/www/topic-manager/
+```
+
+**Offline bundle** (air-gapped installs — requires Linux/WSL with pip3):
+```bash
+bash prepare-offline.sh --bundle
+# → creates topic-manager-offline-1.0.0.tar.gz
+# Contains: all source + Python wheels + Vue.js lib
+```
+
 ### Online Install
 ```bash
 git clone https://github.com/ymxplusb/Topic-Manager.git
