@@ -17,6 +17,9 @@ const TopicsTab = {
             showCreate: false,
             configTopic: null,
             deleteTopic: null,
+            showBulkDelete: false,
+            bulkDeleting: false,
+            bulkDeleteError: '',
         };
     },
     computed: {
@@ -65,14 +68,30 @@ const TopicsTab = {
         toggleAll(checked) {
             this.selected = checked ? new Set(this.filtered.map(t => t.name)) : new Set();
         },
-        async bulkDelete() {
+        openBulkDelete() {
             if (!this.selected.size) return;
-            const names = [...this.selected];
-            if (!confirm(`Permanently delete ${names.length} topic(s)?\n\n${names.join('\n')}\n\nThis cannot be undone.`)) return;
+            this.bulkDeleteError = '';
+            this.showBulkDelete = true;
+        },
+        async confirmBulkDelete() {
+            this.bulkDeleting = true;
+            this.bulkDeleteError = '';
             const qs = this.clusterId ? `?cluster=${this.clusterId}` : '';
-            for (const name of names) {
-                await window.fetch(`/api/topics/${encodeURIComponent(name)}${qs}`, { method: 'DELETE' });
+            const errors = [];
+            for (const name of [...this.selected]) {
+                const r = await window.fetch(`/api/topics/${encodeURIComponent(name)}${qs}`, { method: 'DELETE' });
+                if (!r.ok) {
+                    const d = await r.json().catch(() => ({}));
+                    errors.push(`${name}: ${d.error || r.status}`);
+                }
             }
+            this.bulkDeleting = false;
+            if (errors.length) {
+                this.bulkDeleteError = errors.join('\n');
+                return;
+            }
+            this.showBulkDelete = false;
+            this.selected = new Set();
             await this.fetch();
         },
         onCreated()  { this.showCreate = false; this.fetch(); },
@@ -151,7 +170,7 @@ const TopicsTab = {
       <input type="checkbox" v-model="showInternal"> Show internal
     </label>
     <div class="tspacer"></div>
-    <button class="btn btn-sm" v-if="selectedCount > 0" @click="bulkDelete" style="color:var(--accent-red);border-color:rgba(248,113,113,.35)">
+    <button class="btn btn-sm" v-if="selectedCount > 0" @click="openBulkDelete" style="color:var(--accent-red);border-color:rgba(248,113,113,.35)">
       🗑 Delete ({{ selectedCount }})
     </button>
     <button class="btn btn-sm" @click="fetch" :disabled="loading">↻ Retrieve All</button>
@@ -207,6 +226,43 @@ const TopicsTab = {
     :topic-name="deleteTopic.name"
     @close="deleteTopic = null"
     @confirmed="onDeleted" />
+
+  <!-- Bulk Delete Modal -->
+  <div v-if="showBulkDelete" class="mback open" @click.self="showBulkDelete = false">
+    <div class="modal">
+      <div class="mhdr">
+        <div>
+          <div class="mtitle" style="color:var(--accent-red)">⚠ Delete {{ selected.size }} Topic{{ selected.size !== 1 ? 's' : '' }}</div>
+          <div class="msub">This action is irreversible</div>
+        </div>
+        <button class="mclose" @click="showBulkDelete = false">✕</button>
+      </div>
+      <div class="mbody">
+        <div class="del-warn">
+          <span class="wi">⚠️</span>
+          <div class="wt">
+            The following topics and <strong>all their messages</strong> will be permanently deleted.
+            Active consumers will receive errors. <strong>This cannot be undone.</strong>
+          </div>
+        </div>
+        <div style="background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:7px;padding:10px 12px;max-height:200px;overflow-y:auto">
+          <div v-for="name in [...selected]" :key="name"
+               style="font-family:var(--mono);font-size:.7rem;color:var(--text-primary);padding:3px 0;border-bottom:1px solid var(--border-color)"
+               :style="{ borderBottom: name === [...selected][[...selected].length-1] ? 'none' : '' }">
+            {{ name }}
+          </div>
+        </div>
+        <div v-if="bulkDeleteError" style="margin-top:10px;color:var(--accent-red);font-size:.7rem;white-space:pre-line">{{ bulkDeleteError }}</div>
+      </div>
+      <div class="mfoot">
+        <button class="btn btn-secondary" @click="showBulkDelete = false" :disabled="bulkDeleting">Cancel</button>
+        <button class="btn btn-danger" @click="confirmBulkDelete" :disabled="bulkDeleting">
+          <span v-if="bulkDeleting" class="spinner"></span>
+          <span v-else>Delete {{ selected.size }} Topic{{ selected.size !== 1 ? 's' : '' }}</span>
+        </button>
+      </div>
+    </div>
+  </div>
 </div>
 `,
 };
