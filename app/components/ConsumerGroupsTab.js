@@ -16,7 +16,7 @@ const ConsumerGroupsTab = {
             this.loading = true; this.error = '';
             try {
                 const qs = this.clusterId ? `?cluster=${this.clusterId}` : '';
-                const r  = await window.fetch(`/api/consumer-groups${qs}`);
+                const r  = await fetch(`/api/consumer-groups${qs}`);
                 const d  = await r.json();
                 if (!r.ok) { this.error = d.error || 'Failed'; return; }
                 this.groups = d.groups || [];

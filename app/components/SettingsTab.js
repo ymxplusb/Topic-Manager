@@ -38,7 +38,7 @@ const SettingsTab = {
     methods: {
         async loadSettings() {
             try {
-                const r = await window.fetch('/api/settings');
+                const r = await fetch('/api/settings');
                 if (!r.ok) return;
                 const s = await r.json();
                 this.dowEnabled    = s.dow_enabled    === 'true';
@@ -50,14 +50,14 @@ const SettingsTab = {
             } catch (_) {}
         },
         async saveDow() {
-            await window.fetch('/api/settings', {
+            await fetch('/api/settings', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ dow_enabled: String(this.dowEnabled) }),
             });
         },
         async saveBanner() {
-            await window.fetch('/api/settings', {
+            await fetch('/api/settings', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -87,7 +87,7 @@ const SettingsTab = {
         async testCluster(id) {
             this.testing[id] = true;
             try {
-                const r = await window.fetch(`/api/clusters/${id}/test`);
+                const r = await fetch(`/api/clusters/${id}/test`);
                 const d = await r.json();
                 this.testResults[id] = d;
             } catch (e) {

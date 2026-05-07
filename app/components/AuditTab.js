@@ -10,7 +10,7 @@ const AuditTab = {
             if (p !== undefined) this.page = p;
             this.loading = true; this.error = '';
             try {
-                const r = await window.fetch(`/api/audit?page=${this.page}&per_page=50`);
+                const r = await fetch(`/api/audit?page=${this.page}&per_page=50`);
                 const d = await r.json();
                 if (!r.ok) { this.error = d.error || 'Failed'; return; }
                 this.entries = d.entries; this.total = d.total; this.pages = d.pages;
@@ -21,7 +21,7 @@ const AuditTab = {
             }
         },
         async exportCsv() {
-            const r   = await window.fetch('/api/audit/export');
+            const r   = await fetch('/api/audit/export');
             const txt = await r.text();
             const a   = document.createElement('a');
             a.href = URL.createObjectURL(new Blob([txt], { type: 'text/csv' }));

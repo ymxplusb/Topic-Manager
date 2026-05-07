@@ -50,8 +50,8 @@ const TopicsTab = {
                 const qs = this.clusterId ? `?cluster=${this.clusterId}&internal=true` : '?internal=true';
                 const brokerQs = this.clusterId ? `?cluster=${this.clusterId}` : '';
                 const [tr, mr] = await Promise.all([
-                    window.fetch(`/api/topics${qs}`),
-                    window.fetch(`/api/broker/metadata${brokerQs}`),
+                    fetch(`/api/topics${qs}`),
+                    fetch(`/api/broker/metadata${brokerQs}`),
                 ]);
                 const td = await tr.json();
                 if (!tr.ok) { this.error = td.error || 'Failed to load topics'; return; }
@@ -83,7 +83,7 @@ const TopicsTab = {
             const qs = this.clusterId ? `?cluster=${this.clusterId}` : '';
             const errors = [];
             for (const name of [...this.selected]) {
-                const r = await window.fetch(`/api/topics/${encodeURIComponent(name)}${qs}`, { method: 'DELETE' });
+                const r = await fetch(`/api/topics/${encodeURIComponent(name)}${qs}`, { method: 'DELETE' });
                 if (!r.ok) {
                     const d = await r.json().catch(() => ({}));
                     errors.push(`${name}: ${d.error || r.status}`);
@@ -102,7 +102,7 @@ const TopicsTab = {
         onDeleted()  { this.deleteTopic = null; this.fetch(); },
         async downloadConfig(t) {
             const qs = this.clusterId ? `?cluster=${this.clusterId}` : '';
-            const r   = await window.fetch(`/api/topics/${encodeURIComponent(t.name)}/config${qs}`);
+            const r   = await fetch(`/api/topics/${encodeURIComponent(t.name)}/config${qs}`);
             const d   = await r.json();
             if (!r.ok) { alert('Failed to fetch config: ' + (d.error || r.status)); return; }
             const payload = {
