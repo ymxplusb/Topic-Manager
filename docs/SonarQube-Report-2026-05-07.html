@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SonarQube Code Quality Report — Jarvis Topic Manager v1.0.1</title>
+<style>
+  :root {
+    --green:  #22c55e;
+    --red:    #ef4444;
+    --yellow: #f59e0b;
+    --blue:   #3b82f6;
+    --gray:   #6b7280;
+    --bg:     #0f172a;
+    --card:   #1e293b;
+    --border: #334155;
+    --text:   #e2e8f0;
+    --muted:  #94a3b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); padding: 32px; }
+  h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 4px; }
+  h2 { font-size: 1.05rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 28px 0 12px; }
+  h3 { font-size: .9rem; font-weight: 600; margin-bottom: 8px; }
+  .meta { color: var(--muted); font-size: .85rem; margin-bottom: 28px; }
+  .meta span { margin-right: 20px; }
+
+  /* Quality Gate banner */
+  .qg-banner { display: flex; align-items: center; gap: 16px; padding: 18px 24px;
+    border-radius: 10px; margin-bottom: 28px; border: 1px solid; }
+  .qg-ok  { background: rgba(34,197,94,.08);  border-color: rgba(34,197,94,.3);  }
+  .qg-err { background: rgba(239,68,68,.08);  border-color: rgba(239,68,68,.3);  }
+  .qg-dot { width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0; }
+  .qg-dot-ok  { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .qg-dot-err { background: var(--red);   box-shadow: 0 0 8px var(--red);   }
+  .qg-label { font-size: 1.1rem; font-weight: 700; }
+  .qg-sub   { font-size: .8rem; color: var(--muted); margin-top: 2px; }
+
+  /* Rating grid */
+  .rating-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 8px; }
+  .rating-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; text-align: center; }
+  .rating-badge { font-size: 2rem; font-weight: 800; }
+  .rating-a  { color: var(--green); }
+  .rating-b  { color: #a3e635; }
+  .rating-c  { color: var(--yellow); }
+  .rating-d  { color: #f97316; }
+  .rating-e  { color: var(--red); }
+  .rating-label { font-size: .72rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .04em; }
+  .rating-value { font-size: 1.4rem; font-weight: 700; }
+
+  /* Stats row */
+  .stats-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; margin-bottom: 8px; }
+  .stat-card  { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .stat-val   { font-size: 1.5rem; font-weight: 700; }
+  .stat-lbl   { font-size: .72rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .04em; }
+
+  /* Gate conditions table */
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th { text-align: left; padding: 8px 12px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--border); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+  td { padding: 9px 12px; border-bottom: 1px solid rgba(51,65,85,.5); }
+  tr:last-child td { border-bottom: none; }
+  .tcard { background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+
+  /* Badges */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: .72rem; font-weight: 600; }
+  .badge-pass   { background: rgba(34,197,94,.15);  color: var(--green); }
+  .badge-fail   { background: rgba(239,68,68,.15);  color: var(--red);   }
+  .badge-minor  { background: rgba(148,163,184,.12); color: var(--muted); }
+  .badge-major  { background: rgba(245,158,11,.12);  color: var(--yellow); }
+  .badge-safe   { background: rgba(59,130,246,.12);  color: var(--blue); }
+  .badge-reviewed { background: rgba(34,197,94,.12); color: var(--green); }
+
+  /* Issue list */
+  .issue-row td:first-child { font-family: 'Cascadia Code', 'Consolas', monospace; font-size: .78rem; color: #7dd3fc; }
+  .issue-row td:nth-child(2) { font-size: .8rem; }
+  .issue-row td:last-child  { font-size: .75rem; color: var(--muted); }
+
+  /* Section note */
+  .note { background: rgba(59,130,246,.07); border: 1px solid rgba(59,130,246,.2); border-radius: 6px; padding: 10px 14px; font-size: .82rem; color: #93c5fd; margin-bottom: 12px; }
+
+  footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--border); font-size: .75rem; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>SonarQube Code Quality Report</h1>
+<div class="meta">
+  <span>📦 <strong>Jarvis Topic Manager v1.0.1</strong></span>
+  <span>🗓 2026-05-07</span>
+  <span>🔍 SonarQube CE 26.4.0.121862</span>
+  <span>🏷 Project key: <code>topic-manager</code></span>
+  <span>⚙ Quality Gate: <strong>Jarvis Standard</strong></span>
+</div>
+
+<!-- Quality Gate -->
+<div class="qg-banner qg-ok">
+  <div class="qg-dot qg-dot-ok"></div>
+  <div>
+    <div class="qg-label">Quality Gate: PASSED</div>
+    <div class="qg-sub">All conditions met — 0 bugs · 0 vulnerabilities · 0 new violations · 100% hotspots reviewed</div>
+  </div>
+</div>
+
+<!-- Ratings -->
+<h2>Quality Ratings</h2>
+<div class="rating-grid">
+  <div class="rating-card">
+    <div class="rating-badge rating-a">A</div>
+    <div class="rating-label">Reliability</div>
+  </div>
+  <div class="rating-card">
+    <div class="rating-badge rating-a">A</div>
+    <div class="rating-label">Security</div>
+  </div>
+  <div class="rating-card">
+    <div class="rating-badge rating-a">A</div>
+    <div class="rating-label">Maintainability</div>
+  </div>
+  <div class="rating-card">
+    <div class="rating-value" style="color:var(--green)">100%</div>
+    <div class="rating-label">Hotspots Reviewed</div>
+  </div>
+  <div class="rating-card">
+    <div class="rating-value" style="color:var(--green)">0%</div>
+    <div class="rating-label">Duplications</div>
+  </div>
+  <div class="rating-card">
+    <div class="rating-value" style="color:var(--muted)">0%</div>
+    <div class="rating-label">Coverage</div>
+  </div>
+</div>
+
+<!-- Code Stats -->
+<h2>Code Statistics</h2>
+<div class="stats-row">
+  <div class="stat-card"><div class="stat-val">2,250</div><div class="stat-lbl">Lines of Code</div></div>
+  <div class="stat-card"><div class="stat-val">2,516</div><div class="stat-lbl">Total Lines</div></div>
+  <div class="stat-card"><div class="stat-val">157</div><div class="stat-lbl">Functions</div></div>
+  <div class="stat-card"><div class="stat-val">210</div><div class="stat-lbl">Cognitive Complexity</div></div>
+  <div class="stat-card"><div class="stat-val">2.4%</div><div class="stat-lbl">Comment Density</div></div>
+  <div class="stat-card"><div class="stat-val">0</div><div class="stat-lbl">Bugs</div></div>
+  <div class="stat-card"><div class="stat-val">0</div><div class="stat-lbl">Vulnerabilities</div></div>
+  <div class="stat-card"><div class="stat-val">20</div><div class="stat-lbl">Code Smells</div></div>
+</div>
+
+<!-- Gate Conditions -->
+<h2>Quality Gate Conditions</h2>
+<div class="tcard">
+  <table>
+    <thead><tr><th>Condition</th><th>Actual</th><th>Threshold</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>Bugs</td><td>0</td><td>&gt; 0</td><td><span class="badge badge-pass">PASS</span></td></tr>
+      <tr><td>Vulnerabilities</td><td>0</td><td>&gt; 0</td><td><span class="badge badge-pass">PASS</span></td></tr>
+      <tr><td>New Violations (new code)</td><td>0</td><td>&gt; 0</td><td><span class="badge badge-pass">PASS</span></td></tr>
+      <tr><td>Security Hotspots Reviewed</td><td>100%</td><td>&lt; 100%</td><td><span class="badge badge-pass">PASS</span></td></tr>
+      <tr><td>Reliability Rating</td><td>A</td><td>worse than A</td><td><span class="badge badge-pass">PASS</span></td></tr>
+      <tr><td>New Duplicated Lines</td><td>0%</td><td>&gt; 3%</td><td><span class="badge badge-pass">PASS</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Security Hotspots -->
+<h2>Security Hotspots</h2>
+<div class="note">1 hotspot detected and reviewed. Resolution: <strong>Safe</strong> — intentional design decision documented in source.</div>
+<div class="tcard">
+  <table>
+    <thead><tr><th>File</th><th>Line</th><th>Risk</th><th>Finding</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr>
+        <td style="font-family:monospace;font-size:.78rem;color:#7dd3fc">tm/app.py</td>
+        <td>11</td>
+        <td><span class="badge badge-fail">HIGH</span></td>
+        <td style="font-size:.82rem">CSRF protection not enabled — <em>pure JSON REST API; state-mutation routes require <code>Content-Type: application/json</code>; SameSite=Lax session cookie prevents cross-origin requests. Documented in source.</em></td>
+        <td><span class="badge badge-reviewed">REVIEWED / SAFE</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Open Issues -->
+<h2>Open Issues — 20 MINOR Code Smells</h2>
+<div class="note">No CRITICAL or MAJOR issues. All 20 remaining issues are MINOR maintainability code smells — no impact on runtime security or reliability.</div>
+<div class="tcard">
+  <table>
+    <thead><tr><th>File</th><th>Line</th><th>Severity</th><th>Finding</th><th>Effort</th></tr></thead>
+    <tbody class="issue-row">
+      <!-- Handle exception smells -->
+      <tr><td>app/components/AuditTab.js</td><td>17</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>app/components/ConsumerGroupsTab.js</td><td>23</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>app/components/LoginView.js</td><td>9</td><td><span class="badge badge-minor">MINOR</span></td><td>Prefer <code>globalThis</code> over <code>window</code></td><td>2min</td></tr>
+      <tr><td>app/components/LoginView.js</td><td>24</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>app/components/LoginView.js</td><td>45</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>app/components/LoginView.js</td><td>52</td><td><span class="badge badge-minor">MINOR</span></td><td><code>String.raw</code> should be used to avoid escaping <code>\</code></td><td>5min</td></tr>
+      <tr><td>app/components/SettingsTab.js</td><td>50</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>app/components/SettingsTab.js</td><td>93</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>app/components/TopicsTab.js</td><td>61</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>app/components/TopicsTab.js</td><td>85</td><td><span class="badge badge-minor">MINOR</span></td><td><code>for…of</code> can iterate over iterable — unnecessary array conversion</td><td>5min</td></tr>
+      <tr><td>app/components/modals/CreateTopicModal.js</td><td>48</td><td><span class="badge badge-minor">MINOR</span></td><td>Prefer <code>Blob#text()</code> over <code>FileReader#readAsText(blob)</code></td><td>5min</td></tr>
+      <tr><td>app/components/modals/CreateTopicModal.js</td><td>83</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>app/components/modals/DeleteTopicModal.js</td><td>21</td><td><span class="badge badge-minor">MINOR</span></td><td>Prefer <code>globalThis</code> over <code>window</code></td><td>2min</td></tr>
+      <tr><td>app/components/modals/DeleteTopicModal.js</td><td>28</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>app/components/modals/TopicConfigModal.js</td><td>38</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>app/components/modals/TopicConfigModal.js</td><td>72</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>index.html</td><td>53</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>index.html</td><td>65</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>index.html</td><td>72</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+      <tr><td>index.html</td><td>128</td><td><span class="badge badge-minor">MINOR</span></td><td>Handle this exception or don't catch it at all</td><td>1h</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Issue Summary by Category -->
+<h2>Issue Breakdown</h2>
+<div class="tcard">
+  <table>
+    <thead><tr><th>Rule</th><th>Count</th><th>Affected Files</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>javascript:S2486</td><td>15</td><td>AuditTab, ConsumerGroupsTab, LoginView, SettingsTab, TopicsTab, CreateTopicModal, DeleteTopicModal, TopicConfigModal, index.html</td><td>Empty catch blocks — handle or remove</td></tr>
+      <tr><td>javascript:S7764</td><td>2</td><td>LoginView, DeleteTopicModal</td><td>Prefer <code>globalThis</code> over <code>window</code></td></tr>
+      <tr><td>javascript:S7747</td><td>1</td><td>TopicsTab</td><td>Unnecessary array spread before <code>for…of</code></td></tr>
+      <tr><td>javascript:S7756</td><td>1</td><td>CreateTopicModal</td><td>Use <code>Blob#text()</code> instead of <code>FileReader</code></td></tr>
+      <tr><td>javascript:S7780</td><td>1</td><td>LoginView</td><td>Use <code>String.raw</code> to avoid backslash escaping</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Technical Debt -->
+<h2>Technical Debt Summary</h2>
+<div class="tcard">
+  <table>
+    <thead><tr><th>Category</th><th>Count</th><th>Estimated Effort</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Bugs</td><td>0</td><td>—</td><td>None</td></tr>
+      <tr><td>Vulnerabilities</td><td>0</td><td>—</td><td>None</td></tr>
+      <tr><td>Security Hotspots</td><td>1 (reviewed)</td><td>—</td><td>CSRF — intentional; documented and reviewed SAFE</td></tr>
+      <tr><td>CRITICAL Code Smells</td><td>0</td><td>—</td><td>None</td></tr>
+      <tr><td>MAJOR Code Smells</td><td>0</td><td>—</td><td>All resolved in this review cycle</td></tr>
+      <tr><td>MINOR Code Smells</td><td>20</td><td>~15h 19min total</td><td>Primarily empty catch blocks and modernization suggestions</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Issues Resolved This Cycle -->
+<h2>Issues Resolved This Review Cycle</h2>
+<div class="tcard">
+  <table>
+    <thead><tr><th>Finding</th><th>Count Fixed</th><th>Resolution</th></tr></thead>
+    <tbody>
+      <tr><td>Flask routes missing explicit <code>methods=['GET']</code></td><td>13</td><td>Added explicit method declarations to all GET-only route decorators</td></tr>
+      <tr><td>Nested ternary operation in sort comparator</td><td>1</td><td>Refactored to sequential <code>if</code> statements</td></tr>
+      <tr><td>Nested template literal in <code>fetch()</code> call</td><td>1</td><td>Extracted to <code>brokerQs</code> variable</td></tr>
+      <tr><td>Commented-out code</td><td>3</td><td>Removed misleading inline comments</td></tr>
+      <tr><td><code>window.fetch</code> — prefer <code>globalThis</code></td><td>11</td><td>Replaced with plain <code>fetch()</code> across 4 component files</td></tr>
+      <tr><td>CSRF hotspot</td><td>1</td><td>Documented rationale in source; reviewed SAFE in SonarQube</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<footer>
+  <strong>Jarvis Topic Manager v1.0.1</strong> &nbsp;|&nbsp;
+  SonarQube CE 26.4.0.121862 &nbsp;|&nbsp;
+  Project: <code>topic-manager</code> on <code>192.168.202.76:9000</code> &nbsp;|&nbsp;
+  Quality Gate: <strong>Jarvis Standard</strong> &nbsp;|&nbsp;
+  Scan date: 2026-05-07 &nbsp;|&nbsp;
+  Copyright © 2025-2026 James Rodman. All Rights Reserved.
+</footer>
+
+</body>
+</html>
