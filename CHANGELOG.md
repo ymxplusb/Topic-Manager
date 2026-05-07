@@ -28,14 +28,24 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 - Banner only appeared after visiting Settings tab — moved initialization to root app `onMounted()`
 - minISR validation in Create Topic: submit is blocked and an inline red warning shown when Min In-Sync Replicas exceeds the Replication Factor
 
+### Code Quality (SonarQube CE 26.4 — Quality Gate: OK)
+- All 13 GET-only Flask route decorators now declare `methods=['GET']` explicitly
+- Nested ternary in topic sort comparator refactored to sequential `if` statements
+- Nested template literal in `TopicsTab.fetch()` extracted to `brokerQs` variable
+- `window.fetch` replaced with `fetch` across all four component files
+- CSRF hotspot documented in `app.py` (intentional: pure JSON REST API + SameSite=Lax)
+- SonarQube project `topic-manager` created on `192.168.202.76:9000` with `Jarvis Standard` quality gate
+
 ### Files Changed
-- `app/components/TopicsTab.js` — auto-refresh countdown, broker hover popup
-- `app/components/ConsumerGroupsTab.js` — auto-refresh countdown
+- `app/components/TopicsTab.js` — auto-refresh countdown, broker hover popup, fetch refactor
+- `app/components/ConsumerGroupsTab.js` — auto-refresh countdown, fetch refactor
+- `app/components/AuditTab.js` — fetch refactor
 - `app/components/modals/CreateTopicModal.js` — minISR validation, Import JSON
 - `app/components/LoginView.js` — Jarvis logo, DoW consent modal
-- `app/components/SettingsTab.js` — DoW enable/disable, server-side settings load
+- `app/components/SettingsTab.js` — DoW enable/disable, server-side settings load, fetch refactor
 - `index.html` — root banner init from `/api/settings/public`
-- `tm/routes.py` — `/api/settings/public`, PUT `/api/settings`, DoW fields
+- `tm/app.py` — CSRF intent comment
+- `tm/routes.py` — `/api/settings/public`, PUT `/api/settings`, DoW fields, explicit GET methods
 - `tm/models.py` — `app_settings` table schema + helpers
 - `nginx/topic-manager.conf` — hostname placeholder comment
 - `docs/INSTALL.md` — environment-specific values table
