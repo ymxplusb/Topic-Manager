@@ -13,6 +13,10 @@ def create_app(config_path=None):
     cfg = load_config(config_path)
 
     app.secret_key = cfg.get('server', {}).get('secret_key') or secrets.token_hex(32)
+    # CSRF tokens are intentionally omitted: this is a pure JSON REST API
+    # (no HTML form submissions). State-mutation routes require Content-Type:
+    # application/json, and the SameSite=Lax cookie policy prevents cross-site
+    # request forgery from third-party origins.
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
     app.config['SESSION_COOKIE_SECURE']   = True

@@ -6,9 +6,9 @@ const TopicConfigModal = {
     emits: ['close', 'updated'],
     data() {
         return {
-            config: {},       // { key: { value, is_default, is_read_only } }
+            config: {},
             editMode: false,
-            edits: {},        // { key: newValue }
+            edits: {},
             loading: false,
             saving: false,
             error: '',

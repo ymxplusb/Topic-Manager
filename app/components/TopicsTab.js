@@ -33,7 +33,8 @@ const TopicsTab = {
             return [...list].sort((a, b) => {
                 let av = a[this.sortKey], bv = b[this.sortKey];
                 if (typeof av === 'string') { av = av.toLowerCase(); bv = bv.toLowerCase(); }
-                return this.sortAsc ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1);
+                if (this.sortAsc) return av > bv ? 1 : -1;
+                return av < bv ? 1 : -1;
             });
         },
         totalPartitions() { return this.userTopics.reduce((s, t) => s + t.partitions, 0); },
@@ -47,9 +48,10 @@ const TopicsTab = {
             this.loading = true; this.error = ''; this.selected = new Set();
             try {
                 const qs = this.clusterId ? `?cluster=${this.clusterId}&internal=true` : '?internal=true';
+                const brokerQs = this.clusterId ? `?cluster=${this.clusterId}` : '';
                 const [tr, mr] = await Promise.all([
                     window.fetch(`/api/topics${qs}`),
-                    window.fetch(`/api/broker/metadata${this.clusterId ? `?cluster=${this.clusterId}` : ''}`),
+                    window.fetch(`/api/broker/metadata${brokerQs}`),
                 ]);
                 const td = await tr.json();
                 if (!tr.ok) { this.error = td.error || 'Failed to load topics'; return; }

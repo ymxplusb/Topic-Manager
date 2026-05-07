@@ -24,7 +24,7 @@ def _timeout():
     return _cfg().get('session', {}).get('timeout_minutes', 30)
 
 def _max_sessions():
-    return _cfg().get('session', {}).get('max_concurrent', 0)  # 0 = unlimited
+    return _cfg().get('session', {}).get('max_concurrent', 0)
 
 
 def _cluster(cluster_id=None):
@@ -64,7 +64,7 @@ def require_auth(f):
 
 
 # ── health ────────────────────────────────────────────────────────
-@bp.route('/health')
+@bp.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok', 'version': TM_VERSION})
 
@@ -124,14 +124,14 @@ def logout():
     return jsonify({'ok': True})
 
 
-@bp.route('/auth/whoami')
+@bp.route('/auth/whoami', methods=['GET'])
 @require_auth
 def whoami():
     return jsonify({'user': session['user']})
 
 
 # ── clusters ──────────────────────────────────────────────────────
-@bp.route('/clusters')
+@bp.route('/clusters', methods=['GET'])
 @require_auth
 def list_clusters():
     cfg = _cfg()
@@ -147,7 +147,7 @@ def list_clusters():
     return jsonify({'clusters': safe})
 
 
-@bp.route('/clusters/<cluster_id>/test')
+@bp.route('/clusters/<cluster_id>/test', methods=['GET'])
 @require_auth
 def test_cluster(cluster_id):
     cfg = _cfg()
@@ -170,7 +170,7 @@ def set_active_cluster():
 
 
 # ── broker metadata ───────────────────────────────────────────────
-@bp.route('/broker/metadata')
+@bp.route('/broker/metadata', methods=['GET'])
 @require_auth
 def broker_metadata():
     try:
@@ -181,7 +181,7 @@ def broker_metadata():
 
 
 # ── topics ────────────────────────────────────────────────────────
-@bp.route('/topics')
+@bp.route('/topics', methods=['GET'])
 @require_auth
 def list_topics():
     include_internal = request.args.get('internal', 'false').lower() == 'true'
@@ -225,7 +225,7 @@ def create_topic():
     return jsonify({'ok': True, 'name': name}), 201
 
 
-@bp.route('/topics/<path:name>/config')
+@bp.route('/topics/<path:name>/config', methods=['GET'])
 @require_auth
 def get_topic_config(name):
     try:
@@ -271,7 +271,7 @@ def delete_topic(name):
 
 
 # ── consumer groups ───────────────────────────────────────────────
-@bp.route('/consumer-groups')
+@bp.route('/consumer-groups', methods=['GET'])
 @require_auth
 def list_consumer_groups():
     try:
@@ -282,7 +282,7 @@ def list_consumer_groups():
 
 
 # ── audit log ─────────────────────────────────────────────────────
-@bp.route('/audit')
+@bp.route('/audit', methods=['GET'])
 @require_auth
 def get_audit():
     page     = request.args.get('page', 1, type=int)
@@ -290,7 +290,7 @@ def get_audit():
     return jsonify(audit.get_audit_log(_cfg(), page, per_page))
 
 
-@bp.route('/audit/export')
+@bp.route('/audit/export', methods=['GET'])
 @require_auth
 def export_audit():
     csv_data = audit.export_audit_csv(_cfg())
@@ -301,7 +301,7 @@ def export_audit():
 
 
 # ── version ───────────────────────────────────────────────────────
-@bp.route('/version')
+@bp.route('/version', methods=['GET'])
 def get_version():
     return jsonify({'version': TM_VERSION, 'product': 'Jarvis Topic Manager'})
 
@@ -331,7 +331,7 @@ def _read_settings(db, keys):
     return {k: result[k] for k in keys}
 
 
-@bp.route('/settings/public')
+@bp.route('/settings/public', methods=['GET'])
 def public_settings():
     """No auth required — returns only display/consent settings."""
     db = get_db(_cfg())
@@ -340,7 +340,7 @@ def public_settings():
     return jsonify(data)
 
 
-@bp.route('/settings')
+@bp.route('/settings', methods=['GET'])
 @require_auth
 def get_settings():
     db = get_db(_cfg())
