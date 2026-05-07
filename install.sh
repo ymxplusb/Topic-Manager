@@ -180,6 +180,11 @@ if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
     success "Firewall ports 80/443 open"
 fi
 
+# ─── logrotate ───────────────────────────────────────────────────────────────
+info "Installing logrotate config..."
+cp "${SCRIPT_DIR}/install/logrotate.d/topic-manager" /etc/logrotate.d/topic-manager
+success "Log rotation configured (daily, 14-day retention)"
+
 # ─── nginx test ──────────────────────────────────────────────────────────────
 nginx -t 2>/dev/null && success "nginx config valid" || warn "nginx config test failed — check cert paths"
 

@@ -1,0 +1,19 @@
+# Jarvis Topic Manager — logrotate configuration
+# Place at /etc/logrotate.d/topic-manager
+# Rotates gunicorn application logs daily, retains 14 days compressed.
+# nginx logs are handled by the system nginx logrotate config.
+
+/opt/topic-manager/logs/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 topic-manager topic-manager
+    sharedscripts
+    postrotate
+        # Signal gunicorn to reopen log files after rotation
+        systemctl kill --signal=USR1 topic-manager.service 2>/dev/null || true
+    endscript
+}

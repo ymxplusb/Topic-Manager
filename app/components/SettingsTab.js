@@ -175,7 +175,7 @@ const SettingsTab = {
     <div class="srow"><div class="srow-lbl">Destructive Confirmation</div><div><span class="stig">✓ Name-match required</span></div></div>
     <div class="srow"><div class="srow-lbl">Password Complexity</div><div><span class="stig">Delegated to AD</span></div></div>
     <div class="srow"><div class="srow-lbl">Security Headers</div><div><span class="stig">✓ Set by nginx</span></div></div>
-    <div class="srow"><div class="srow-lbl">Concurrent Session Limit</div><div><span class="stig w">⚠ Planned</span></div></div>
+    <div class="srow"><div class="srow-lbl">Concurrent Session Limit<span class="hint">Server-side session table, enforced at login (set max_concurrent in config.yaml)</span></div><div><span class="stig">✓ Enforced</span></div></div>
   </div>
 
   <!-- Support / PPSM -->

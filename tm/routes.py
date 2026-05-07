@@ -1,28 +1,30 @@
 import os
 import re
+import logging
 from functools import wraps
 from flask import Blueprint, request, jsonify, session, current_app, make_response
 
 from . import auth, kafka_client, audit
+from .models import (get_db, create_session, validate_session, touch_session,
+                     delete_session, count_active_sessions, cleanup_expired_sessions)
 from .config import get_active_cluster, get_cluster_by_id
 
 bp = Blueprint('api', __name__, url_prefix='/api')
 
 TM_VERSION = open(os.path.join(os.path.dirname(__file__), 'VERSION')).read().strip()
 
-
-# ── auth decorator ────────────────────────────────────────────────
-def require_auth(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if 'user' not in session:
-            return jsonify({'error': 'Authentication required'}), 401
-        return f(*args, **kwargs)
-    return decorated
+log = logging.getLogger(__name__)
 
 
+# ── helpers ───────────────────────────────────────────────────────
 def _cfg():
     return current_app.config['TM_CONFIG']
+
+def _timeout():
+    return _cfg().get('session', {}).get('timeout_minutes', 30)
+
+def _max_sessions():
+    return _cfg().get('session', {}).get('max_concurrent', 0)  # 0 = unlimited
 
 
 def _cluster(cluster_id=None):
@@ -35,6 +37,30 @@ def _cluster(cluster_id=None):
     if not c:
         raise ValueError('No cluster configured or cluster not found')
     return c
+
+
+# ── auth decorator ────────────────────────────────────────────────
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        sid = session.get('sid')
+        if not sid:
+            return jsonify({'error': 'Authentication required'}), 401
+
+        db = get_db(_cfg())
+        username = validate_session(db, sid)
+        if not username:
+            db.close()
+            session.clear()
+            return jsonify({'error': 'Session expired'}), 401
+
+        touch_session(db, sid, _timeout())
+        db.close()
+
+        # Attach current user to request context for use in route handlers
+        request.current_user = session.get('user', {})
+        return f(*args, **kwargs)
+    return decorated
 
 
 # ── health ────────────────────────────────────────────────────────
@@ -54,16 +80,46 @@ def login():
 
     ok, result = auth.validate_credentials(_cfg(), username, password)
     if not ok:
+        log.warning('Login failed for user %s from %s: %s', username, request.remote_addr, result)
         return jsonify({'error': result}), 401
 
+    cfg = _cfg()
+    db  = get_db(cfg)
+
+    # Clean up expired sessions before checking the count
+    cleanup_expired_sessions(db)
+
+    max_s = _max_sessions()
+    if max_s > 0:
+        active = count_active_sessions(db, result['username'])
+        if active >= max_s:
+            db.close()
+            log.warning('Concurrent session limit (%d) reached for user %s', max_s, result['username'])
+            return jsonify({
+                'error': f'Concurrent session limit reached ({active}/{max_s}). '
+                         f'Sign out from another session first.'
+            }), 429
+
+    sid = create_session(db, result['username'], _timeout(), request.remote_addr)
+    db.close()
+
     session.permanent = True
+    session['sid']  = sid
     session['user'] = result
+
+    log.info('Login success: user=%s ip=%s', result['username'], request.remote_addr)
     return jsonify({'user': result})
 
 
 @bp.route('/auth/logout', methods=['POST'])
 @require_auth
 def logout():
+    sid = session.get('sid')
+    if sid:
+        db = get_db(_cfg())
+        delete_session(db, sid)
+        db.close()
+    log.info('Logout: user=%s', session.get('user', {}).get('username', '?'))
     session.clear()
     return jsonify({'ok': True})
 
@@ -145,22 +201,15 @@ def create_topic():
         return jsonify({'error': 'Invalid topic name'}), 400
 
     partitions = int(data.get('partitions', 3))
-    rf = int(data.get('replication_factor', 3))
-    config = data.get('config', {})
+    rf         = int(data.get('replication_factor', 3))
+    config     = data.get('config', {})
 
-    # Build config dict from convenience fields
-    if data.get('retention_ms'):
-        config['retention.ms'] = str(data['retention_ms'])
-    if data.get('retention_bytes'):
-        config['retention.bytes'] = str(data['retention_bytes'])
-    if data.get('cleanup_policy'):
-        config['cleanup.policy'] = data['cleanup_policy']
-    if data.get('compression_type'):
-        config['compression.type'] = data['compression_type']
-    if data.get('min_insync_replicas'):
-        config['min.insync.replicas'] = str(data['min_insync_replicas'])
-    if data.get('max_message_bytes'):
-        config['max.message.bytes'] = str(data['max_message_bytes'])
+    if data.get('retention_ms'):        config['retention.ms']        = str(data['retention_ms'])
+    if data.get('retention_bytes'):     config['retention.bytes']     = str(data['retention_bytes'])
+    if data.get('cleanup_policy'):      config['cleanup.policy']      = data['cleanup_policy']
+    if data.get('compression_type'):    config['compression.type']    = data['compression_type']
+    if data.get('min_insync_replicas'): config['min.insync.replicas'] = str(data['min_insync_replicas'])
+    if data.get('max_message_bytes'):   config['max.message.bytes']   = str(data['max_message_bytes'])
 
     cluster = _cluster()
     try:
@@ -168,11 +217,11 @@ def create_topic():
     except Exception as exc:
         return jsonify({'error': str(exc)}), 502
 
-    audit.log_action(
-        _cfg(), session['user']['username'], 'CREATE', name,
-        f'partitions={partitions}, rf={rf}, config={config}',
-        cluster.get('id', '')
-    )
+    user = session['user']['username']
+    audit.log_action(_cfg(), user, 'CREATE', name,
+                     f'partitions={partitions}, rf={rf}, config={config}',
+                     cluster.get('id', ''))
+    log.info('CREATE topic=%s user=%s', name, user)
     return jsonify({'ok': True, 'name': name}), 201
 
 
@@ -189,7 +238,7 @@ def get_topic_config(name):
 @bp.route('/topics/<path:name>/config', methods=['PUT'])
 @require_auth
 def update_topic_config(name):
-    data = request.get_json(force=True)
+    data    = request.get_json(force=True)
     updates = data.get('updates', {})
     if not updates:
         return jsonify({'error': 'No updates provided'}), 400
@@ -200,10 +249,9 @@ def update_topic_config(name):
     except Exception as exc:
         return jsonify({'error': str(exc)}), 502
 
-    audit.log_action(
-        _cfg(), session['user']['username'], 'UPDATE_CONFIG', name,
-        str(updates), cluster.get('id', '')
-    )
+    user = session['user']['username']
+    audit.log_action(_cfg(), user, 'UPDATE_CONFIG', name, str(updates), cluster.get('id', ''))
+    log.info('UPDATE_CONFIG topic=%s user=%s', name, user)
     return jsonify({'ok': True})
 
 
@@ -216,10 +264,9 @@ def delete_topic(name):
     except Exception as exc:
         return jsonify({'error': str(exc)}), 502
 
-    audit.log_action(
-        _cfg(), session['user']['username'], 'DELETE', name,
-        'confirmed by user', cluster.get('id', '')
-    )
+    user = session['user']['username']
+    audit.log_action(_cfg(), user, 'DELETE', name, 'confirmed by user', cluster.get('id', ''))
+    log.info('DELETE topic=%s user=%s', name, user)
     return jsonify({'ok': True})
 
 
@@ -238,7 +285,7 @@ def list_consumer_groups():
 @bp.route('/audit')
 @require_auth
 def get_audit():
-    page = request.args.get('page', 1, type=int)
+    page     = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     return jsonify(audit.get_audit_log(_cfg(), page, per_page))
 

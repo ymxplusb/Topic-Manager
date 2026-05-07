@@ -12,10 +12,10 @@ auth:
   ldap_server: "ldaps://dc1.int.crypticlight.com:636"
   ldap_domain: "int.crypticlight.com"
   ldap_base_dn: "DC=int,DC=crypticlight,DC=com"
-  # Service account for LDAP searches (read-only, no admin rights needed)
+  # Service account for LDAP searches (read-only, Domain Users sufficient)
   ldap_bind_dn: "CN=svc-kafka-ui,OU=Service Accounts,DC=int,DC=crypticlight,DC=com"
   ldap_bind_password: "CHANGE_ME"
-  # Full DN of the AD group users must belong to
+  # Full DN of the AD group required for access
   required_group: "CN=Kafka-Admins,CN=Users,DC=int,DC=crypticlight,DC=com"
 
 clusters:
@@ -34,6 +34,17 @@ clusters:
 
 session:
   timeout_minutes: 30
+  # Maximum simultaneous sessions per user. 0 = unlimited.
+  # When the limit is reached the login attempt is rejected with HTTP 429.
+  max_concurrent: 5
 
 audit:
   db_path: "/opt/topic-manager/data/tm.db"
+
+logging:
+  log_level: "INFO"    # DEBUG / INFO / WARNING / ERROR
+  # Set syslog_enabled: true to forward auth events and errors to the local
+  # syslog daemon (/dev/log → rsyslog → Graylog via 60-graylog.conf).
+  # No additional rsyslog configuration is needed — daemon.* is already
+  # forwarded to Graylog Primary by the fleet's existing rsyslog config.
+  syslog_enabled: false

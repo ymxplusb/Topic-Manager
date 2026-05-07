@@ -10,10 +10,12 @@ Group=topic-manager
 WorkingDirectory=/opt/topic-manager
 Environment="TM_CONFIG=/etc/topic-manager/config.yaml"
 ExecStart=/opt/topic-manager/venv/bin/gunicorn \
-    --workers 2 \
+    --workers 4 \
     --bind 127.0.0.1:5001 \
-    --timeout 60 \
+    --timeout 90 \
     --worker-tmp-dir /tmp \
+    --max-requests 1000 \
+    --max-requests-jitter 100 \
     --access-logfile /opt/topic-manager/logs/access.log \
     --error-logfile  /opt/topic-manager/logs/error.log \
     --capture-output \
