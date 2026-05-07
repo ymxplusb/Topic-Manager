@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Jarvis Topic Manager — Prepare Offline Bundle
-# Version: 1.0.0
+# Version: 1.0.1
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 #
 # Run this on an INTERNET-CONNECTED machine (Linux/Mac/WSL) to download
