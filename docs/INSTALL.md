@@ -7,6 +7,25 @@
 
 ---
 
+> **Environment-Specific Values**
+> This guide was written for the CrypticLight / BlueRootX deployment.
+> The following values appear throughout and must be substituted for your environment:
+>
+> | Placeholder used in this guide | Replace with |
+> |---|---|
+> | `192.168.202.90` | IP of your TopicManager VM |
+> | `kafka-topics.int.crypticlight.com` | Your chosen FQDN for this server |
+> | `dc1.int.crypticlight.com` | Your AD domain controller |
+> | `int.crypticlight.com` | Your AD domain |
+> | `int-CL-CA` on `192.168.202.6` | Your internal Certificate Authority |
+> | `claude.admin` | Your AD admin account for domain join |
+> | `192.168.202.5` | Your DNS server |
+> | `broker1-3.int.crypticlight.com` | Your Kafka broker FQDNs |
+>
+> Everything else in the guide (paths, service names, package names) is generic and applies to any Ubuntu 24.04 installation.
+
+---
+
 ## Table of Contents
 
 1. [Prerequisites](#1-prerequisites)
