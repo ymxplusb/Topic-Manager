@@ -1,4 +1,4 @@
-# Jarvis Topic Manager v1.0.0
+# Jarvis Topic Manager v1.0.1
 
 **Standalone Kafka topic administration frontend for the Jarvis ecosystem.**
 
@@ -16,13 +16,19 @@ Jarvis Topic Manager is a lightweight web application that provides a secure, AD
 
 - **Topic Management** — List, create, delete, and view/edit topic configuration
 - **Retrieve / Update** — Pull live topic config from Kafka; push changes back via `alter_configs`
-- **Consumer Groups** — View group state and membership
-- **Audit Log** — Every create/delete/config-change is recorded with user, timestamp, and detail
+- **Download Config** — Export any topic's live config as JSON; re-import to pre-fill Create Topic
+- **Consumer Groups** — View group state and membership (30s auto-refresh with countdown)
+- **Auto-refresh** — Topics and Consumer Groups tabs refresh every 30 seconds with live countdown
+- **Audit Log** — Every create/delete/config-change is recorded with user, timestamp, and detail; CSV export
 - **AD Authentication** — LDAPS bind + required AD group (`Kafka-Admins`) enforcement
+- **DoW Consent Modal** — Duty of Warning popup on login (no bypass); enable/disable from Settings
 - **Multi-cluster** — Supports bare-metal and K8s Kafka clusters; switch at runtime
-- **3 Themes** — Dark (default), Light, Color Blind — stored in `localStorage`
-- **Classification Banner** — Configurable text/color/enable via Settings
+- **3 Themes** — Dark (default), Light, Color Blind — stored per browser
+- **Classification Banner** — Fixed at top and bottom of viewport; server-side persistence (consistent across all browsers and users)
+- **Broker Hover Popup** — Hover the broker count to see all broker FQDNs and IDs
+- **Concurrent Session Limit** — Configurable max simultaneous sessions per user (default 5)
 - **Offline Install** — All dependencies bundlable; no internet required on target host
+- **SonarQube** — Quality Gate OK on CE 26.4 (`192.168.202.76:9000`, project `topic-manager`)
 
 ## Stack
 
@@ -47,17 +53,17 @@ Jarvis Topic Manager is a lightweight web application that provides a secure, AD
 curl -fsSL https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js \
   -o lib/vue.global.prod.js
 # Build the tar:
-tar czf topic-manager-frontend-1.0.0.tar.gz \
-  app index.html lib jarvis-favicon.ico jarvis-glyph-32.png
+tar czf topic-manager-frontend-1.0.1.tar.gz \
+  app index.html lib jarvis-favicon.ico jarvis-glyph-32.png jarvis-logo.png
 # Deploy on server:
-sudo tar xzf topic-manager-frontend-1.0.0.tar.gz -C /var/www/topic-manager/
+sudo tar xzf topic-manager-frontend-1.0.1.tar.gz -C /var/www/topic-manager/
 sudo chown -R www-data:www-data /var/www/topic-manager/
 ```
 
 **Offline bundle** (air-gapped installs — requires Linux/WSL with pip3):
 ```bash
 bash prepare-offline.sh --bundle
-# → creates topic-manager-offline-1.0.0.tar.gz
+# → creates topic-manager-offline-1.0.1.tar.gz
 # Contains: all source + Python wheels + Vue.js lib
 ```
 
@@ -76,7 +82,7 @@ curl -sk https://localhost/api/health
 On internet-connected machine:
 ```bash
 bash prepare-offline.sh --bundle
-# → creates topic-manager-offline-1.0.0.tar.gz
+# → creates topic-manager-offline-1.0.1.tar.gz
 ```
 Transfer bundle to air-gapped host, extract, then:
 ```bash
