@@ -99,6 +99,27 @@ const App = {
             if (t === 'light') document.body.classList.add('light-mode');
             if (t === 'cb')    document.body.classList.add('cb-mode');
 
+            // Apply saved banner immediately — SettingsTab only mounts on demand
+            // so we must initialize here to show the banner on every page/tab.
+            const colorMap = { green:'#16a34a', blue:'#2563eb', purple:'#7c3aed',
+                               red:'#dc2626', orange:'#ea580c', yellow:'#ca8a04' };
+            const fgMap    = { white:'#ffffff', black:'#000000', grey:'#d1d5db' };
+            const enabled  = JSON.parse(localStorage.getItem('tmBannerEnabled') || 'false');
+            const text     = localStorage.getItem('tmBannerText') || 'UNCLASSIFIED';
+            const bg       = colorMap[localStorage.getItem('tmBannerBg')] || '#16a34a';
+            const fg       = fgMap[localStorage.getItem('tmBannerFg')]    || '#ffffff';
+            ['banner-top', 'banner-bot'].forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.style.display    = enabled ? 'block' : 'none';
+                el.style.background = bg;
+                el.style.color      = fg;
+                el.textContent      = text;
+            });
+            const pad = enabled ? '26px' : '0px';
+            document.body.style.paddingTop    = pad;
+            document.body.style.paddingBottom = pad;
+
             checkSession().then(() => {
                 if (user.value) { fetchClusters(); fetchVersion(); }
             });
