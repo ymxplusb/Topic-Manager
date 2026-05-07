@@ -286,6 +286,50 @@ New-ADUser -Name "svc-kafka-ui" -SamAccountName "svc-kafka-ui" `
   -Description "Topic Manager LDAP bind account (read-only)"
 ```
 
+### 7d. Join the TopicManager VM to the AD domain
+
+SSH into the VM and run the following. You will be prompted for the AD admin password once.
+
+```bash
+ssh -i ~/.ssh/claude_admin claude_admin@192.168.202.90
+
+# Confirm the domain is reachable before joining
+sudo realm discover int.crypticlight.com
+# Expected output includes: configured: no  (means not yet joined)
+
+# Join the domain — prompts for AD admin password
+sudo realm join -U claude.admin int.crypticlight.com
+```
+
+**After joining, patch sssd.conf** so AD usernames work without the `@domain` suffix and home directories are created automatically:
+
+```bash
+# Remove any existing duplicate keys first, then append correct values
+sudo sed -i '/use_fully_qualified_names/d' /etc/sssd/sssd.conf
+sudo sed -i '/fallback_homedir/d'          /etc/sssd/sssd.conf
+echo "use_fully_qualified_names = False"   | sudo tee -a /etc/sssd/sssd.conf
+echo "fallback_homedir = /home/%u"         | sudo tee -a /etc/sssd/sssd.conf
+
+# Restart sssd and enable automatic homedir creation
+sudo systemctl restart sssd
+sudo pam-auth-update --enable mkhomedir
+
+# Verify — should return UID/GID info for your AD account
+id jrodman
+```
+
+Expected `id` output looks like:
+```
+uid=xxxxxx(jrodman) gid=xxxxxx(domain users) groups=xxxxxx(domain users),xxxxxx(kafka-admins),...
+```
+
+**Common failure causes for `realm join`:**
+| Error | Fix |
+|---|---|
+| `realm: Couldn't join realm: Insufficient permissions` | Wrong password, or account doesn't have join rights |
+| `realm: Couldn't join realm: Failed to enroll machine` | Clock skew >5 min vs DC — run `sudo chronyc makestep` |
+| `realm: Couldn't join realm: No such realm found` | DNS can't resolve DC — check `/etc/resolv.conf` points to `192.168.202.5` |
+
 ---
 
 ## 8. Start and Verify Services
