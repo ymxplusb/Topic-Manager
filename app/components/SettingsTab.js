@@ -51,6 +51,10 @@ const SettingsTab = {
                 el.style.color      = this.fgColor;
                 el.textContent      = this.bannerText;
             });
+            // Push app content down/up so fixed banners don't overlap it
+            const h = this.bannerEnabled ? (top.offsetHeight || 26) + 'px' : '0px';
+            document.body.style.paddingTop    = h;
+            document.body.style.paddingBottom = h;
         },
         async testCluster(id) {
             this.testing[id] = true;
