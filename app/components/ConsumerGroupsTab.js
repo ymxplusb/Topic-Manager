@@ -4,7 +4,7 @@ const ConsumerGroupsTab = {
     name: 'ConsumerGroupsTab',
     props: ['clusterId'],
     data() {
-        return { groups: [], loading: false, error: '' };
+        return { groups: [], loading: false, error: '', countdown: 30, refreshTimer: null };
     },
     computed: {
         stable()   { return this.groups.filter(g => g.state === 'Stable').length; },
@@ -12,6 +12,7 @@ const ConsumerGroupsTab = {
     },
     methods: {
         async fetch() {
+            this.countdown = 30;
             this.loading = true; this.error = '';
             try {
                 const qs = this.clusterId ? `?cluster=${this.clusterId}` : '';
@@ -31,7 +32,15 @@ const ConsumerGroupsTab = {
             return 'text-amber';
         },
     },
-    mounted() { this.fetch(); },
+    mounted() {
+        this.fetch();
+        this.refreshTimer = setInterval(() => {
+            if (this.loading) return;
+            this.countdown--;
+            if (this.countdown <= 0) { this.fetch(); this.countdown = 30; }
+        }, 1000);
+    },
+    beforeUnmount() { clearInterval(this.refreshTimer); },
     watch: { clusterId() { this.fetch(); } },
     template: `
 <div>
@@ -43,7 +52,12 @@ const ConsumerGroupsTab = {
 
   <div class="toolbar">
     <div class="tspacer"></div>
-    <button class="btn btn-sm" @click="fetch" :disabled="loading">↻ Refresh</button>
+    <button class="btn btn-sm" @click="fetch" :disabled="loading">
+      <span v-if="loading" class="spinner" style="width:10px;height:10px"></span>
+      <span v-else>↻</span>
+      {{ loading ? 'Refreshing…' : 'Refresh' }}
+      <span v-if="!loading" style="font-family:var(--mono);font-size:.58rem;color:var(--text-muted);margin-left:2px">{{ countdown }}s</span>
+    </button>
   </div>
 
   <div v-if="loading" style="text-align:center;padding:48px;color:var(--text-muted)"><span class="spinner" style="width:20px;height:20px"></span></div>

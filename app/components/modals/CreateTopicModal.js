@@ -53,6 +53,12 @@ const CreateTopicModal = {
             const n = this.name.trim();
             if (!n) { this.error = 'Topic name is required'; return; }
             if (!/^[a-zA-Z0-9._-]+$/.test(n)) { this.error = 'Only alphanumeric, dots, hyphens, underscores allowed'; return; }
+            if (+this.partitions < 1) { this.error = 'Partitions must be at least 1'; return; }
+            if (+this.rf < 1) { this.error = 'Replication Factor must be at least 1'; return; }
+            if (+this.minIsr > +this.rf) {
+                this.error = `Min In-Sync Replicas (${this.minIsr}) cannot exceed Replication Factor (${this.rf})`;
+                return;
+            }
             this.saving = true; this.error = '';
             try {
                 const qs = this.clusterId ? `?cluster=${this.clusterId}` : '';
@@ -171,8 +177,11 @@ const CreateTopicModal = {
       <div class="frow">
         <div class="fg">
           <label>Min In-Sync Replicas</label>
-          <input class="fc" type="number" v-model="minIsr" min="1" max="10">
-          <div class="fhint">Must be ≤ Replication Factor</div>
+          <input class="fc" type="number" v-model="minIsr" min="1" max="10"
+                 :style="+minIsr > +rf ? 'border-color:var(--accent-red)' : ''">
+          <div class="fhint" :style="+minIsr > +rf ? 'color:var(--accent-red)' : ''">
+            {{ +minIsr > +rf ? '⚠ Cannot exceed Replication Factor (' + rf + ')' : 'Must be ≤ Replication Factor' }}
+          </div>
         </div>
         <div class="fg">
           <label>Max Message Bytes</label>

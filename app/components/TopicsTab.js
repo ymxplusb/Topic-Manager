@@ -10,6 +10,7 @@ const TopicsTab = {
             topics: [], brokerMeta: null,
             showBrokerPopup: false,
             loading: false, error: '',
+            countdown: 30, refreshTimer: null,
             search: '', showInternal: false,
             sortKey: 'name', sortAsc: true,
             selected: new Set(),
@@ -42,6 +43,7 @@ const TopicsTab = {
     watch: { clusterId() { this.fetch(); } },
     methods: {
         async fetch() {
+            this.countdown = 30;
             this.loading = true; this.error = ''; this.selected = new Set();
             try {
                 const qs = this.clusterId ? `?cluster=${this.clusterId}&internal=true` : '?internal=true';
@@ -136,7 +138,15 @@ const TopicsTab = {
             return '<span class="bdg bdg-ok">OK</span>';
         },
     },
-    mounted() { this.fetch(); },
+    mounted() {
+        this.fetch();
+        this.refreshTimer = setInterval(() => {
+            if (this.loading) return;
+            this.countdown--;
+            if (this.countdown <= 0) { this.fetch(); this.countdown = 30; }
+        }, 1000);
+    },
+    beforeUnmount() { clearInterval(this.refreshTimer); },
     template: `
 <div>
   <!-- Stats -->
@@ -193,7 +203,12 @@ const TopicsTab = {
     <button class="btn btn-sm" v-if="selectedCount > 0" @click="openBulkDelete" style="color:var(--accent-red);border-color:rgba(248,113,113,.35)">
       🗑 Delete ({{ selectedCount }})
     </button>
-    <button class="btn btn-sm" @click="fetch" :disabled="loading">↻ Retrieve All</button>
+    <button class="btn btn-sm" @click="fetch" :disabled="loading">
+      <span v-if="loading" class="spinner" style="width:10px;height:10px"></span>
+      <span v-else>↻</span>
+      {{ loading ? 'Refreshing…' : 'Retrieve All' }}
+      <span v-if="!loading" style="font-family:var(--mono);font-size:.58rem;color:var(--text-muted);margin-left:2px">{{ countdown }}s</span>
+    </button>
     <button class="btn btn-cyan" @click="showCreate = true">+ Create Topic</button>
   </div>
 
