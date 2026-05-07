@@ -4,7 +4,7 @@ const LoginView = {
     name: 'LoginView',
     emits: ['logged-in'],
     data() {
-        return { username: '', password: '', loading: false, error: '' };
+        return { username: '', password: '', loading: false, error: '', host: window.location.hostname };
     },
     methods: {
         async submit() {
@@ -49,7 +49,7 @@ const LoginView = {
       <span v-else>Sign In</span>
     </button>
     <div class="login-meta">
-      <span>kafka-topics.int.crypticlight.com</span><br>
+      <span>{{ host }}</span><br>
       <span style="color:var(--text-muted)">TLS 1.3 &nbsp;·&nbsp; 30 min session &nbsp;·&nbsp; All actions audit logged</span>
     </div>
   </div>

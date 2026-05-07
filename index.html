@@ -118,7 +118,7 @@ const App = {
   />
   <nav class="app-nav">
     <button class="ntab" :class="{ act: currentTab === 'topics' }"   @click="currentTab = 'topics'">
-      Topics <span class="nbadge">{{ topicCount || '' }}</span>
+      Topics
     </button>
     <button class="ntab" :class="{ act: currentTab === 'cgroups' }"  @click="currentTab = 'cgroups'">Consumer Groups</button>
     <button class="ntab" :class="{ act: currentTab === 'audit' }"    @click="currentTab = 'audit'">Audit Log</button>

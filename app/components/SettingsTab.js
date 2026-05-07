@@ -12,11 +12,11 @@ const SettingsTab = {
             bannerBg: localStorage.getItem('tmBannerBg') || 'green',
             bannerFg: localStorage.getItem('tmBannerFg') || 'white',
             bannerColors: [
-                { val: 'green',  hex: '#16a34a', label: 'Green (Unclassified)' },
+                { val: 'green',  hex: '#16a34a', label: 'Green' },
                 { val: 'blue',   hex: '#2563eb', label: 'Blue' },
                 { val: 'purple', hex: '#7c3aed', label: 'Purple' },
-                { val: 'red',    hex: '#dc2626', label: 'Red (Secret)' },
-                { val: 'orange', hex: '#ea580c', label: 'Orange (CUI)' },
+                { val: 'red',    hex: '#dc2626', label: 'Red' },
+                { val: 'orange', hex: '#ea580c', label: 'Orange' },
                 { val: 'yellow', hex: '#ca8a04', label: 'Yellow' },
             ],
             // Cluster test
