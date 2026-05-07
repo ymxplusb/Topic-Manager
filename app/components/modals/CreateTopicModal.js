@@ -17,6 +17,38 @@ const CreateTopicModal = {
         reset() {
             Object.assign(this.$data, { name:'', partitions:3, rf:3, retentionMs:'604800000', retentionBytes:'-1', cleanupPolicy:'delete', compressionType:'producer', minIsr:2, maxMsgBytes:1048588, saving:false, error:'' });
         },
+        importJson() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json,application/json';
+            input.onchange = e => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = ev => {
+                    try {
+                        const d = JSON.parse(ev.target.result);
+                        const cfg = d.config || {};
+                        const get = key => cfg[key]?.value ?? null;
+                        // Pre-fill fields — name intentionally left blank so user sets a new one
+                        if (d.partitions)         this.partitions       = d.partitions;
+                        if (d.replication_factor) this.rf               = d.replication_factor;
+                        if (get('retention.ms'))  this.retentionMs      = get('retention.ms');
+                        if (get('retention.bytes') && get('retention.bytes') !== '-1')
+                                                  this.retentionBytes   = get('retention.bytes');
+                        if (get('cleanup.policy')) this.cleanupPolicy   = get('cleanup.policy');
+                        if (get('compression.type')) this.compressionType = get('compression.type');
+                        if (get('min.insync.replicas')) this.minIsr     = +get('min.insync.replicas');
+                        if (get('max.message.bytes'))   this.maxMsgBytes = +get('max.message.bytes');
+                        this.error = '';
+                    } catch (err) {
+                        this.error = 'Invalid JSON file: ' + err.message;
+                    }
+                };
+                reader.readAsText(file);
+            };
+            input.click();
+        },
         async submit() {
             const n = this.name.trim();
             if (!n) { this.error = 'Topic name is required'; return; }
@@ -57,7 +89,10 @@ const CreateTopicModal = {
         <div class="mtitle">Create New Topic</div>
         <div class="msub">New topic will be created on the active cluster</div>
       </div>
-      <button class="mclose" @click="$emit('close')">✕</button>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn btn-sm" @click="importJson" title="Import settings from a previously downloaded config JSON">⬆ Import JSON</button>
+        <button class="mclose" @click="$emit('close')">✕</button>
+      </div>
     </div>
     <div class="mbody">
       <div class="fsect">Basic Configuration</div>

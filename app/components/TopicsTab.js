@@ -96,6 +96,26 @@ const TopicsTab = {
         },
         onCreated()  { this.showCreate = false; this.fetch(); },
         onDeleted()  { this.deleteTopic = null; this.fetch(); },
+        async downloadConfig(t) {
+            const qs = this.clusterId ? `?cluster=${this.clusterId}` : '';
+            const r   = await window.fetch(`/api/topics/${encodeURIComponent(t.name)}/config${qs}`);
+            const d   = await r.json();
+            if (!r.ok) { alert('Failed to fetch config: ' + (d.error || r.status)); return; }
+            const payload = {
+                topic:      t.name,
+                cluster_id: this.clusterId || 'default',
+                partitions: t.partitions,
+                replication_factor: t.replication_factor,
+                exported_at: new Date().toISOString(),
+                config: d.config,
+            };
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+            const a    = document.createElement('a');
+            a.href     = URL.createObjectURL(blob);
+            a.download = `${t.name}-config.json`;
+            a.click();
+            URL.revokeObjectURL(a.href);
+        },
         onUpdated()  { /* config modal handles its own refresh */ },
         fmtRet(ms) {
             if (!ms || ms <= 0) return '∞';
@@ -206,6 +226,7 @@ const TopicsTab = {
           <td v-html="statusBadge(t)"></td>
           <td class="ac">
             <button class="btn btn-icon" @click="configTopic = t" title="View / Edit Config">⚙</button>
+            <button class="btn btn-icon" @click="downloadConfig(t)" title="Download Config as JSON">⬇</button>
             <button class="btn btn-icon del" @click="deleteTopic = t" title="Delete Topic" v-if="!t.internal">🗑</button>
           </td>
         </tr>
