@@ -6,6 +6,8 @@ const SettingsTab = {
     emits: ['open-about', 'cluster-changed'],
     data() {
         return {
+            // DoW Consent
+            dowEnabled: JSON.parse(localStorage.getItem('tmDowEnabled') || 'false'),
             // Banner
             bannerEnabled: JSON.parse(localStorage.getItem('tmBannerEnabled') || 'false'),
             bannerText: localStorage.getItem('tmBannerText') || 'UNCLASSIFIED',
@@ -34,6 +36,9 @@ const SettingsTab = {
         },
     },
     methods: {
+        saveDow() {
+            localStorage.setItem('tmDowEnabled', JSON.stringify(this.dowEnabled));
+        },
         saveBanner() {
             localStorage.setItem('tmBannerEnabled', JSON.stringify(this.bannerEnabled));
             localStorage.setItem('tmBannerText',    this.bannerText);
@@ -129,6 +134,20 @@ const SettingsTab = {
   </div>
 
   <!-- Branding / Banner -->
+  <!-- DoW Consent Banner -->
+  <div class="ssec">
+    <div class="ssec-title">DoW Consent Banner</div>
+    <div class="srow">
+      <div class="srow-lbl">
+        Enable Consent Banner
+        <span class="hint">Shows a U.S. Government consent-to-monitor notice after Sign In is clicked. User must click I Agree to proceed.</span>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.72rem">
+        <input type="checkbox" v-model="dowEnabled" @change="saveDow" style="accent-color:var(--accent-cyan)"> Enabled
+      </label>
+    </div>
+  </div>
+
   <div class="ssec">
     <div class="ssec-title">Branding &amp; Classification Banner</div>
     <div class="srow">
