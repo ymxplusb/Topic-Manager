@@ -304,3 +304,60 @@ def export_audit():
 @bp.route('/version')
 def get_version():
     return jsonify({'version': TM_VERSION, 'product': 'Jarvis Topic Manager'})
+
+
+# ── app settings ──────────────────────────────────────────────────
+# Public subset (banner + DoW) readable without auth so the login page
+# and app shell can apply them before the user is authenticated.
+_PUBLIC_KEYS = {'banner_enabled', 'banner_text', 'banner_bg', 'banner_fg', 'dow_enabled'}
+_ALL_KEYS    = _PUBLIC_KEYS  # extend here if admin-only settings are added later
+
+_DEFAULTS = {
+    'banner_enabled': 'false',
+    'banner_text':    'UNCLASSIFIED',
+    'banner_bg':      'green',
+    'banner_fg':      'white',
+    'dow_enabled':    'false',
+}
+
+
+def _read_settings(db, keys):
+    rows = db.execute(
+        f'SELECT key, value FROM app_settings WHERE key IN ({",".join("?"*len(keys))})',
+        list(keys)
+    ).fetchall()
+    result = dict(_DEFAULTS)
+    result.update({r[0]: r[1] for r in rows})
+    return {k: result[k] for k in keys}
+
+
+@bp.route('/settings/public')
+def public_settings():
+    """No auth required — returns only display/consent settings."""
+    db = get_db(_cfg())
+    data = _read_settings(db, _PUBLIC_KEYS)
+    db.close()
+    return jsonify(data)
+
+
+@bp.route('/settings')
+@require_auth
+def get_settings():
+    db = get_db(_cfg())
+    data = _read_settings(db, _ALL_KEYS)
+    db.close()
+    return jsonify(data)
+
+
+@bp.route('/settings', methods=['PUT'])
+@require_auth
+def update_settings():
+    data = request.get_json(force=True)
+    db = get_db(_cfg())
+    for key, value in data.items():
+        if key in _ALL_KEYS:
+            db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?,?)',
+                       (key, str(value)))
+    db.commit()
+    db.close()
+    return jsonify({'ok': True})

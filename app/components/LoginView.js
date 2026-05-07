@@ -11,15 +11,18 @@ const LoginView = {
         };
     },
     methods: {
-        submit() {
+        async submit() {
             if (!this.username || !this.password) { this.error = 'Username and password are required.'; return; }
             this.error = '';
-            const dowEnabled = JSON.parse(localStorage.getItem('tmDowEnabled') || 'false');
-            if (dowEnabled) {
-                this.showConsent = true;
-            } else {
-                this.doLogin();
-            }
+            try {
+                const r = await fetch('/api/settings/public');
+                const s = r.ok ? await r.json() : {};
+                if (s.dow_enabled === 'true') {
+                    this.showConsent = true;
+                    return;
+                }
+            } catch (_) {}
+            this.doLogin();
         },
         cancelConsent() {
             this.showConsent = false;

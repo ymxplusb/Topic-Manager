@@ -7,12 +7,12 @@ const SettingsTab = {
     data() {
         return {
             // DoW Consent
-            dowEnabled: JSON.parse(localStorage.getItem('tmDowEnabled') || 'false'),
+            dowEnabled: false,
             // Banner
-            bannerEnabled: JSON.parse(localStorage.getItem('tmBannerEnabled') || 'false'),
-            bannerText: localStorage.getItem('tmBannerText') || 'UNCLASSIFIED',
-            bannerBg: localStorage.getItem('tmBannerBg') || 'green',
-            bannerFg: localStorage.getItem('tmBannerFg') || 'white',
+            bannerEnabled: false,
+            bannerText: 'UNCLASSIFIED',
+            bannerBg: 'green',
+            bannerFg: 'white',
             bannerColors: [
                 { val: 'green',  hex: '#16a34a', label: 'Green' },
                 { val: 'blue',   hex: '#2563eb', label: 'Blue' },
@@ -36,14 +36,37 @@ const SettingsTab = {
         },
     },
     methods: {
-        saveDow() {
-            localStorage.setItem('tmDowEnabled', JSON.stringify(this.dowEnabled));
+        async loadSettings() {
+            try {
+                const r = await window.fetch('/api/settings');
+                if (!r.ok) return;
+                const s = await r.json();
+                this.dowEnabled    = s.dow_enabled    === 'true';
+                this.bannerEnabled = s.banner_enabled === 'true';
+                this.bannerText    = s.banner_text    || 'UNCLASSIFIED';
+                this.bannerBg      = s.banner_bg      || 'green';
+                this.bannerFg      = s.banner_fg      || 'white';
+                this.applyBanner();
+            } catch (_) {}
         },
-        saveBanner() {
-            localStorage.setItem('tmBannerEnabled', JSON.stringify(this.bannerEnabled));
-            localStorage.setItem('tmBannerText',    this.bannerText);
-            localStorage.setItem('tmBannerBg',      this.bannerBg);
-            localStorage.setItem('tmBannerFg',      this.bannerFg);
+        async saveDow() {
+            await window.fetch('/api/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dow_enabled: String(this.dowEnabled) }),
+            });
+        },
+        async saveBanner() {
+            await window.fetch('/api/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    banner_enabled: String(this.bannerEnabled),
+                    banner_text:    this.bannerText,
+                    banner_bg:      this.bannerBg,
+                    banner_fg:      this.bannerFg,
+                }),
+            });
             this.applyBanner();
         },
         applyBanner() {
@@ -100,7 +123,7 @@ const SettingsTab = {
             a.click();
         },
     },
-    mounted() { this.applyBanner(); },
+    mounted() { this.loadSettings(); },
     template: `
 <div>
 
