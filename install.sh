@@ -124,8 +124,8 @@ success "Backend installed"
 info "Installing frontend..."
 rsync -a --delete \
     "${SCRIPT_DIR}/index.html" \
-    "${SCRIPT_DIR}/app/" \
-    "${SCRIPT_DIR}/lib/" \
+    "${SCRIPT_DIR}/app" \
+    "${SCRIPT_DIR}/lib" \
     "$FRONTEND_DIR/"
 chown -R www-data:www-data "$FRONTEND_DIR"
 success "Frontend installed at ${FRONTEND_DIR}"
