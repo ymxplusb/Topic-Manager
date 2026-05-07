@@ -114,7 +114,7 @@ const TopicsTab = {
     <div class="stat-card">
       <div class="lbl">Brokers</div>
       <div class="val" :style="brokerMeta ? 'color:var(--accent-green)' : ''">{{ brokerCount }}</div>
-      <div class="sub ok" v-if="brokerMeta">Online · {{ brokerMeta.brokers && brokerMeta.brokers[0] ? brokerMeta.brokers[0].host : '' }}</div>
+      <div class="sub ok" v-if="brokerMeta">{{ brokerMeta.brokers.map(b => b.host.split('.')[0]).join(' · ') }}</div>
     </div>
     <div class="stat-card">
       <div class="lbl">Search Results</div>
