@@ -8,6 +8,7 @@ const TopicsTab = {
     data() {
         return {
             topics: [], brokerMeta: null,
+            showBrokerPopup: false,
             loading: false, error: '',
             search: '', showInternal: false,
             sortKey: 'name', sortAsc: true,
@@ -113,10 +114,25 @@ const TopicsTab = {
     </div>
     <div class="stat-card">
       <div class="lbl">Brokers</div>
-      <div class="val" :style="brokerMeta ? 'color:var(--accent-green)' : ''">{{ brokerCount }}</div>
-      <template v-if="brokerMeta">
-        <div class="sub ok" v-for="b in brokerMeta.brokers" :key="b.id">{{ b.host }}</div>
-      </template>
+      <div style="position:relative;display:inline-block">
+        <div class="val"
+             :style="brokerMeta ? 'color:var(--accent-green);cursor:default' : ''"
+             @mouseenter="showBrokerPopup = !!brokerMeta"
+             @mouseleave="showBrokerPopup = false">{{ brokerCount }}</div>
+        <div v-if="showBrokerPopup"
+             style="position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);z-index:500;
+                    background:var(--bg-card);border:1px solid var(--border-color);border-radius:8px;
+                    padding:10px 14px;box-shadow:0 8px 24px rgba(0,0,0,.5);min-width:260px;
+                    pointer-events:none;">
+          <div style="font-size:.58rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);margin-bottom:8px">Connected Brokers</div>
+          <div v-for="b in brokerMeta.brokers" :key="b.id"
+               style="font-family:var(--mono);font-size:.68rem;color:var(--accent-green);padding:3px 0;border-bottom:1px solid var(--border-color);"
+               :style="{ borderBottom: b === brokerMeta.brokers[brokerMeta.brokers.length-1] ? 'none' : '' }">
+            <span style="color:var(--text-muted);margin-right:8px">#{{ b.id }}</span>{{ b.host }}
+          </div>
+        </div>
+      </div>
+      <div class="sub ok" v-if="brokerMeta">All online</div>
     </div>
     <div class="stat-card">
       <div class="lbl">Search Results</div>
