@@ -13,6 +13,7 @@ ExecStart=/opt/topic-manager/venv/bin/gunicorn \
     --workers 2 \
     --bind 127.0.0.1:5001 \
     --timeout 60 \
+    --worker-tmp-dir /tmp \
     --access-logfile /opt/topic-manager/logs/access.log \
     --error-logfile  /opt/topic-manager/logs/error.log \
     --capture-output \
@@ -27,7 +28,7 @@ SyslogIdentifier=topic-manager
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/topic-manager/data /opt/topic-manager/logs
+ReadWritePaths=/opt/topic-manager/data /opt/topic-manager/logs /tmp
 
 [Install]
 WantedBy=multi-user.target
