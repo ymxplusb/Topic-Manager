@@ -3,20 +3,25 @@
 const AboutModal = {
     name: 'AboutModal',
     emits: ['close'],
+    mounted() {
+        fetch('/api/version').then(r => r.ok ? r.json() : null)
+            .then(d => { if (d && d.version) this.version = d.version; })
+            .catch(() => {});
+    },
     data() {
         return {
-            version: '1.0.0',
+            version: '1.0.2',
             frontend: [
-                { name: 'Vue.js',          version: '3.5.13',   license: 'MIT',       url: 'vuejs.org' },
+                { name: 'Vue.js',          version: '3.5.35',   license: 'MIT',       url: 'vuejs.org' },
             ],
             backend: [
-                { name: 'Flask',           version: '3.1.0',    license: 'BSD-3',     url: 'flask.palletsprojects.com' },
-                { name: 'gunicorn',        version: '23.0.0',   license: 'MIT',       url: 'gunicorn.org' },
+                { name: 'Flask',           version: '3.1.3',    license: 'BSD-3',     url: 'flask.palletsprojects.com' },
+                { name: 'gunicorn',        version: '26.0.0',   license: 'MIT',       url: 'gunicorn.org' },
                 { name: 'ldap3',           version: '2.9.1',    license: 'LGPL-3.0',  url: 'ldap3.readthedocs.io' },
-                { name: 'confluent-kafka', version: '2.6.1',    license: 'Apache-2.0',url: 'confluent.io' },
+                { name: 'confluent-kafka', version: '2.14.0',   license: 'Apache-2.0',url: 'confluent.io' },
                 { name: 'PyYAML',          version: '6.0.2',    license: 'MIT',       url: 'pyyaml.org' },
                 { name: 'cryptography',    version: '44.0.2',   license: 'Apache-2.0 / BSD', url: 'cryptography.io' },
-                { name: 'Werkzeug',        version: '3.1.3',    license: 'BSD-3',     url: 'werkzeug.palletsprojects.com' },
+                { name: 'Werkzeug',        version: '3.1.8',    license: 'BSD-3',     url: 'werkzeug.palletsprojects.com' },
             ],
             infra: [
                 { name: 'nginx',           version: 'latest',   license: 'BSD-2',      url: 'nginx.org' },

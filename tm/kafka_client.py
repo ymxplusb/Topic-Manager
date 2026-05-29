@@ -134,7 +134,7 @@ def list_consumer_groups(cluster_cfg):
         for g in result.valid:
             groups.append({
                 'id': g.group_id,
-                'state': g.state.name if hasattr(g.state, 'name') else str(g.state),
+                'state': g.state.name.title() if hasattr(g.state, 'name') else str(g.state).title(),
                 'is_simple': g.is_simple_consumer_group,
             })
         return sorted(groups, key=lambda g: g['id'])
