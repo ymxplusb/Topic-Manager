@@ -132,7 +132,7 @@ def validate_credentials(cfg, username, password):
     Bind to AD with user credentials, verify group membership.
     Returns (True, user_dict) or (False, error_string).
 
-    Two-phase bind when ldap_bind_dn/ldap_bind_password are configured:
+    Uses two-phase bind when ldap_bind_dn/ldap_bind_password are configured:
       1. Service-account bind for directory search.
       2. Re-bind with the found user DN to verify the supplied password.
     Falls back to direct user-bind when service credentials are absent.
@@ -145,73 +145,80 @@ def validate_credentials(cfg, username, password):
     bind_dn = auth_cfg.get('ldap_bind_dn', '')
     bind_pw = auth_cfg.get('ldap_bind_password', '')
 
-    sam = username
-    if '\\' in username:
-        sam = username.split('\\', 1)[1]
-    elif '@' in username:
-        sam = username.split('@', 1)[0]
-
+    sam = _normalise_sam(username)
     upn = f'{sam}@{domain}'
     use_service_bind = bool(bind_dn and bind_pw and _BIND_PW_PLACEHOLDER not in bind_pw)
 
-    try:
-        tls = _build_tls(cfg)
-        server = Server(ldap_url, get_info=ALL, tls=tls, use_ssl='ldaps' in ldap_url.lower())
+    tls = _build_tls(cfg)
+    server = Server(ldap_url, get_info=ALL, tls=tls, use_ssl='ldaps' in ldap_url.lower())
 
-        if use_service_bind:
-            svc_conn = Connection(server, user=bind_dn, password=bind_pw,
-                                  authentication=SIMPLE, auto_bind=True)
-        else:
-            svc_conn = Connection(server, user=upn, password=password,
-                                  authentication=SIMPLE, auto_bind=True)
-    except LDAPBindError:
-        return False, 'Invalid credentials'
-    except LDAPException as exc:
-        return False, f'LDAP error: {exc}'
+    bind_user = bind_dn if use_service_bind else upn
+    bind_pass = bind_pw if use_service_bind else password
+    ok, err, conn = _ldap_bind(server, bind_user, bind_pass)
+    if not ok:
+        return False, err
 
-    search_filter = f'(sAMAccountName={_ldap_escape(sam)})'
-    svc_conn.search(
-        search_base=base_dn,
-        search_filter=search_filter,
-        attributes=['memberOf', 'displayName', 'sAMAccountName', 'mail', 'distinguishedName'],
-    )
+    entry, err = _ldap_search_user(conn, base_dn, sam)
+    if entry is None:
+        return False, err
 
-    if not svc_conn.entries:
-        svc_conn.unbind()
-        return False, 'User not found in directory'
-
-    entry = svc_conn.entries[0]
     user_dn = str(entry.distinguishedName) if entry.distinguishedName else ''
     member_of = [str(g).lower() for g in (entry.memberOf.values if entry.memberOf else [])]
-    svc_conn.unbind()
 
     if use_service_bind and user_dn:
-        try:
-            user_conn = Connection(server, user=user_dn, password=password,
-                                   authentication=SIMPLE, auto_bind=True)
-            user_conn.unbind()
-        except LDAPBindError:
-            return False, 'Invalid credentials'
-        except LDAPException as exc:
-            return False, f'LDAP error: {exc}'
+        ok, err, user_conn = _ldap_bind(server, user_dn, password)
+        if not ok:
+            return False, err
+        user_conn.unbind()
 
     if required_group_dn and required_group_dn.lower() not in member_of:
         return False, f'Not a member of required group: {required_group_dn}'
 
-    display = str(entry.displayName) if entry.displayName else sam
-    mail = str(entry.mail) if entry.mail else ''
-
     return True, {
         'username': sam,
-        'display_name': display,
-        'email': mail,
+        'display_name': str(entry.displayName) if entry.displayName else sam,
+        'email': str(entry.mail) if entry.mail else '',
         'upn': upn,
     }
+
+
+def _normalise_sam(username):
+    if '\\' in username:
+        return username.split('\\', 1)[1]
+    if '@' in username:
+        return username.split('@', 1)[0]
+    return username
+
+
+def _ldap_bind(server, user, password):
+    try:
+        conn = Connection(server, user=user, password=password,
+                          authentication=SIMPLE, auto_bind=True)
+        return True, None, conn
+    except LDAPBindError:
+        return False, 'Invalid credentials', None
+    except LDAPException as exc:
+        return False, f'LDAP error: {exc}', None
+
+
+def _ldap_search_user(conn, base_dn, sam):
+    conn.search(
+        search_base=base_dn,
+        search_filter=f'(sAMAccountName={_ldap_escape(sam)})',
+        attributes=['memberOf', 'displayName', 'sAMAccountName', 'mail', 'distinguishedName'],
+    )
+    if not conn.entries:
+        conn.unbind()
+        return None, 'User not found in directory'
+    entry = conn.entries[0]
+    conn.unbind()
+    return entry, None
 
 
 def _ldap_escape(value):
     """Escape special characters in LDAP filter values."""
     return re.sub(r'([\\*\(\)\x00])', lambda m: f'\\{ord(m.group(1)):02x}', value)
+
 PYEOF
 success "auth.py patched"
 

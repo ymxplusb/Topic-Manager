@@ -4,9 +4,10 @@ const AboutModal = {
     name: 'AboutModal',
     emits: ['close'],
     mounted() {
-        fetch('/api/version').then(r => r.ok ? r.json() : null)
-            .then(d => { if (d && d.version) this.version = d.version; })
-            .catch(() => {});
+        fetch('/api/version')
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if (d?.version) this.version = d.version; })
+            .catch(() => { /* version stays at data() default */ });
     },
     data() {
         return {

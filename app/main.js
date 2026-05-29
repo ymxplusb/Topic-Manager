@@ -16,7 +16,7 @@ const App = {
             try {
                 const r = await fetch('/api/version');
                 if (r.ok) { const d = await r.json(); version.value = d.version || '1.0.0'; }
-            } catch (_) {}
+            } catch { /* network unavailable — UI stays in previous state */ }
         }
 
         async function fetchClusters() {
@@ -28,14 +28,14 @@ const App = {
                     const active = clusters.value.find(c => c.active);
                     if (active && !activeCluster.value) activeCluster.value = active.id;
                 }
-            } catch (_) {}
+            } catch { /* network unavailable — UI stays in previous state */ }
         }
 
         async function checkSession() {
             try {
                 const r = await fetch('/api/auth/whoami');
                 if (r.ok) { const d = await r.json(); user.value = d.user; }
-            } catch (_) {}
+            } catch { /* network unavailable — UI stays in previous state */ }
         }
 
         async function logout() {
@@ -89,7 +89,7 @@ const App = {
             try {
                 const r = await fetch('/api/settings/public');
                 if (r.ok) applyBannerFromSettings(await r.json());
-            } catch (_) {}
+            } catch { /* network unavailable — UI stays in previous state */ }
 
             checkSession().then(() => {
                 if (user.value) { fetchClusters(); fetchVersion(); }
