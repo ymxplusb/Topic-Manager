@@ -261,12 +261,18 @@ def create_topic():
         return jsonify({'error': 'config must be an object'}), 400
     config = {k: str(v) for k, v in raw_config.items() if k in _ALLOWED_TOPIC_CONFIGS}
 
-    if data.get('retention_ms'):        config['retention.ms']        = str(data['retention_ms'])
-    if data.get('retention_bytes'):     config['retention.bytes']     = str(data['retention_bytes'])
-    if data.get('cleanup_policy'):      config['cleanup.policy']      = str(data['cleanup_policy'])
-    if data.get('compression_type'):    config['compression.type']    = str(data['compression_type'])
-    if data.get('min_insync_replicas'): config['min.insync.replicas'] = str(data['min_insync_replicas'])
-    if data.get('max_message_bytes'):   config['max.message.bytes']   = str(data['max_message_bytes'])
+    if data.get('retention_ms'):
+        config['retention.ms'] = str(data['retention_ms'])
+    if data.get('retention_bytes'):
+        config['retention.bytes'] = str(data['retention_bytes'])
+    if data.get('cleanup_policy'):
+        config['cleanup.policy'] = str(data['cleanup_policy'])
+    if data.get('compression_type'):
+        config['compression.type'] = str(data['compression_type'])
+    if data.get('min_insync_replicas'):
+        config['min.insync.replicas'] = str(data['min_insync_replicas'])
+    if data.get('max_message_bytes'):
+        config['max.message.bytes'] = str(data['max_message_bytes'])
 
     cluster = _cluster()
     try:
