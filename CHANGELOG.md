@@ -5,6 +5,29 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
+## [1.0.2] — 2026-05-28
+
+### Security
+- **HIGH** `auth.py`: LDAPS certificate validation changed from `CERT_NONE` to `CERT_REQUIRED`; supports configurable CA bundle via `ldap_ca_cert` in config. DC certificate chain is now validated on every LDAP connection.
+- **HIGH** `auth.py`: Two-phase LDAP bind — service account searches the directory, user DN is then re-bound to verify credentials. Prevents `memberOf` read failures in tighter AD environments and correctly separates search from authentication.
+- **HIGH** `routes.py`: Cross-site fetch requests blocked via `Sec-Fetch-Site: cross-site` check in `require_auth` decorator for all non-GET methods.
+- **HIGH** `routes.py`: `force=True` removed from all `request.get_json()` calls; replaced with `_parse_json_body()` helper that enforces `Content-Type: application/json` (415 on mismatch). Login, cluster switch, topic create/update, settings PUT all affected.
+- **HIGH** `routes.py`: Topic create and config update now validate against an explicit allowlist of writable Kafka config keys (`_ALLOWED_TOPIC_CONFIGS`). Arbitrary or read-only config keys are silently filtered. Partition count bounded 1–1000; replication factor bounded 1–9; both `int()` conversions wrapped with exception handling (400 on non-integer input).
+- **MED** `app.py`: Application refuses to start if `server.secret_key` is absent or contains the `CHANGE_ME` placeholder — gunicorn workers were previously able to diverge on session signing with a per-process random key.
+- **MED** `audit.py`: CSV export replaced hand-built quoted strings with `csv.writer` (`QUOTE_ALL`). Formula-injection characters (`=`, `+`, `-`, `@`, tab, CR) at the start of field values are prefixed with `'` to neutralise spreadsheet execution.
+- **LOW** `nginx`: Content Security Policy hardened — added `frame-ancestors 'none'` (replaces `X-Frame-Options SAMEORIGIN`), `form-action 'none'`, and `base-uri 'self'`.
+
+### Changed
+- `config/config.yaml.example`: added `ldap_ca_cert` field with documentation.
+- `requirements.txt`: Flask `3.1.0 → 3.1.3`, Werkzeug `3.1.3 → 3.1.8`.
+
+### Upgrade
+- Run `sudo bash install/upgrade-1.0.2.sh` on any host not connected to the repo.
+- After upgrade, verify LDAPS: `openssl s_client -connect dc1.int.crypticlight.com:636 -CAfile /etc/ssl/certs/ca-certificates.crt`
+- If DC cert not in system store, set `ldap_ca_cert:` in `/etc/topic-manager/config.yaml` to the CA PEM path.
+
+---
+
 ## [1.0.1] — 2026-05-07
 
 ### Added

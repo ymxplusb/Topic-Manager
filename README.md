@@ -1,4 +1,4 @@
-# Jarvis Topic Manager v1.0.1
+# Jarvis Topic Manager v1.0.2
 
 **Standalone Kafka topic administration frontend for the Jarvis ecosystem.**
 
@@ -28,7 +28,7 @@ Jarvis Topic Manager is a lightweight web application that provides a secure, AD
 - **Broker Hover Popup** — Hover the broker count to see all broker FQDNs and IDs
 - **Concurrent Session Limit** — Configurable max simultaneous sessions per user (default 5)
 - **Offline Install** — All dependencies bundlable; no internet required on target host
-- **SonarQube** — Quality Gate OK on CE 26.4 (`192.168.202.76:9000`, project `topic-manager`)
+- **SonarQube** — Quality Gate OK on CE 26.5 (`192.168.202.76:9000`, project `topic-manager`)
 
 ## Stack
 
@@ -50,20 +50,20 @@ Jarvis Topic Manager is a lightweight web application that provides a secure, AD
 ```bash
 # Run on any machine with the repo checked out + lib/vue.global.prod.js present
 # Download Vue first if needed:
-curl -fsSL https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js \
+curl -fsSL https://cdn.jsdelivr.net/npm/vue@3.5.35/dist/vue.global.prod.js \
   -o lib/vue.global.prod.js
 # Build the tar:
-tar czf topic-manager-frontend-1.0.1.tar.gz \
+tar czf topic-manager-frontend-1.0.2.tar.gz \
   app index.html lib jarvis-favicon.ico jarvis-glyph-32.png jarvis-logo.png
 # Deploy on server:
-sudo tar xzf topic-manager-frontend-1.0.1.tar.gz -C /var/www/topic-manager/
+sudo tar xzf topic-manager-frontend-1.0.2.tar.gz -C /var/www/topic-manager/
 sudo chown -R www-data:www-data /var/www/topic-manager/
 ```
 
 **Offline bundle** (air-gapped installs — requires Linux/WSL with pip3):
 ```bash
 bash prepare-offline.sh --bundle
-# → creates topic-manager-offline-1.0.1.tar.gz
+# → creates topic-manager-offline-1.0.2.tar.gz
 # Contains: all source + Python wheels + Vue.js lib
 ```
 
@@ -71,7 +71,7 @@ bash prepare-offline.sh --bundle
 ```bash
 git clone https://github.com/ymxplusb/Topic-Manager.git
 cd Topic-Manager
-sudo bash install.sh
+sudo bash install.sh          # downloads Vue.js automatically on online hosts
 sudo nano /etc/topic-manager/config.yaml   # edit LDAP + cluster settings
 # place TLS cert at /etc/topic-manager/tls/server.crt + server.key
 sudo systemctl start topic-manager nginx
@@ -82,12 +82,41 @@ curl -sk https://localhost/api/health
 On internet-connected machine:
 ```bash
 bash prepare-offline.sh --bundle
-# → creates topic-manager-offline-1.0.1.tar.gz
+# → creates topic-manager-offline-1.0.2.tar.gz
 ```
 Transfer bundle to air-gapped host, extract, then:
 ```bash
 sudo bash install.sh
 ```
+
+## Upgrading
+
+### From v1.0.0 or v1.0.1 → v1.0.2
+
+**Check your current version:**
+```bash
+curl -sk https://localhost/api/health
+# Returns: {"status":"ok","version":"X.Y.Z"}
+```
+
+**Run the upgrade script** (safe to run on a live system — backs up all modified files first):
+```bash
+# Clone the repo if you don't have it locally:
+git clone https://github.com/ymxplusb/Topic-Manager.git
+cd Topic-Manager
+
+# Run the upgrade (auto-detects online/offline mode):
+sudo bash install/upgrade-1.0.2.sh
+```
+
+> **Note:** The upgrade script is in `install/upgrade-1.0.2.sh`, not `install.sh`.  
+> `install.sh` is for fresh installs only — running it on an existing deployment will overwrite your backend files.
+
+**Post-upgrade:** confirm the health check returns `"version":"1.0.2"` and try logging in with your AD `sAMAccountName` (e.g. `james.rodman`, not just `james`).
+
+See `install/UPGRADE-1.0.2.md` for the full change log, post-upgrade steps, and troubleshooting guide.
+
+---
 
 ## Configuration
 
@@ -123,7 +152,7 @@ See `config/config.yaml.example` for full annotated reference.
 - HTTPS enforced (HTTP → 301 redirect)
 - TLS 1.2 / 1.3 only
 - HTTPOnly + Secure + SameSite=Lax session cookies
-- Security headers: HSTS, X-Frame-Options, CSP, X-Content-Type-Options
+- Security headers: HSTS, CSP (with `frame-ancestors 'none'`, `form-action 'none'`, `base-uri 'self'`), X-Content-Type-Options, Referrer-Policy
 - Audit log for all destructive and config-change operations
 - Destructive actions require name-match confirmation
 - Session timeout: 30 minutes (configurable)

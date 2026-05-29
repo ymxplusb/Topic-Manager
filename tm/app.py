@@ -12,11 +12,18 @@ def create_app(config_path=None):
 
     cfg = load_config(config_path)
 
-    app.secret_key = cfg.get('server', {}).get('secret_key') or secrets.token_hex(32)
+    _secret = cfg.get('server', {}).get('secret_key', '')
+    if not _secret or 'CHANGE_ME' in _secret:
+        raise RuntimeError(
+            'server.secret_key is not set or still contains the placeholder. '
+            'Generate one with: python3 -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    app.secret_key = _secret
     # CSRF tokens are intentionally omitted: this is a pure JSON REST API
-    # (no HTML form submissions). State-mutation routes require Content-Type:
-    # application/json, and the SameSite=Lax cookie policy prevents cross-site
-    # request forgery from third-party origins.
+    # (no HTML form submissions). State-mutation routes enforce Content-Type:
+    # application/json (force=True is not used) and cross-site fetches are
+    # blocked via Sec-Fetch-Site checking in require_auth. SameSite=Lax is
+    # an additional transport-level guard.
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
     app.config['SESSION_COOKIE_SECURE']   = True

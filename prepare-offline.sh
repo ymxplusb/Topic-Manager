@@ -44,7 +44,7 @@ ok "Python wheels saved"
 
 # ─── Vue.js 3 (CDN file for offline frontend) ────────────────────────────────
 info "Downloading Vue.js 3..."
-VUE_VER="3.5.13"
+VUE_VER="3.5.35"
 VUE_URL="https://cdn.jsdelivr.net/npm/vue@${VUE_VER}/dist/vue.global.prod.js"
 curl -fsSL "$VUE_URL" -o "${LIB_DIR}/vue.global.prod.js"
 # Prepend version comment

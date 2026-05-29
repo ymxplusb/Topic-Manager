@@ -15,6 +15,24 @@ TM_VERSION = open(os.path.join(os.path.dirname(__file__), 'VERSION')).read().str
 
 log = logging.getLogger(__name__)
 
+# Kafka topic config keys that may be written by users. Read-only and
+# internal keys (e.g. leader.epoch, segment.jitter.ms internals) are omitted.
+_ALLOWED_TOPIC_CONFIGS = {
+    'cleanup.policy', 'compression.type', 'delete.retention.ms',
+    'file.delete.delay.ms', 'flush.messages', 'flush.ms',
+    'follower.replication.throttled.replicas', 'index.interval.bytes',
+    'leader.replication.throttled.replicas', 'local.retention.bytes',
+    'local.retention.ms', 'max.compaction.lag.ms', 'max.message.bytes',
+    'message.downconversion.enable', 'message.timestamp.difference.max.ms',
+    'message.timestamp.type', 'min.cleanable.dirty.ratio',
+    'min.compaction.lag.ms', 'min.insync.replicas', 'preallocate',
+    'retention.bytes', 'retention.ms', 'segment.bytes', 'segment.index.bytes',
+    'segment.jitter.ms', 'segment.ms', 'unclean.leader.election.enable',
+}
+
+_MAX_PARTITIONS = 1000
+_MAX_RF = 9
+
 
 # ── helpers ───────────────────────────────────────────────────────
 def _cfg():
@@ -39,10 +57,32 @@ def _cluster(cluster_id=None):
     return c
 
 
+# ── helpers ───────────────────────────────────────────────────────
+def _parse_json_body():
+    """Return parsed JSON body, or abort 415/400 if Content-Type or body is wrong."""
+    if not request.is_json:
+        return None, (jsonify({'error': 'Content-Type must be application/json'}), 415)
+    data = request.get_json(silent=True)
+    if data is None:
+        return None, (jsonify({'error': 'Invalid or empty JSON body'}), 400)
+    return data, None
+
+
 # ── auth decorator ────────────────────────────────────────────────
+# All authenticated users are members of the Kafka-Admins AD group —
+# group membership is enforced at login time by auth.validate_credentials.
+# Every session therefore carries implicit admin rights; require_auth is the
+# single gate for all protected routes.
 def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
+        # Block cross-site fetch requests on state-mutation methods.
+        # Sec-Fetch-Site is set by all modern browsers; absence (curl/Postman)
+        # is allowed so the API remains usable by authorized tooling.
+        if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+            if request.headers.get('Sec-Fetch-Site') == 'cross-site':
+                return jsonify({'error': 'Cross-site requests are not permitted'}), 403
+
         sid = session.get('sid')
         if not sid:
             return jsonify({'error': 'Authentication required'}), 401
@@ -57,7 +97,6 @@ def require_auth(f):
         touch_session(db, sid, _timeout())
         db.close()
 
-        # Attach current user to request context for use in route handlers
         request.current_user = session.get('user', {})
         return f(*args, **kwargs)
     return decorated
@@ -72,7 +111,9 @@ def health():
 # ── auth ──────────────────────────────────────────────────────────
 @bp.route('/auth/login', methods=['POST'])
 def login():
-    data = request.get_json(force=True)
+    data, err = _parse_json_body()
+    if err:
+        return err
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
     if not username or not password:
@@ -161,7 +202,9 @@ def test_cluster(cluster_id):
 @bp.route('/clusters/active', methods=['PUT'])
 @require_auth
 def set_active_cluster():
-    data = request.get_json(force=True)
+    data, err = _parse_json_body()
+    if err:
+        return err
     cluster_id = data.get('cluster_id')
     if not get_cluster_by_id(_cfg(), cluster_id):
         return jsonify({'error': 'Cluster not found'}), 404
@@ -195,19 +238,33 @@ def list_topics():
 @bp.route('/topics', methods=['POST'])
 @require_auth
 def create_topic():
-    data = request.get_json(force=True)
+    data, err = _parse_json_body()
+    if err:
+        return err
     name = (data.get('name') or '').strip()
     if not name or not re.match(r'^[a-zA-Z0-9._-]+$', name):
         return jsonify({'error': 'Invalid topic name'}), 400
 
-    partitions = int(data.get('partitions', 3))
-    rf         = int(data.get('replication_factor', 3))
-    config     = data.get('config', {})
+    try:
+        partitions = int(data.get('partitions', 3))
+        rf         = int(data.get('replication_factor', 3))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'partitions and replication_factor must be integers'}), 400
+    if not (1 <= partitions <= _MAX_PARTITIONS):
+        return jsonify({'error': f'partitions must be between 1 and {_MAX_PARTITIONS}'}), 400
+    if not (1 <= rf <= _MAX_RF):
+        return jsonify({'error': f'replication_factor must be between 1 and {_MAX_RF}'}), 400
+
+    # Only permit known writable config keys; reject arbitrary/read-only entries
+    raw_config = data.get('config', {})
+    if not isinstance(raw_config, dict):
+        return jsonify({'error': 'config must be an object'}), 400
+    config = {k: str(v) for k, v in raw_config.items() if k in _ALLOWED_TOPIC_CONFIGS}
 
     if data.get('retention_ms'):        config['retention.ms']        = str(data['retention_ms'])
     if data.get('retention_bytes'):     config['retention.bytes']     = str(data['retention_bytes'])
-    if data.get('cleanup_policy'):      config['cleanup.policy']      = data['cleanup_policy']
-    if data.get('compression_type'):    config['compression.type']    = data['compression_type']
+    if data.get('cleanup_policy'):      config['cleanup.policy']      = str(data['cleanup_policy'])
+    if data.get('compression_type'):    config['compression.type']    = str(data['compression_type'])
     if data.get('min_insync_replicas'): config['min.insync.replicas'] = str(data['min_insync_replicas'])
     if data.get('max_message_bytes'):   config['max.message.bytes']   = str(data['max_message_bytes'])
 
@@ -238,10 +295,15 @@ def get_topic_config(name):
 @bp.route('/topics/<path:name>/config', methods=['PUT'])
 @require_auth
 def update_topic_config(name):
-    data    = request.get_json(force=True)
-    updates = data.get('updates', {})
-    if not updates:
+    data, err = _parse_json_body()
+    if err:
+        return err
+    raw_updates = data.get('updates', {})
+    if not isinstance(raw_updates, dict) or not raw_updates:
         return jsonify({'error': 'No updates provided'}), 400
+    updates = {k: str(v) for k, v in raw_updates.items() if k in _ALLOWED_TOPIC_CONFIGS}
+    if not updates:
+        return jsonify({'error': 'No valid config keys provided'}), 400
 
     cluster = _cluster()
     try:
@@ -352,7 +414,9 @@ def get_settings():
 @bp.route('/settings', methods=['PUT'])
 @require_auth
 def update_settings():
-    data = request.get_json(force=True)
+    data, err = _parse_json_body()
+    if err:
+        return err
     db = get_db(_cfg())
     for key, value in data.items():
         if key in _ALL_KEYS:

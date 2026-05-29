@@ -1,6 +1,6 @@
 # Jarvis Topic Manager — Installation Guide
 
-**Version:** 1.0.0
+**Version:** 1.0.2
 **Platform:** Ubuntu Server 24.04 LTS
 **Completed by:** Human administrator
 **Copyright (c) 2025-2026 James Rodman. All Rights Reserved.**
@@ -178,9 +178,10 @@ sudo nano /etc/topic-manager/config.yaml
 ```yaml
 auth:
   ldap_server: "ldaps://dc1.int.crypticlight.com:636"
+  ldap_ca_cert: ""         # blank = system trust store; set to CA PEM path if cert not trusted
   ldap_domain: "int.crypticlight.com"
   ldap_base_dn: "DC=int,DC=crypticlight,DC=com"
-  ldap_bind_dn: "CN=svc-kafka-ui,OU=Service Accounts,DC=int,DC=crypticlight,DC=com"
+  ldap_bind_dn: "CN=svc-kafka-ui,OU=ICLServiceAccounts,DC=int,DC=crypticlight,DC=com"
   ldap_bind_password: "THE_ACTUAL_PASSWORD_FOR_svc-kafka-ui"
   required_group: "CN=Kafka-Admins,CN=Users,DC=int,DC=crypticlight,DC=com"
 
@@ -366,11 +367,11 @@ sudo systemctl status nginx
 
 # Quick health check (backend directly)
 curl http://127.0.0.1:5001/api/health
-# Expected: {"status":"ok","version":"1.0.0"}
+# Expected: {"status":"ok","version":"1.0.2"}
 
 # Health check through nginx (HTTPS)
 curl -sk https://localhost/api/health
-# Expected: {"status":"ok","version":"1.0.0"}
+# Expected: {"status":"ok","version":"1.0.2"}
 ```
 
 If `topic-manager` fails to start:
@@ -491,14 +492,14 @@ curl -sk https://localhost/api/version | python3 -m json.tool
 ```bash
 cd /c/Users/jrodm/Scripts/topic-manager   # or wherever the repo lives
 bash prepare-offline.sh --bundle
-# Creates: topic-manager-offline-1.0.0.tar.gz
+# Creates: topic-manager-offline-1.0.2.tar.gz
 ```
 
 ### Transfer to air-gapped host:
 
 ```bash
 scp -i ~/.ssh/claude_admin \
-  topic-manager-offline-1.0.0.tar.gz \
+  topic-manager-offline-1.0.2.tar.gz \
   claude_admin@192.168.202.90:/tmp/
 ```
 
@@ -506,7 +507,7 @@ scp -i ~/.ssh/claude_admin \
 
 ```bash
 cd /tmp
-tar xzf topic-manager-offline-1.0.0.tar.gz
+tar xzf topic-manager-offline-1.0.2.tar.gz
 cd topic-manager
 sudo bash install.sh
 # Script detects offline mode and uses install/packages/
@@ -518,7 +519,40 @@ Continue from Section 5 (Configure the Application).
 
 ## 15. Upgrading
 
-When a new version of Topic Manager is released:
+### v1.0.0 / v1.0.1 → v1.0.2 (security patch)
+
+Use the dedicated upgrade script — it handles all file patches, dependency updates, and nginx changes automatically.
+
+**Online (target has internet):**
+```bash
+# Transfer the script to the target:
+scp -i ~/.ssh/claude_admin \
+  /c/Users/jrodm/Scripts/topic-manager/install/upgrade-1.0.2.sh \
+  claude_admin@192.168.202.90:/tmp/
+
+# Run it:
+ssh -i ~/.ssh/claude_admin claude_admin@192.168.202.90 \
+  "sudo bash /tmp/upgrade-1.0.2.sh"
+```
+
+**Offline (air-gapped target):**
+```bash
+# On internet-connected machine first:
+bash prepare-offline.sh --bundle
+# → creates topic-manager-offline-1.0.2.tar.gz
+
+# Transfer and run:
+scp -i ~/.ssh/claude_admin topic-manager-offline-1.0.2.tar.gz \
+  claude_admin@192.168.202.90:/tmp/
+ssh -i ~/.ssh/claude_admin claude_admin@192.168.202.90 "
+  cd /tmp && tar xzf topic-manager-offline-1.0.2.tar.gz
+  sudo bash topic-manager/install/upgrade-1.0.2.sh
+"
+```
+
+See `install/UPGRADE-1.0.2.md` for the full list of fixes and post-upgrade verification steps.
+
+### Future versions (general procedure)
 
 ```bash
 # 1. On workstation — pull new version:
@@ -548,4 +582,4 @@ The config at `/etc/topic-manager/config.yaml` is **never overwritten** by the i
 ---
 
 *End of Installation Guide*
-*Jarvis Topic Manager v1.0.0 — Copyright (c) 2025-2026 James Rodman*
+*Jarvis Topic Manager v1.0.2 — Copyright (c) 2025-2026 James Rodman*

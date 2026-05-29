@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Jarvis Topic Manager — Install Script
-# Version: 1.0.1
+# Version: 1.0.2
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 #
 # Usage:
@@ -120,6 +120,21 @@ WSGI
 chown "$APP_USER:$APP_USER" "${APP_HOME}/wsgi.py"
 success "Backend installed"
 
+# ─── frontend lib: Vue.js ────────────────────────────────────────────────────
+VUE_VERSION="3.5.35"
+VUE_URL="https://cdn.jsdelivr.net/npm/vue@${VUE_VERSION}/dist/vue.global.prod.js"
+if [[ ! -f "${SCRIPT_DIR}/lib/vue.global.prod.js" ]]; then
+    if [[ $ONLINE == true ]]; then
+        info "Downloading Vue.js ${VUE_VERSION}..."
+        mkdir -p "${SCRIPT_DIR}/lib"
+        curl -fsSL --max-time 30 "$VUE_URL" -o "${SCRIPT_DIR}/lib/vue.global.prod.js" \
+            || die "Failed to download Vue.js from CDN. For offline install, run prepare-offline.sh first."
+        success "Vue.js ${VUE_VERSION} downloaded"
+    else
+        die "lib/vue.global.prod.js is missing. Run prepare-offline.sh on an internet host first, then transfer the bundle."
+    fi
+fi
+
 # ─── frontend ────────────────────────────────────────────────────────────────
 info "Installing frontend..."
 rsync -a --delete \
@@ -175,8 +190,8 @@ fi
 # ─── firewall ────────────────────────────────────────────────────────────────
 if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
     info "Opening firewall ports 80 and 443..."
-    ufw allow 80/tcp  --quiet
-    ufw allow 443/tcp --quiet
+    ufw --quiet allow 80/tcp
+    ufw --quiet allow 443/tcp
     success "Firewall ports 80/443 open"
 fi
 

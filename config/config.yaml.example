@@ -12,7 +12,13 @@ auth:
   ldap_server: "ldaps://dc1.int.crypticlight.com:636"
   ldap_domain: "int.crypticlight.com"
   ldap_base_dn: "DC=int,DC=crypticlight,DC=com"
-  # Service account for LDAP searches (read-only, Domain Users sufficient)
+  # Path to PEM CA bundle for LDAPS certificate validation.
+  # Leave blank to use the system trust store (/etc/ssl/certs/ca-certificates.crt).
+  # Point to your internal CA if it is not in the system store.
+  ldap_ca_cert: ""
+  # Service account for LDAP searches (read-only, Domain Users sufficient).
+  # When set, auth uses a two-phase bind: service account searches for the user,
+  # then the user's own DN + password is verified. Recommended over direct user bind.
   ldap_bind_dn: "CN=svc-kafka-ui,OU=Service Accounts,DC=int,DC=crypticlight,DC=com"
   ldap_bind_password: "CHANGE_ME"
   # Full DN of the AD group required for access
