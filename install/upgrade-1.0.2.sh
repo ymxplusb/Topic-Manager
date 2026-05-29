@@ -81,6 +81,24 @@ OFFLINE_VUE_OK=false
     $OFFLINE_VUE_OK || warn "Bundled Vue is not ${VUE_VERSION} — Vue update will be skipped."
 }
 
+# ─── venv sanity check ───────────────────────────────────────────────────────
+# If install.sh was run on an existing deployment it recreates the venv with
+# python3 -m venv, which can orphan dist-info metadata while wiping the actual
+# package files. Detect and repair before the upgrade touches anything else.
+info "Checking Python virtual environment..."
+if ! "${VENV}/bin/python3" -c "import gunicorn, flask, ldap3" 2>/dev/null; then
+    warn "venv is corrupt or packages are missing — rebuilding venv before upgrade"
+    "${VENV}/bin/python3" --version 2>/dev/null \
+        || { python3 -m venv "$VENV"; info "venv recreated"; }
+    info "Reinstalling base packages into venv..."
+    "${VENV}/bin/pip" install --quiet \
+        Flask Werkzeug gunicorn ldap3 confluent-kafka PyYAML cryptography \
+        || die "venv repair failed — cannot continue"
+    success "venv repaired"
+else
+    success "venv OK"
+fi
+
 # ─── health check ────────────────────────────────────────────────────────────
 PRE_HEALTH="$(curl -sk https://localhost/api/health 2>/dev/null || true)"
 if echo "$PRE_HEALTH" | grep -q '"ok"'; then
