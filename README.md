@@ -210,15 +210,79 @@ The upgrade script:
 - Backs up all files it will modify to `/opt/topic-manager/backup-pre-1.0.2/`
 - Patches Python backend, nginx config, and frontend in place
 - Upgrades Python packages and Vue.js
+- Automatically adds `ldap_ca_cert: ""` to your config if the field is missing
 - Restarts services and verifies the health endpoint
 
-Verify after upgrade:
+### Post-upgrade: update config.yaml
+
+Open the config after the script completes:
+
+```bash
+sudo nano /etc/topic-manager/config.yaml
+```
+
+**Two fields require your attention:**
+
+**1. `ldap_ca_cert`** — Added automatically by the upgrade script as `""`. v1.0.2 enforces certificate validation on the LDAPS connection (`CERT_REQUIRED`, replacing the old `CERT_NONE`). Blank means the system CA trust store is used.
+
+Verify the DC cert is trusted before restarting:
+```bash
+openssl s_client -connect your-dc.yourdomain.com:636 \
+  -CAfile /etc/ssl/certs/ca-certificates.crt </dev/null 2>&1 | grep "Verify return code"
+# Expected: Verify return code: 0 (ok)
+```
+
+If the verify code is not 0, import your internal CA into the system store, or point the field directly at the CA bundle:
+```yaml
+ldap_ca_cert: "/etc/topic-manager/tls/internal-ca.crt"
+```
+
+**2. `ldap_bind_dn` and `ldap_bind_password`** — v1.0.2 introduces a two-phase bind: a service account searches the directory for the user, then the user's own credentials are verified. In v1.0.0 these fields existed in the config file but were ignored.
+
+Your config will have one of two states:
+
+| State | What happens | Action |
+|-------|-------------|--------|
+| `ldap_bind_password: "CHANGE_ME"` | Falls back to direct user bind — same behaviour as v1.0.0. Login continues to work. | No change required, but consider setting a real service account for better security. |
+| Real password set | Two-phase bind is active. The service account must exist in AD and `ldap_bind_dn` must be its exact Distinguished Name. | Verify the DN is correct (see below). |
+
+To find the correct `ldap_bind_dn` for your service account:
+```powershell
+# Run from any domain-joined Windows machine:
+Get-ADUser -Identity "your-service-account-name" | Select-Object DistinguishedName
+```
+
+Example config after update:
+```yaml
+auth:
+  ldap_ca_cert:       ""
+  ldap_bind_dn:       "CN=svc-topic-mgr,OU=ServiceAccounts,DC=yourdomain,DC=com"
+  ldap_bind_password: "the-actual-service-account-password"
+```
+
+Test the service account bind after saving:
+```bash
+ldapwhoami -H ldaps://your-dc.yourdomain.com:636 \
+  -D "svc-topic-mgr@yourdomain.com" -W -x
+# Expected: dn:CN=svc-topic-mgr,...
+# ldap_bind: Invalid credentials (49) means wrong password in config
+```
+
+Restart the service after any config change:
+```bash
+sudo systemctl restart topic-manager
+```
+
+### Verify
+
 ```bash
 curl -sk https://localhost/api/health
 # Expected: {"status":"ok","version":"1.0.2"}
 ```
 
-See `install/UPGRADE-1.0.2.md` for the full change log, post-upgrade checklist, and troubleshooting guide.
+Then sign in with your AD `sAMAccountName` (e.g. `firstname.lastname`) or full UPN (`firstname.lastname@yourdomain.com`).
+
+See `install/UPGRADE-1.0.2.md` for the full change log, complete post-upgrade checklist, and troubleshooting guide.
 
 ---
 
