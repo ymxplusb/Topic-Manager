@@ -953,17 +953,34 @@ warn "  ldap_bind_dn in ${CONFIG_FILE} matches the account's actual AD DN."
 warn "  Verify with: ldapsearch -H ldaps://dc1... -D '<bind_dn>' -w '<pw>' '(sAMAccountName=*)'"
 
 # ─── Python package upgrades ─────────────────────────────────────────────────
-info "Upgrading Python packages..."
+# Install in two separate calls: service-critical stack first (Flask / Werkzeug /
+# gunicorn), then confluent-kafka. If confluent-kafka fails the web service is
+# still intact and can start. Installing all four in one call lets pip uninstall
+# gunicorn before the download of conflent-kafka completes, leaving the service
+# unbootable if the combined install is then aborted.
+info "Upgrading Python packages (Flask / Werkzeug / gunicorn)..."
 if [[ $ONLINE == true ]]; then
-    "${VENV}/bin/pip" install --quiet \
-        "Flask==3.1.3" "Werkzeug==3.1.8" "gunicorn==26.0.0" "confluent-kafka==2.14.0"
-    success "Python packages upgraded from PyPI"
+    "${VENV}/bin/pip" install "Flask==3.1.3" "Werkzeug==3.1.8" "gunicorn==26.0.0" \
+        || die "pip install of Flask/Werkzeug/gunicorn failed — service stack not upgraded"
+    success "Flask / Werkzeug / gunicorn upgraded from PyPI"
 elif $OFFLINE_PY_OK; then
-    "${VENV}/bin/pip" install --quiet --no-index --find-links="$PY_PKG_DIR" \
-        "Flask==3.1.3" "Werkzeug==3.1.8" "gunicorn==26.0.0" "confluent-kafka==2.14.0"
-    success "Python packages upgraded from offline cache"
+    "${VENV}/bin/pip" install --no-index --find-links="$PY_PKG_DIR" \
+        "Flask==3.1.3" "Werkzeug==3.1.8" "gunicorn==26.0.0" \
+        || die "pip install of Flask/Werkzeug/gunicorn failed (offline) — service stack not upgraded"
+    success "Flask / Werkzeug / gunicorn upgraded from offline cache"
 else
     warn "Python package upgrade skipped — no internet and no offline cache at ${PY_PKG_DIR}"
+fi
+
+info "Upgrading confluent-kafka..."
+if [[ $ONLINE == true ]]; then
+    "${VENV}/bin/pip" install "confluent-kafka==2.14.0" \
+        || warn "confluent-kafka upgrade failed — Kafka operations may use old version; re-run manually: ${VENV}/bin/pip install confluent-kafka==2.14.0"
+    success "confluent-kafka upgraded from PyPI"
+elif $OFFLINE_PY_OK; then
+    "${VENV}/bin/pip" install --no-index --find-links="$PY_PKG_DIR" "confluent-kafka==2.14.0" \
+        || warn "confluent-kafka upgrade failed (offline) — Kafka operations may use old version"
+    success "confluent-kafka upgraded from offline cache"
 fi
 
 # ─── Vue.js update ───────────────────────────────────────────────────────────
