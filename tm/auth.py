@@ -21,7 +21,7 @@ def validate_credentials(cfg, username, password):
 
     Uses two-phase bind when ldap_bind_dn/ldap_bind_password are configured:
       1. Service-account bind for directory search.
-      2. Re-bind with the found user DN to verify the supplied password.
+      2. Re-bind with the user's UPN to verify the supplied password.
     Falls back to direct user-bind when service credentials are absent.
     """
     auth_cfg = cfg.get('auth', {})
@@ -52,8 +52,8 @@ def validate_credentials(cfg, username, password):
     user_dn = str(entry.distinguishedName) if entry.distinguishedName else ''
     member_of = [str(g).lower() for g in (entry.memberOf.values if entry.memberOf else [])]
 
-    if use_service_bind and user_dn:
-        ok, err, user_conn = _ldap_bind(server, user_dn, password)
+    if use_service_bind:
+        ok, err, user_conn = _ldap_bind(server, upn, password)
         if not ok:
             return False, err
         user_conn.unbind()
