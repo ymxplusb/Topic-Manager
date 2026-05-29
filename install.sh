@@ -171,6 +171,8 @@ success "Service installed: ${SERVICE_NAME}"
 
 # ─── nginx ───────────────────────────────────────────────────────────────────
 info "Installing nginx site..."
+mkdir -p /etc/nginx/snippets
+cp "${SCRIPT_DIR}/nginx/tm-security-headers.conf" /etc/nginx/snippets/tm-security-headers.conf
 cp "${SCRIPT_DIR}/nginx/topic-manager.conf" /etc/nginx/sites-available/topic-manager
 ln -sf /etc/nginx/sites-available/topic-manager /etc/nginx/sites-enabled/topic-manager
 rm -f /etc/nginx/sites-enabled/default

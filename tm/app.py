@@ -1,5 +1,3 @@
-import os
-import secrets
 import logging
 import logging.handlers
 from flask import Flask
