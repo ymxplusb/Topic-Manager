@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SonarQube Code Quality Report — Jarvis Topic Manager v1.0.2</title>
+<style>
+  :root {
+    --green:  #22c55e;
+    --red:    #ef4444;
+    --yellow: #f59e0b;
+    --blue:   #3b82f6;
+    --gray:   #6b7280;
+    --bg:     #0f172a;
+    --card:   #1e293b;
+    --border: #334155;
+    --text:   #e2e8f0;
+    --muted:  #94a3b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); padding: 32px; }
+  h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 4px; }
+  h2 { font-size: 1.05rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 28px 0 12px; }
+  h3 { font-size: .9rem; font-weight: 600; margin-bottom: 8px; }
+  .meta { color: var(--muted); font-size: .85rem; margin-bottom: 28px; }
+  .meta span { margin-right: 20px; }
+
+  .qg-banner { display: flex; align-items: center; gap: 16px; padding: 18px 24px;
+    border-radius: 10px; margin-bottom: 28px; border: 1px solid; }
+  .qg-ok  { background: rgba(34,197,94,.08);  border-color: rgba(34,197,94,.3);  }
+  .qg-err { background: rgba(239,68,68,.08);  border-color: rgba(239,68,68,.3);  }
+  .qg-dot { width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0; }
+  .qg-dot-ok  { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .qg-dot-err { background: var(--red);   box-shadow: 0 0 8px var(--red);   }
+  .qg-label { font-size: 1.1rem; font-weight: 700; }
+  .qg-sub   { font-size: .8rem; color: var(--muted); margin-top: 2px; }
+
+  .rating-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 8px; }
+  .rating-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; text-align: center; }
+  .rating-badge { font-size: 2rem; font-weight: 800; }
+  .rating-a  { color: var(--green); }
+  .rating-label { font-size: .72rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .04em; }
+  .rating-value { font-size: 1.4rem; font-weight: 700; }
+
+  .stats-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; margin-bottom: 8px; }
+  .stat-card  { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .stat-val   { font-size: 1.5rem; font-weight: 700; }
+  .stat-lbl   { font-size: .72rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .04em; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th { text-align: left; padding: 8px 12px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--border); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+  td { padding: 9px 12px; border-bottom: 1px solid rgba(51,65,85,.5); }
+  tr:last-child td { border-bottom: none; }
+  .pass { color: var(--green); font-weight: 600; }
+  .fail { color: var(--red);   font-weight: 600; }
+
+  .issues-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .issue-sect  { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .sev-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: .85rem; border-bottom: 1px solid rgba(51,65,85,.4); }
+  .sev-row:last-child { border-bottom: none; }
+  .sev-blocker  { color: #dc2626; }
+  .sev-critical { color: #ef4444; }
+  .sev-major    { color: #f97316; }
+  .sev-minor    { color: var(--muted); }
+  .sev-info     { color: #64748b; }
+  .zero         { color: #334155; }
+
+  .note { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; font-size: .82rem; color: var(--muted); line-height: 1.6; margin-top: 28px; }
+  .note strong { color: var(--text); }
+  .footer { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border); font-size: .78rem; color: var(--muted); display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+
+<h1>⚡ Jarvis Topic Manager — Code Quality Report</h1>
+<div class="meta">
+  <span>Version: <strong>1.0.2</strong></span>
+  <span>Analysis date: <strong>2026-05-29</strong></span>
+  <span>SonarQube: <strong>CE 26.5.0</strong></span>
+  <span>Project key: <strong>topic-manager</strong></span>
+  <span>Lines of code: <strong>2,183</strong></span>
+</div>
+
+<div class="qg-banner qg-ok">
+  <div class="qg-dot qg-dot-ok"></div>
+  <div>
+    <div class="qg-label">Quality Gate PASSED</div>
+    <div class="qg-sub">All 6 conditions met — safe to release</div>
+  </div>
+</div>
+
+<h2>Ratings</h2>
+<div class="rating-grid">
+  <div class="rating-card">
+    <div class="rating-badge rating-a">A</div>
+    <div class="rating-label">Reliability</div>
+    <div class="rating-value" style="color:var(--green)">0 Bugs</div>
+  </div>
+  <div class="rating-card">
+    <div class="rating-badge rating-a">A</div>
+    <div class="rating-label">Security</div>
+    <div class="rating-value" style="color:var(--green)">0 Vulnerabilities</div>
+  </div>
+  <div class="rating-card">
+    <div class="rating-badge rating-a">A</div>
+    <div class="rating-label">Maintainability</div>
+    <div class="rating-value" style="color:var(--green)">16 Smells</div>
+  </div>
+  <div class="rating-card">
+    <div class="rating-badge rating-a">100%</div>
+    <div class="rating-label">Hotspots Reviewed</div>
+    <div class="rating-value" style="color:var(--green)">0 Open</div>
+  </div>
+</div>
+
+<h2>Key Metrics</h2>
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-val" style="color:var(--green)">0</div>
+    <div class="stat-lbl">Bugs</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-val" style="color:var(--green)">0</div>
+    <div class="stat-lbl">Vulnerabilities</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-val" style="color:var(--muted)">16</div>
+    <div class="stat-lbl">Code Smells</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-val" style="color:var(--green)">0.0%</div>
+    <div class="stat-lbl">New Duplication</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-val" style="color:var(--green)">0</div>
+    <div class="stat-lbl">New Violations</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-val" style="color:var(--muted)">2,183</div>
+    <div class="stat-lbl">Lines of Code</div>
+  </div>
+</div>
+
+<h2>Quality Gate Conditions</h2>
+<table>
+  <thead><tr><th>Metric</th><th>Status</th><th>Value</th><th>Threshold</th></tr></thead>
+  <tbody>
+    <tr><td>Reliability Rating</td><td class="pass">PASSED</td><td>A (1)</td><td>≤ A</td></tr>
+    <tr><td>New Duplicated Lines (%)</td><td class="pass">PASSED</td><td>0.0%</td><td>&lt; 3%</td></tr>
+    <tr><td>Bugs</td><td class="pass">PASSED</td><td>0</td><td>= 0</td></tr>
+    <tr><td>New Violations</td><td class="pass">PASSED</td><td>0</td><td>= 0</td></tr>
+    <tr><td>Security Hotspots Reviewed</td><td class="pass">PASSED</td><td>100%</td><td>= 100%</td></tr>
+    <tr><td>Vulnerabilities</td><td class="pass">PASSED</td><td>0</td><td>= 0</td></tr>
+  </tbody>
+</table>
+
+<h2>Issue Breakdown</h2>
+<div class="issues-grid">
+  <div class="issue-sect">
+    <h3>By Severity</h3>
+    <div class="sev-row"><span class="sev-blocker">BLOCKER</span><span class="zero">0</span></div>
+    <div class="sev-row"><span class="sev-critical">CRITICAL</span><span class="zero">0</span></div>
+    <div class="sev-row"><span class="sev-major">MAJOR</span><span class="zero">0</span></div>
+    <div class="sev-row"><span class="sev-minor">MINOR</span><span>16</span></div>
+    <div class="sev-row"><span class="sev-info">INFO</span><span class="zero">0</span></div>
+  </div>
+  <div class="issue-sect">
+    <h3>By Type</h3>
+    <div class="sev-row"><span>Bug</span><span class="zero">0</span></div>
+    <div class="sev-row"><span>Vulnerability</span><span class="zero">0</span></div>
+    <div class="sev-row"><span>Security Hotspot</span><span class="zero">0</span></div>
+    <div class="sev-row"><span>Code Smell</span><span>16</span></div>
+  </div>
+</div>
+
+<div class="note">
+  <strong>About the 16 MINOR code smells:</strong> All are pre-existing style suggestions in untouched component
+  files (<code>LoginView.js</code>, <code>TopicsTab.js</code>, <code>CreateTopicModal.js</code>, etc.) — empty
+  catch blocks, <code>window</code> vs <code>globalThis</code>, and similar. None are in files modified by
+  v1.0.2. No bugs, vulnerabilities, or security hotspots exist in the codebase.
+  <br><br>
+  <strong>Scope:</strong> <code>tm/</code> (Python backend) + <code>app/components/</code> (Vue frontend).
+  CSS and bundled libraries excluded per <code>sonar-project.properties</code>.
+  <br><br>
+  <strong>Security changes in v1.0.2</strong> all passed SonarQube analysis without introducing new issues:
+  LDAPS certificate validation, two-phase LDAP bind, CSRF hardening, topic config allowlist,
+  CSV injection fix, and secret key validation.
+</div>
+
+<div class="footer">
+  <span>Jarvis Topic Manager v1.0.2 — Copyright &copy; 2025–2026 James Rodman. All Rights Reserved.</span>
+  <span>SonarQube CE 26.5.0 · 192.168.202.76:9000 · project: topic-manager</span>
+</div>
+
+</body>
+</html>
