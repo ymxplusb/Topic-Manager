@@ -71,7 +71,7 @@ bash prepare-offline.sh --bundle
 ```bash
 git clone https://github.com/ymxplusb/Topic-Manager.git
 cd Topic-Manager
-sudo bash install.sh
+sudo bash install.sh          # downloads Vue.js automatically on online hosts
 sudo nano /etc/topic-manager/config.yaml   # edit LDAP + cluster settings
 # place TLS cert at /etc/topic-manager/tls/server.crt + server.key
 sudo systemctl start topic-manager nginx
@@ -88,6 +88,35 @@ Transfer bundle to air-gapped host, extract, then:
 ```bash
 sudo bash install.sh
 ```
+
+## Upgrading
+
+### From v1.0.0 or v1.0.1 → v1.0.2
+
+**Check your current version:**
+```bash
+curl -sk https://localhost/api/health
+# Returns: {"status":"ok","version":"X.Y.Z"}
+```
+
+**Run the upgrade script** (safe to run on a live system — backs up all modified files first):
+```bash
+# Clone the repo if you don't have it locally:
+git clone https://github.com/ymxplusb/Topic-Manager.git
+cd Topic-Manager
+
+# Run the upgrade (auto-detects online/offline mode):
+sudo bash install/upgrade-1.0.2.sh
+```
+
+> **Note:** The upgrade script is in `install/upgrade-1.0.2.sh`, not `install.sh`.  
+> `install.sh` is for fresh installs only — running it on an existing deployment will overwrite your backend files.
+
+**Post-upgrade:** confirm the health check returns `"version":"1.0.2"` and try logging in with your AD `sAMAccountName` (e.g. `james.rodman`, not just `james`).
+
+See `install/UPGRADE-1.0.2.md` for the full change log, post-upgrade steps, and troubleshooting guide.
+
+---
 
 ## Configuration
 

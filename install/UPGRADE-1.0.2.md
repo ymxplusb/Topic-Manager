@@ -57,10 +57,17 @@ v1.0.2 is a security patch release. It fixes 5 security findings (3 HIGH, 2 MED,
 
 ## Running the Upgrade
 
+> **IMPORTANT — do not run `install.sh` on an existing deployment.**  
+> `install.sh` is for **fresh installs only**. Running it on a server that already has Topic Manager will rsync over your backend files and (due to the `--delete` flag) may delete `lib/vue.global.prod.js` from the server. Always use `install/upgrade-1.0.2.sh` to upgrade.
+
 ### Online (internet-connected host)
 
 ```bash
-# From the repo root on the target host, or transfer the install/ folder
+# 1. Clone the repo onto the target server (or pull latest if already cloned)
+git clone https://github.com/ymxplusb/Topic-Manager.git
+cd Topic-Manager
+
+# 2. Run the upgrade script
 sudo bash install/upgrade-1.0.2.sh
 ```
 
@@ -185,3 +192,99 @@ After upgrade, confirm all of the following:
 - [ ] `curl -skI https://<host>/api/health` includes `content-security-policy` header
 - [ ] No browser console errors on page load
 - [ ] `openssl s_client` LDAPS verify returns code 0
+
+---
+
+## Troubleshooting
+
+### "Network error — is the server reachable?" on login
+
+This error means the browser got no response or a non-JSON response from `/api/auth/login`. The backend is down or restarting.
+
+```bash
+# Check service status
+sudo systemctl status topic-manager
+
+# Check last 50 lines of gunicorn output
+sudo journalctl -u topic-manager -n 50 --no-pager
+
+# Confirm backend responds (returns JSON)
+curl -sk https://localhost/api/health
+```
+
+**Most common causes:**
+
+1. **`secret_key` is still the placeholder** — The v1.0.2 `app.py` fails-closed if `server.secret_key` in `/etc/topic-manager/config.yaml` is absent or contains `CHANGE_ME`. Generate and set a real key:
+   ```bash
+   python3 -c "import secrets; print(secrets.token_hex(32))"
+   # Paste the output into /etc/topic-manager/config.yaml → server.secret_key
+   sudo systemctl restart topic-manager
+   ```
+
+2. **Service was stopped mid-test** — The upgrade script stops the service for ~10 seconds. If you tested login during that window, nginx returned a 502 HTML page which the browser treated as a network error. Try again after confirming the service is `active (running)`.
+
+3. **Import error at startup** — Check `journalctl -u topic-manager -n 50` for a Python traceback. If present, the patched files may be corrupt; restore from the backup:
+   ```bash
+   sudo cp /opt/topic-manager/backup-pre-1.0.2/auth.py    /opt/topic-manager/tm/auth.py
+   sudo cp /opt/topic-manager/backup-pre-1.0.2/app.py     /opt/topic-manager/tm/app.py
+   sudo cp /opt/topic-manager/backup-pre-1.0.2/routes.py  /opt/topic-manager/tm/routes.py
+   sudo systemctl restart topic-manager
+   ```
+
+---
+
+### "User not found in directory" on login
+
+The service account bound successfully, but the directory search returned no matching user. This is **not** an LDAPS certificate issue.
+
+**Most common cause: wrong username format.** The login field expects your AD `sAMAccountName` (e.g. `james.rodman`), not a display name (`james`), email prefix, or UPN (`james.rodman@int.crypticlight.com` also works — the `@domain` suffix is stripped automatically).
+
+To find your SAMAccountName:
+```bash
+# Run on the Topic Manager host (uses the configured service account)
+sudo /opt/topic-manager/venv/bin/python3 - << 'EOF'
+import ssl, yaml
+from ldap3 import Server, Connection, ALL, SIMPLE, Tls
+with open('/etc/topic-manager/config.yaml') as f:
+    cfg = yaml.safe_load(f)
+auth = cfg['auth']
+tls  = Tls(validate=ssl.CERT_REQUIRED)
+srv  = Server(auth['ldap_server'], get_info=ALL, tls=tls, use_ssl=True)
+conn = Connection(srv, user=auth['ldap_bind_dn'], password=auth['ldap_bind_password'],
+                  authentication=SIMPLE, auto_bind=True)
+conn.search('DC=int,DC=crypticlight,DC=com', '(objectClass=user)',
+            attributes=['sAMAccountName', 'displayName'])
+for e in conn.entries:
+    if e.memberOf or True:
+        print(str(e.sAMAccountName).ljust(30), str(e.displayName))
+conn.unbind()
+EOF
+```
+
+**Service account bind failure** — If the bind itself fails (LDAP error rather than "User not found"), the `ldap_bind_password` in `/etc/topic-manager/config.yaml` may be wrong or still set to `CHANGE_ME`. In that case auth falls back to direct user bind — verify the fallback works with:
+```bash
+ldapsearch -H ldaps://dc1.int.crypticlight.com:636 \
+  -D "james.rodman@int.crypticlight.com" -W \
+  -b "DC=int,DC=crypticlight,DC=com" "(sAMAccountName=james.rodman)"
+```
+
+---
+
+### Upgrade script dies at firewall step
+
+Symptom: script exits with `ufw: invalid option` or similar after the pip install step.
+
+The `ufw --quiet allow <port>` syntax requires `--quiet` **before** the subcommand. This was a bug in install.sh prior to this patch; upgrade-1.0.2.sh was never affected. If running a fresh install from a clone taken before 2026-05-29, update install.sh or open the ports manually:
+```bash
+sudo ufw --quiet allow 80/tcp
+sudo ufw --quiet allow 443/tcp
+```
+
+---
+
+### lib/vue.global.prod.js missing (fresh install only)
+
+`lib/vue.global.prod.js` is excluded from the git repository (binary vendor file). On a fresh `git clone`, the `lib/` directory will not exist.
+
+- **Online install:** install.sh now automatically downloads Vue.js from the CDN before the rsync step. No action needed.
+- **Offline install:** run `prepare-offline.sh --bundle` on an internet-connected machine first; the bundle includes the lib file.
