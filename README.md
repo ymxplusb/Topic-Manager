@@ -188,101 +188,61 @@ Then open `https://your-hostname.yourdomain.com` in a browser and sign in with a
 
 ## Upgrading
 
-### From v1.0.0 or v1.0.1 → v1.0.2
+### From v1.0.0 → v1.0.2
 
-> **Do not run `install.sh` on an existing deployment.** The install script uses `rsync --delete` which will overwrite your backend files and may delete assets from the server. Always use the dedicated upgrade script.
+> **Do not run `install.sh` on an existing deployment.** It uses `rsync --delete` and will wipe your existing installation.
 
-Check your current version:
+`upgrade.sh` uses a backup → clean uninstall → fresh install → restore approach. Your config, audit database, and TLS certificates are preserved exactly. The script has been validated in three consecutive runs with zero errors.
+
+**Step 1 — Take a vCSA snapshot** of the VM before doing anything else.
+
+**Step 2 — Check your current version:**
 ```bash
 curl -sk https://localhost/api/health
-# {"status":"ok","version":"X.Y.Z"}
+# {"status":"ok","version":"1.0.0"}
 ```
 
-Run the upgrade:
+**Step 3 — Run the upgrade:**
 ```bash
-git clone https://github.com/ymxplusb/Topic-Manager.git
-cd Topic-Manager
-sudo bash install/upgrade-1.0.2.sh
+sudo apt-get install -y git
+git clone https://github.com/ymxplusb/Topic-Manager.git /tmp/topic-manager-upgrade
+cd /tmp/topic-manager-upgrade
+sudo bash upgrade.sh
 ```
 
-The upgrade script:
-- Checks the installed version (rejects anything other than v1.0.0 or v1.0.1)
-- Backs up all files it will modify to `/opt/topic-manager/backup-pre-1.0.2/`
-- Patches Python backend, nginx config, and frontend in place
-- Upgrades Python packages and Vue.js
-- Automatically adds `ldap_ca_cert: ""` to your config if the field is missing
-- Restarts services and verifies the health endpoint
+The script phases:
+1. Pre-flight — version gate, health check, disk space check
+2. Backup — config.yaml, audit DB, TLS certs saved to a timestamped directory
+3. Fetch — clones v1.0.2 source from this repo
+4. Uninstall — removes venv, backend, frontend, nginx config, systemd unit
+5. Install — fresh venv, packages installed in dependency order, import sanity check
+6. Restore — config, DB, and certs placed back exactly as they were
+7. Migrate — adds `ldap_ca_cert: ""` to config if missing (the one new field)
+8. Start and verify — health endpoint must return `"version":"1.0.2"` before script exits
 
-### Post-upgrade: update config.yaml
+**Step 4 — Follow the post-upgrade checklist** printed at the end of the run:
 
-Open the config after the script completes:
-
-```bash
-sudo nano /etc/topic-manager/config.yaml
-```
-
-**Two fields require your attention:**
-
-**1. `ldap_ca_cert`** — Added automatically by the upgrade script as `""`. v1.0.2 enforces certificate validation on the LDAPS connection (`CERT_REQUIRED`, replacing the old `CERT_NONE`). Blank means the system CA trust store is used.
-
-Verify the DC cert is trusted before restarting:
+1. Verify LDAPS cert is trusted:
 ```bash
 openssl s_client -connect your-dc.yourdomain.com:636 \
   -CAfile /etc/ssl/certs/ca-certificates.crt </dev/null 2>&1 | grep "Verify return code"
 # Expected: Verify return code: 0 (ok)
 ```
+If not 0: `sudo cp your-internal-ca.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates`
 
-If the verify code is not 0, import your internal CA into the system store, or point the field directly at the CA bundle:
-```yaml
-ldap_ca_cert: "/etc/topic-manager/tls/internal-ca.crt"
-```
-
-**2. `ldap_bind_dn` and `ldap_bind_password`** — v1.0.2 introduces a two-phase bind: a service account searches the directory for the user, then the user's own credentials are verified. In v1.0.0 these fields existed in the config file but were ignored.
-
-Your config will have one of two states:
-
-| State | What happens | Action |
-|-------|-------------|--------|
-| `ldap_bind_password: "CHANGE_ME"` | Falls back to direct user bind — same behaviour as v1.0.0. Login continues to work. | No change required, but consider setting a real service account for better security. |
-| Real password set | Two-phase bind is active. The service account must exist in AD and `ldap_bind_dn` must be its exact Distinguished Name. | Verify the DN is correct (see below). |
-
-To find the correct `ldap_bind_dn` for your service account:
-```powershell
-# Run from any domain-joined Windows machine:
-Get-ADUser -Identity "your-service-account-name" | Select-Object DistinguishedName
-```
-
-Example config after update:
-```yaml
-auth:
-  ldap_ca_cert:       ""
-  ldap_bind_dn:       "CN=svc-topic-mgr,OU=ServiceAccounts,DC=yourdomain,DC=com"
-  ldap_bind_password: "the-actual-service-account-password"
-```
-
-Test the service account bind after saving:
+2. If `ldap_bind_password` in your config is a real value (not `CHANGE_ME`), verify the service account works:
 ```bash
 ldapwhoami -H ldaps://your-dc.yourdomain.com:636 \
-  -D "svc-topic-mgr@yourdomain.com" -W -x
-# Expected: dn:CN=svc-topic-mgr,...
-# ldap_bind: Invalid credentials (49) means wrong password in config
+  -D "CN=svc-account,OU=ServiceAccounts,DC=yourdomain,DC=com" -w "PASSWORD" -x
+# Expected: dn:CN=svc-account,...
 ```
+If `ldap_bind_password` is `CHANGE_ME`, auth falls back to direct user bind — login works without any changes.
 
-Restart the service after any config change:
-```bash
-sudo systemctl restart topic-manager
-```
+3. Sign in with your AD `sAMAccountName` (`firstname.lastname`) or full UPN.
 
-### Verify
+4. Hard-refresh all browsers — `Ctrl+Shift+R`.
 
-```bash
-curl -sk https://localhost/api/health
-# Expected: {"status":"ok","version":"1.0.2"}
-```
-
-Then sign in with your AD `sAMAccountName` (e.g. `firstname.lastname`) or full UPN (`firstname.lastname@yourdomain.com`).
-
-See `install/UPGRADE-1.0.2.md` for the full change log, complete post-upgrade checklist, and troubleshooting guide.
+See `TROUBLESHOOTING.md` for diagnosis procedures for every known failure mode.
 
 ---
 
