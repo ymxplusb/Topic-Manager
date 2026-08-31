@@ -4,10 +4,18 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 This product includes software developed by third parties under the following licenses.
 
+The versions below are the ones in `requirements.txt` (the single source of truth for every
+Python pin) and the Vue pin in `install/upgrade-full.sh`. `SBOM.md` lists the same set with
+sources and vulnerability status; if these two files ever disagree, one of them is wrong.
+
+> A host installed by `install.sh` and never upgraded serves Vue **3.5.35**, which that
+> script fetches without an integrity check. Upgraded hosts serve the hash-verified 3.5.42
+> recorded below. See SBOM.md → *Known divergence*.
+
 ---
 
 ## Vue.js
-Version: 3.5.13
+Version: 3.5.42
 License: MIT
 Copyright (c) 2013-present, Yuxi (Evan) You
 
@@ -20,7 +28,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ---
 
 ## Flask
-Version: 3.1.0
+Version: 3.1.3
 License: BSD-3-Clause
 Copyright 2010 Pallets
 
@@ -32,7 +40,7 @@ Redistribution and use in source and binary forms, with or without modification,
 ---
 
 ## gunicorn
-Version: 23.0.0
+Version: 26.2.0
 License: MIT
 Copyright 2009-2015 (c) Benoît Chesneau; 2009-2015 (c) Paul J. Davis
 
@@ -46,7 +54,7 @@ Copyright 2013-2022 Giovanni Cannata
 ---
 
 ## confluent-kafka-python
-Version: 2.6.1
+Version: 2.15.0
 License: Apache-2.0
 Copyright 2016-2024 Confluent Inc.
 
@@ -56,21 +64,21 @@ You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2
 ---
 
 ## PyYAML
-Version: 6.0.2
+Version: 6.0.3
 License: MIT
 Copyright (c) 2017-2021 Ingy döt Net; Copyright (c) 2006-2016 Kirill Simonov
 
 ---
 
 ## cryptography
-Version: 44.0.2
+Version: 50.0.1
 License: Apache-2.0 and BSD
 Copyright (c) Individual contributors.
 
 ---
 
 ## Werkzeug
-Version: 3.1.3
+Version: 3.1.8
 License: BSD-3-Clause
 Copyright 2007 Pallets
 

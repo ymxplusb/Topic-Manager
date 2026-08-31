@@ -1,7 +1,30 @@
+# Topic Manager - Python runtime dependencies.
+#
+# THIS FILE IS THE SINGLE SOURCE OF TRUTH for every Python pin. Both
+# install/upgrade-full.sh (which installs them on the target host) and
+# prepare-offline.sh (which downloads the wheels for an air-gapped host) take
+# their versions from here, so the offline bundle and the install can no longer
+# disagree about what "the dependencies" are.
+#
+# Every entry must be an exact == pin, and every entry must be claimed by one of
+# the install stages in upgrade-full.sh Phase 8 - that script refuses to run if a
+# pin appears here with no stage to install it.
+#
+# CVE-clean as of 2026-08-30 (verified via OSV.dev):
+#   cryptography <50.0.0 : CVE-2026-69247 / -69248 / -69249, CVE-2026-26007,
+#                          CVE-2026-34073
+#   Flask        <3.1.3  : CVE-2025-47278, CVE-2026-27205
+#   Werkzeug     <3.1.6  : CVE-2026-21860, CVE-2025-66221, CVE-2026-27199
+
+# web stack
 Flask==3.1.3
-gunicorn==26.0.0
-ldap3==2.9.1
-confluent-kafka==2.14.0
-PyYAML==6.0.2
-cryptography==44.0.2
 Werkzeug==3.1.8
+gunicorn==26.2.0
+
+# auth and crypto
+ldap3==2.9.1
+PyYAML==6.0.3
+cryptography==50.0.1
+
+# Kafka client - installed last and soft-fails; the app starts without it
+confluent-kafka==2.15.0

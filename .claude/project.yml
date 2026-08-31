@@ -1,0 +1,467 @@
+contract_version: 1
+name: Topic Manager
+repo: ymxplusb/Topic-Manager
+stack: >-
+  Vue 3 global build (no build toolchain, no npm) served static by nginx +
+  Python 3.12 / Flask / gunicorn backend behind nginx TLS, SQLite for audit log
+  and server-side sessions, LDAP/AD auth against dc1.int.crypticlight.com,
+  confluent-kafka AdminClient against the Jarvis Kafka cluster.
+
+# No CODEMAP.md exists in this repo. The tree is small enough (47 files) to read
+# directly; create one if it grows.
+code_map: null
+
+# ── version surfaces ────────────────────────────────────────────────────────
+# Every place a version string lives. A release must move ALL of these in one
+# cascade. The two surfaces that were MISSED in the v1.0.2 cascade
+# (app/components/SettingsTab.js, app/main.js) were caught and corrected in the
+# v1.0.3 cascade on 2026-08-30 — see hazards[version-surface-drift].
+surfaces:
+  - path: VERSION
+    note: canonical release version
+  - path: tm/VERSION
+    note: read at import by tm/routes.py and served by /api/version
+  - path: app/components/modals/AboutModal.js
+    note: >-
+      TWO surfaces in one file: the app version (now 'unknown' until
+      /api/version answers — it must never assert a version) AND a full
+      dependency table that is a fourth copy of the SBOM. The
+      sbom-consistency gate holds the table to requirements.txt.
+  - path: app/components/SettingsTab.js
+    note: >-
+      line ~103, inside downloadPpsm()'s CSV row array. Was stale at '1.0.0'
+      (missed in the v1.0.2 cascade), corrected in v1.0.3. The rows are
+      single-quoted JS literals — see hazards[csv-single-quoted-literals].
+      Must agree with the static PPSM.csv, which is the same document.
+  - path: app/main.js
+    note: >-
+      TWO places: the ref() default and the `d.version || '...'` fallback, both
+      shown before/instead of /api/version responding. Was stale at '1.0.0',
+      corrected in v1.0.3. NOTE: a hardcoded version fallback is itself a latent
+      defect — it renders an unknown state as a confident version number. See
+      hazards[hardcoded-version-fallback].
+  - path: index.html
+    note: "cache-bust token ?v=NNNN on every script/style — MUST increment per release"
+  - path: docs/INSTALL.md
+    note: version header + expected health-check output + offline bundle filenames
+  - path: SBOM.md
+    note: "software bill of materials — version + full dependency table"
+  - path: NOTICES.md
+    note: >-
+      third-party licence notices. Carries NO product version string — only
+      dependency versions, which must match requirements.txt and SBOM.md. The
+      v1.0.0 dependency drift was corrected on 2026-08-30; it now lists the
+      CVE-clean set. A version cascade normally makes no edit here.
+  - path: README.md
+    note: version references + the Upgrading section operators are sent to
+  - path: CHANGELOG.md
+    note: new section per release
+  - path: TROUBLESHOOTING.md
+    note: >-
+      Added 2026-08-30 after scout found it obliged-in-fact but undeclared.
+      It is keyed to the EXACT output strings of the upgrade script (e.g.
+      "Expected v1.0.0 installed") and to backup paths, so replacing the
+      upgrade script obliges rewriting it. It was the document most tightly
+      coupled to the change and surface-sweep would have skipped it.
+  - path: install/README.md
+    note: >-
+      Added 2026-08-30, same reason. Declares the offline bundle contract that
+      prepare-offline.sh and the upgrade script must both satisfy.
+  - path: app/styles/main.css
+    note: >-
+      Added 2026-08-30 (v1.0.3). Header comment "* Version: N.N.N", found STALE
+      at 1.0.0 — three releases behind. It was invisible twice over: no
+      straggler_sweep globbed *.css, and sonar-project.properties sets
+      sonar.exclusions=app/styles/** so no scan ever read it either. The file
+      IS cache-busted (main.css?v=NNNN in index.html), so it ships to browsers.
+  - path: install.sh
+    note: >-
+      Added 2026-08-30 (v1.0.3). Header comment "# Version: N.N.N". Undeclared
+      until the v1.0.3 sweep found it at 1.0.2.
+  - path: prepare-offline.sh
+    note: >-
+      Added 2026-08-30 (v1.0.3). Header comment "# Version: N.N.N". Undeclared,
+      and stale by TWO releases (still 1.0.1) when found. The bundle FILENAME it
+      emits is derived from the VERSION file at runtime, not hardcoded — do not
+      "fix" that into a literal.
+  - path: PPSM.csv
+    note: >-
+      Added 2026-08-30 (v1.0.3). Row 2 is "Version","N.N.N". This is the static
+      twin of the CSV that SettingsTab.js downloadPpsm() generates — the two
+      MUST carry the same version or an operator gets two different PPSM
+      documents from one release.
+  - path: .claude/project.yml
+    note: this contract drifts like any other file
+
+straggler_sweep:
+  - "grep -rn '1\\.0\\.[0-9]' --include='*.md' --include='*.js' --include='*.py' --include='*.html' . | grep -v CHANGELOG"
+  # The .md/.js/.py/.html sweep above globs no .sh and no .csv, which is why
+  # install.sh, prepare-offline.sh and PPSM.csv stayed invisible for two
+  # releases. Added 2026-08-30.
+  - "grep -rn '1[.]0[.][0-9]' --include='*.sh' --include='*.csv' --include='*.conf' --include='*.service' --include='*.css' --include='*.properties' --include='*.yaml' ."
+  # Belt and braces: extension-agnostic. Globs are how surfaces hide — *.css was
+  # missing above and app/styles/main.css sat at 1.0.0 for three releases.
+  - "grep -rInE '1[.]0[.][0-9]' . --exclude-dir=.git --exclude-dir=__pycache__ --exclude=CHANGELOG.md --exclude='SonarQube-Report-*.html' | grep -v '1[.]0[.]3'"
+  - "grep -o '?v=[0-9]*' index.html | sort -u   # cache-bust token must match the release"
+  # Expected historical hits that are NOT stragglers: CHANGELOG.md sections,
+  # SBOM.md '(moved in 1.0.2)' change-history, docs/SonarQube-Report-*.html
+  # (dated point-in-time artefacts), and every deliberate v1.0.0 reference
+  # describing what PROD actually runs or the version-agnostic upgrade path.
+
+# ── gates ───────────────────────────────────────────────────────────────────
+# Every command below was RUN before being written here. This repo has NO unit
+# tests, NO linter config and NO CI — these four syntax/parse gates are the
+# entire verifiable safety net. Do not add a gate here without running it first.
+gates:
+  - name: python-syntax
+    cmd: "python -m py_compile tm/*.py"
+    verified: 2026-08-30
+    note: backend compiles; catches the syntax class only
+  - name: shell-syntax
+    cmd: "for f in *.sh install/*.sh tools/*.sh tests/*.sh tests/lib/*.sh; do bash -n \"$f\" || exit 1; done"
+    verified: 2026-08-30
+    note: >-
+      install.sh, prepare-offline.sh, install/upgrade-full.sh. The root
+      upgrade.sh was DELETED on 2026-08-30 (WO-0001, decision E1) — one upgrade
+      path in the repo. The glob was CORRECTED on 2026-08-30 to include tools/*.sh —
+      gatekeeper confirmed the sca gate's own script was unreachable by the gate
+      that checks shell syntax.
+  - name: frontend-syntax
+    cmd: "for f in app/main.js app/components/*.js app/components/modals/*.js; do node --check \"$f\" || exit 1; done"
+    verified: 2026-08-30
+    note: >-
+      the ONLY automated guard on the frontend. There is no build step, so a
+      syntax error ships straight to the browser as a blank page.
+  - name: config-example
+    cmd: "bash tools/check-config-example.sh"
+    verified: 2026-08-30
+    note: >-
+      Asserts the example carries every section and key the app actually reads,
+      and that its secret_key is still a placeholder. REPLACED the old
+      `yaml.safe_load(...)` gate, which gatekeeper proved passes on a ZERO-BYTE
+      file (safe_load("") returns None, exit 0) and on a config with whole
+      sections deleted. That gate proved "parses" and was read as "is valid".
+      Proven RED on both mutations.
+  - name: heredoc-python
+    cmd: "bash tools/check-heredocs.sh"
+    verified: 2026-08-30
+    note: >-
+      Extracts every embedded Python heredoc from install/upgrade-full.sh
+      (PYRESOLVE, PYLDAP, PYBACKUP) and compiles each. bash -n does NOT parse
+      heredoc bodies — gatekeeper injected `def broken(:::` into PYLDAP and
+      bash -n still exited 0. Was prose in gate_verification; now a real gate.
+  - name: sbom-consistency
+    cmd: "bash tools/check-sbom-consistency.sh"
+    verified: 2026-08-30
+    note: >-
+      The same dependency facts live in FOUR places — requirements.txt (the
+      source of truth), SBOM.md, NOTICES.md and the About dialog's table in
+      app/components/modals/AboutModal.js. Nothing forced them to agree and all
+      had drifted: AboutModal still advertised cryptography 44.0.2, the
+      five-advisory pin this release removes, so the About dialog would have
+      told an operator the app shipped the vulnerable version. Proven RED on a
+      drift in each copy. Only reads tables whose second column header is
+      literally "Version" — SBOM.md also carries a change-history table headed
+      "| Component | Was | Now |" whose second column is the OLD version, and
+      reading that as current produced six false failures on the first run.
+  - name: sca
+    cmd: "bash tools/sca-check.sh"
+    verified: 2026-08-30
+    requires_network: "api.osv.dev"
+    note: >-
+      Queries OSV.dev for every == pin in requirements.txt plus the Vue pin in
+      install/upgrade-full.sh. Exits 1 on any advisory, 2 if any package could
+      not be checked, 3 if OSV is unreachable — it will not report a pass it did
+      not earn. Added because builder mutation control M16 put
+      cryptography==44.0.2 (five advisories) back into requirements.txt and ALL
+      FOUR other gates stayed GREEN: the gate set was blind to the exact hazard
+      class this release exists to fix. Proven RED on that same mutation and on
+      a loosened (>=) specifier.
+
+  - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-08-30, note: "46 cases over the real upgrade script, extracted by anchor; 29 mutation controls in tests/mutations.txt, 28 killed + 1 documented equivalent. Git Bash CANNOT hold modes, so 15 cases SKIP LOUDLY here and are only proven on Linux: bash tests/run.sh --remote U@H (46/46, --strict). Proven RED by neutralising backup_dropin against a copy." }
+
+gate_verification:
+  - "A gate that cannot fail is not a gate. Before trusting a green run, break
+     one file deliberately and confirm the gate goes red."
+  - "python -m py_compile writes __pycache__ — confirm it is gitignored (it is)."
+  - "node --check must be run per-file; it does not recurse."
+  - "bash -n does NOT parse heredoc bodies. upgrade-full.sh embeds Python
+     heredocs (PYRESOLVE, PYLDAP, PYBACKUP); a syntax error inside one ships
+     untested. Extract each heredoc and py_compile it separately."
+  - "The four syntax gates cannot see a vulnerable dependency pin, a broken
+     offline bundle, or a fail-open blocker check. Only the sca gate covers the
+     first. The other two are covered by nothing automated — review them."
+  - "Never compare hashes of possibly-empty command output. sha256sum emits a
+     digest for empty input, so two failed commands both hash to
+     e3b0c44298fc1c... and compare EQUAL. Compare the raw values and require
+     each to be well-formed. This produced a false 'cert/key match verified' in
+     upgrade-full.sh, found 2026-08-30."
+
+accepted_test_failures: {}   # no test suite exists
+
+# ── what is NOT a gate here ─────────────────────────────────────────────────
+unavailable_gates:
+  - name: sonarqube
+    status: UNRESOLVED
+    note: >-
+      sonar-project.properties exists (projectKey=topic-manager, quality gate
+      "Jarvis Standard" on 192.168.202.76:9000) and reports from 2026-05-07 and
+      2026-05-29 are committed under docs/. But the hook-runner Vault AppRole
+      available to agents is DENIED on secret/hooks/sonarqube, so no agent can
+      authenticate a scan. Settle it by granting that AppRole read on the
+      SonarQube token path, or by declaring Sonar an operator-run gate only.
+      Until then no agent may claim a Sonar gate passed.
+  - name: unit-tests-on-windows
+    status: partial
+    note: >-
+      `tests/` now exists (added 2026-08-30) — 46 cases and 29 mutation controls.
+      But Git Bash on the Windows workstation CANNOT HOLD POSIX MODES, so the 15
+      mode/ownership cases cannot be proven here. `bash tests/run.sh` locally is a
+      PARTIAL gate: it proves the EXIT trap, the drop-in behaviour, the
+      local-expansion class and that every extraction anchor still matches, and it
+      names each skipped case loudly rather than passing silently. Before a release
+      it MUST also run `bash tests/run.sh --remote <user>@<host> --strict` against a
+      Linux host, or the permission half is untested. There is no designated host
+      for this — 192.168.50.200 was borrowed; cortex-2 is reserved for CORTEX /qc.
+      Choosing a permanent one is an operator decision.
+  - name: shellcheck
+    status: partial
+    note: >-
+      not installed on the Windows workstation; IS installed on 192.168.202.90.
+      Shell changes should be shellchecked there:
+      scp the script and run `shellcheck -S warning <file>`.
+      Known false positive: SC2154 on the ERR trap's own $rc.
+
+# ── render proof ────────────────────────────────────────────────────────────
+render_proof:
+  applicable: true
+  local_dev_server: none
+  note: >-
+    There is no build toolchain and no local dev server. The only way to prove a
+    frontend change renders is against a running host. Use the prod URL below
+    read-only, or stand up a scratch VM — do NOT use cortex-2, which belongs to
+    CORTEX /qc.
+  url: "https://192.168.202.90/"
+  checks:
+    - "the app shell mounts (#app-mount is populated, not empty)"
+    - "no Uncaught SyntaxError / ReferenceError in the console"
+    - "security headers present on / and on *.js — see hazards[1]"
+
+# ── release ─────────────────────────────────────────────────────────────────
+release:
+  push_policy: >-
+    Work lands on a release/vX.Y.Z branch and is MERGED to main (8 merge commits
+    across 50). Do not commit release changes directly to main.
+  tag: none
+  note: >-
+    No git tags exist in this repo at all — releases are identified only by the
+    VERSION files and CHANGELOG. Consider tagging; until then, a "release" is
+    just a merge commit.
+  cascade: "bump every entry in surfaces: in ONE commit, including the index.html ?v= token"
+
+ci:
+  github_actions: none        # no .github/workflows/ directory
+  gitlab: none                # no .gitlab-ci.yml
+  status: >-
+    There is NO CI of any kind. Every gate is run by hand. An agent must never
+    report "CI passed" for this repo — there is nothing to pass.
+
+# ── promote ─────────────────────────────────────────────────────────────────
+promote:
+  method: manual
+  pipeline: none
+  prod:
+    host: 192.168.202.90
+    name: TopicManager
+    user: claude_admin
+    key: ~/.ssh/claude_admin
+    running_version: "1.0.0"
+    note: >-
+      PROD IS ON 1.0.0, NOT 1.0.3. The v1.0.2 release was recorded as deployed
+      on 2026-05-29 but the box is running v1.0.0 — most likely a vCSA snapshot
+      revert that was never re-upgraded. Verify with
+      `curl -sk https://192.168.202.90/api/health` before assuming anything.
+  qc_host: none
+  note: >-
+    cortex-2 (192.168.202.96) is RESERVED for CORTEX /qc and must not be used
+    for Topic Manager. There is no QC host for this project.
+  procedure:
+    - "install/upgrade-full.sh --audit-only   # must exit 0 before proceeding"
+    - "take a vCSA snapshot"
+    - "install/upgrade-full.sh --backup-only  # verified restore point"
+    - "install/upgrade-full.sh                # full upgrade, auto-rollback on failure"
+  no_agent_holds_a_deploy_verb: true
+
+# ── review engines ──────────────────────────────────────────────────────────
+review_engines:
+  local:
+    host: 192.168.50.183          # Luna2024
+    api: "http://192.168.50.183:11434"
+    model: "qwen3-coder:30b"
+    also_available: ["deepseek-coder-v2:16b", "nomic-embed-text:latest"]
+    note: "second engine for scout / adversary / gatekeeper. Verified reachable 2026-08-30."
+  serialise:
+    - "Do not run a local-model review concurrently with a CORTEX gate run —
+       they share Luna2024 and measurements stop being comparable."
+
+# ── hazards ─────────────────────────────────────────────────────────────────
+# Learned, not imagined. Each one has actually happened in this codebase.
+hazards:
+  - id: version-surface-drift
+    note: >-
+      In the v1.0.2 release, app/components/SettingsTab.js and app/main.js were
+      left reading '1.0.0' and NOTICES.md kept the v1.0.0 dependency set while
+      SBOM.md had moved on. All were corrected in the v1.0.3 cascade
+      (2026-08-30). Updating twelve of thirteen surfaces is the normal failure
+      here — sweep with straggler_sweep, do not eyeball it. The v1.0.3 sweep
+      also found THREE version surfaces the contract never declared
+      (install.sh, prepare-offline.sh, PPSM.csv); prepare-offline.sh had been
+      stale for two releases. An undeclared surface is invisible to a cascade —
+      when you find one, add it to surfaces: in the same pass.
+
+  - id: csv-single-quoted-literals
+    note: >-
+      app/components/SettingsTab.js downloadPpsm() builds CSV rows from arrays of
+      SINGLE-QUOTED JavaScript string literals. One literal apostrophe inside any
+      of those strings terminates the literal and takes the whole Settings tab
+      down as a parse error — there is no build step, so it ships straight to the
+      browser as a blank pane. Write "do not", never "don't", and rephrase
+      possessives. node --check is the only thing that catches it.
+
+  - id: hardcoded-version-fallback
+    note: >-
+      app/main.js seeds the displayed version from a hardcoded literal
+      (ref('...') plus a `d.version || '...'`) used before/instead of
+      /api/version answering. It does not degrade to "unknown", it asserts a
+      specific version, so a host that cannot reach its own API displays a
+      confident number that may be wrong — and this repo has form: prod ran
+      1.0.0 for months while the repo said 1.0.2. Cascading the literal keeps it
+      truthful only at the moment of release. The durable fix is a neutral
+      sentinel (empty/"unknown") so the UI cannot claim a version it has not
+      been told, but that is a behaviour change needing an operator decision,
+      not a version sweep.
+
+  - id: nginx-add-header-inheritance
+    note: >-
+      nginx discards ALL inherited add_header directives the moment a child
+      location declares its own. `location /` and `location ~* \.(js|css)$` both
+      set Cache-Control, which silently drops every server-level security header
+      on the entire HTML/JS/CSS surface. Only /api/* keeps them. This regressed
+      once already. Every location MUST include snippets/tm-security-headers.conf,
+      and the fix must be verified by `curl -skI` per route class — reading the
+      config file proves nothing.
+
+  - id: ldap-service-bind-upgrade-trap
+    note: >-
+      v1.0.0's auth.py has NO service-bind logic — it binds directly as the user,
+      so a wrong ldap_bind_dn in config.yaml is simply ignored and every login
+      works. v1.0.2+ treats a configured bind_dn + non-placeholder password as
+      "use the service bind" and gates EVERY login on it succeeding (auth.py:44,
+      returns at :46). A stale DN that was harmless for months becomes a total
+      auth outage the moment the new code starts — while health, version and the
+      UI all still look green. Verified failing on prod 2026-08-30.
+      install/upgrade-full.sh blocks on this.
+
+  - id: vulnerable-pin-in-requirements
+    note: >-
+      requirements.txt pins cryptography==44.0.2, which carries five advisories
+      (CVE-2026-69247/-69248/-69249, CVE-2026-26007, CVE-2026-34073; fixed in
+      50.0.0). Deploying v1.0.2 exactly as released does NOT clear them. Re-run
+      SCA against requirements.txt, not just against what is installed.
+
+  - id: vue-fetched-without-integrity
+    note: >-
+      install.sh and upgrade.sh curl vue.global.prod.js from jsDelivr and serve
+      whatever comes back — no SRI, no checksum, no signature. Pin by content
+      hash. install/upgrade-full.sh does; the older scripts do not.
+      STILL LIVE for install.sh, which asks for 3.5.35 and takes whatever comes
+      back. upgrade.sh was deleted 2026-08-30, so it is no longer a route; the
+      fresh-install route is unfixed and is recorded in SBOM.md as a known
+      divergence (upgraded hosts run a verified 3.5.42, fresh installs do not).
+
+  - id: stig-umask-403
+    note: >-
+      On a STIG-hardened host (umask 077) deployed frontend assets land 0700 and
+      www-data cannot read them — nginx returns 403 on every page while the
+      service itself looks healthy. Check effective access as the real principal
+      (`sudo -u www-data test -r <file>`), not mode bits.
+
+  - id: sqlite3-cli-absent
+    note: >-
+      The sqlite3 CLI is NOT installed on stock Ubuntu Server 24.04. Any script
+      guarded by `command -v sqlite3` will skip silently. Use python3's stdlib
+      sqlite3 module instead.
+
+  - id: misleading-failure-message
+    note: >-
+      upgrade.sh's die() always prints "System is unchanged — your v1.0.0 install
+      is still running", including after Phase 4 has deleted the venv, app code,
+      frontend, nginx config and systemd unit. Never write a failure message that
+      asserts a state the code path cannot guarantee.
+      That script was deleted 2026-08-30; the lesson stands and is the reason
+      install/upgrade-full.sh tracks DESTRUCTIVE_STARTED and RESTORE_POINT_READY
+      rather than asserting a state from a fixed string.
+
+  - id: windows-clone-crlf
+    note: >-
+      This repo is cloned on Windows. Git's autocrlf makes EVERY file differ from
+      a Linux checkout byte-for-byte. Any live-vs-repo comparison must normalise
+      line endings (`tr -d '\r'`) or it will report all files as changed.
+
+  - id: secret-key-fail-open
+    note: >-
+      v1.0.0's app.py used `secret_key or secrets.token_hex(32)` — with 4 gunicorn
+      workers each generates a DIFFERENT signing key, so sessions are valid on one
+      worker and rejected on the next. v1.0.2+ raises RuntimeError instead. Check
+      the key is really set before upgrading.
+
+  - id: no-ci-no-tests
+    note: >-
+      There is no CI and no test suite. Nothing catches a regression except the
+      four syntax gates and a human. Weight review accordingly — this is not a
+      repo where "the tests pass" means anything.
+
+# ── hosts ───────────────────────────────────────────────────────────────────
+hosts:
+  prod:
+    ip: 192.168.202.90
+    name: TopicManager
+    os: Ubuntu 24.04.4 LTS
+    user: claude_admin
+    key: ~/.ssh/claude_admin
+    paths:
+      backend: /opt/topic-manager
+      frontend: /var/www/topic-manager
+      config: /etc/topic-manager/config.yaml
+      tls: /etc/topic-manager/tls
+      db: /opt/topic-manager/data/tm.db
+      service: topic-manager.service
+      backups: /var/backups/topic-manager
+    stig: false
+    stig_note: >-
+      Verified 2026-08-30: umask 022, no auditd/AIDE/fapolicyd, no USG profile,
+      no nginx AppArmor profile, /tmp executable. The upgrade tooling is written
+      for a STIG'd target but this host is NOT currently hardened. Do not claim
+      STIG compliance from a clean run here.
+  kafka:
+    brokers: "broker1/2/3.int.crypticlight.com:9092"
+    note: "PLAINTEXT. Topic create/delete from this app reaches the live Jarvis cluster."
+  ad:
+    dc: "ldaps://dc1.int.crypticlight.com:636"
+    required_group: "CN=Kafka-Admins,CN=Users,DC=int,DC=crypticlight,DC=com"
+
+# ── principles ──────────────────────────────────────────────────────────────
+principles:
+  - "Prod is on 1.0.0. Never assume the repo version is the deployed version —
+     check /api/health first, every time."
+  - "This repo has no CI and no tests. Never report that CI passed or that tests
+     are green; say exactly which of the four syntax gates ran."
+  - "Every authenticated user is a Kafka admin by design. There is no role
+     separation — 'authenticated' and 'can delete any topic' are the same thing."
+  - "Security headers must be proven SERVED per route class with curl -skI.
+     Reading the nginx config is not evidence."
+  - "Effective access is asked of the kernel as the real principal, never
+     inferred from mode bits."
+  - "Topic create/delete reaches the production Jarvis Kafka cluster. Treat every
+     write path as production-affecting."
+  - "No agent holds a deploy verb for this project. Deployment is operator-run."
