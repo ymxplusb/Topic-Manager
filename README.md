@@ -99,9 +99,13 @@ auth:
   ldap_server:       "ldaps://your-dc.yourdomain.com:636"
   ldap_domain:       "yourdomain.com"
   ldap_base_dn:      "DC=yourdomain,DC=com"
-  ldap_bind_dn:      "CN=svc-topic-mgr,OU=ServiceAccounts,DC=yourdomain,DC=com"
-  ldap_bind_password: "the-service-account-password"
   required_group:    "CN=Kafka-Admins,CN=Users,DC=yourdomain,DC=com"
+
+  # OPTIONAL — leave BOTH empty to use the direct user bind (see
+  # "LDAP authentication" below). If you set them they must WORK: from
+  # v1.0.2 onward every login is gated on this bind succeeding.
+  ldap_bind_dn:       ""
+  ldap_bind_password: ""
 
 clusters:
   - id:   "production"
@@ -111,13 +115,14 @@ clusters:
     active: true
 ```
 
-The `ldap_bind_dn` must be the full Distinguished Name of your service account.  
-The `required_group` must be the full DN of the AD group whose members are allowed to log in.
+The `required_group` must be the full DN of the AD group whose members are allowed to log in.  
+`ldap_bind_dn` / `ldap_bind_password` are **optional** — see [LDAP authentication](#ldap-authentication).
 
 To find these values from any domain-joined Windows machine:
 ```powershell
-Get-ADUser    -Identity "svc-topic-mgr"    | Select-Object DistinguishedName
 Get-ADGroup   -Identity "Kafka-Admins"     | Select-Object DistinguishedName
+# only if you are using a service account:
+Get-ADUser    -Identity "svc-topic-mgr"    | Select-Object DistinguishedName
 ```
 
 Validate the YAML syntax before proceeding:
@@ -185,6 +190,125 @@ Both should return: `{"status":"ok","version":"1.0.3"}`
 Then open `https://your-hostname.yourdomain.com` in a browser and sign in with an AD account that is a member of `Kafka-Admins`.
 
 > **Login credential format:** use your AD `sAMAccountName` (e.g. `firstname.lastname`), your full UPN (`firstname.lastname@yourdomain.com`), or `DOMAIN\firstname.lastname`. Display names and email aliases are not supported.
+
+---
+
+## LDAP authentication
+
+Topic Manager supports **two** bind modes. Both authenticate the user against
+Active Directory and both enforce `required_group`; they differ only in which
+identity performs the directory *search*.
+
+| Mode | `ldap_bind_dn` / `ldap_bind_password` | Directory search runs as | Setup |
+|---|---|---|---|
+| **Direct user bind** (default) | both empty | the user logging in | none |
+| **Service-account bind** | both set | a dedicated read-only account | AD account required |
+
+The service account is **optional hardening, not a requirement**. If you have no
+particular reason to prefer it, leave both fields empty and skip the rest of
+this section.
+
+### ⚠ Upgrading from v1.0.0 — read this first
+
+This is the most likely way to break an upgrade out of v1.0.0, and it fails
+*silently*: the health check, `/api/version` and the UI all stay green while
+**nobody can log in**.
+
+- **v1.0.0 has no service-bind logic at all.** It binds directly as the user, so
+  whatever sits in `ldap_bind_dn` is simply ignored. A wrong or stale value can
+  sit in the config for months causing no symptom whatsoever.
+- **v1.0.2 and later** treat a populated `ldap_bind_dn` plus a non-placeholder
+  password as "use the service bind", and gate **every** login on it succeeding.
+
+A setting that was inert becomes load-bearing the moment the new code starts.
+
+Check it before upgrading — this is exactly what the upgrade script's Phase 3
+blocker does, and it refuses to proceed if the bind fails:
+
+```bash
+sudo bash install/upgrade-full.sh --audit-only
+# "LDAP service bind" must report PASS, or "no service bind configured"
+```
+
+To test the bind by hand:
+
+```bash
+ldapwhoami -H ldaps://your-dc.yourdomain.com:636 -x -W \
+  -D "$(sudo grep ldap_bind_dn /etc/topic-manager/config.yaml | cut -d'"' -f2)"
+# Expected: dn:CN=svc-...
+```
+
+If it fails, take Fix A or Fix B below.
+
+### Fix A — disable the service account (fastest, needs no secret)
+
+This leaves you on the direct user bind, which is what v1.0.0 was doing anyway,
+so there is **no change in behaviour**:
+
+```bash
+sudo sed -i 's/^\(\s*ldap_bind_dn:\).*/\1 ""/'       /etc/topic-manager/config.yaml
+sudo sed -i 's/^\(\s*ldap_bind_password:\).*/\1 ""/' /etc/topic-manager/config.yaml
+python3 -c "import yaml; yaml.safe_load(open('/etc/topic-manager/config.yaml'))" && echo "YAML OK"
+sudo systemctl restart topic-manager
+```
+
+Re-run `--audit-only`; the LDAP row should now read *no service bind configured*.
+
+### Fix B — repair the service account
+
+1. Confirm the account's **real** DN. The `CN` and the `sAMAccountName` are
+   frequently different, and inferring the DN from the login name is a common
+   cause of this exact failure:
+
+   ```powershell
+   Get-ADUser -Identity "svc-topic-mgr" -Properties DistinguishedName |
+     Select-Object Name, SamAccountName, DistinguishedName
+   ```
+
+2. Reset the password if it is unknown or stale, and record it wherever your
+   secrets live.
+
+3. Set both fields, validate the YAML, restart:
+
+   ```bash
+   sudo nano /etc/topic-manager/config.yaml     # ldap_bind_dn + ldap_bind_password
+   python3 -c "import yaml; yaml.safe_load(open('/etc/topic-manager/config.yaml'))" && echo "YAML OK"
+   sudo systemctl restart topic-manager
+   ```
+
+4. Prove it before trusting it:
+
+   ```bash
+   sudo bash install/upgrade-full.sh --audit-only   # LDAP service bind -> PASS
+   ```
+
+> **Do not brute-force the bind to discover the right password.** Every attempt
+> is a real AD authentication, and enough failures lock the account. Because
+> every login is gated on that same bind, a locked service account is a total
+> outage for the application. The upgrade script caches a *failing* verdict for
+> a given (server, DN, password) and will not re-bind the same tuple;
+> `--no-bind-probe` skips the check entirely.
+
+### Certificate trust
+
+From v1.0.2 the LDAPS connection uses `CERT_REQUIRED`, so the domain
+controller's certificate must validate against the system trust store:
+
+```bash
+openssl s_client -connect your-dc.yourdomain.com:636 \
+  -CAfile /etc/ssl/certs/ca-certificates.crt </dev/null 2>&1 | grep 'Verify return code'
+# Expected: Verify return code: 0 (ok)
+```
+
+If it does not verify, add your CA and re-run:
+
+```bash
+sudo cp your-ca.crt /usr/local/share/ca-certificates/
+sudo update-ca-certificates
+```
+
+Alternatively point `ldap_ca_cert` at a CA PEM file; leaving it blank uses the
+system trust store.
 
 ---
 
