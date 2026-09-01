@@ -41,15 +41,14 @@ const AboutModal = {
   <div class="modal xl">
     <div class="mhdr">
       <div>
-        <div class="mtitle">⚡ Jarvis Topic Manager</div>
+        <div class="mtitle"><img src="/jarvis-mark.png?v=1003" alt="" style="height:22px;width:22px;object-fit:contain;vertical-align:-4px;margin-right:8px">Jarvis Topic Manager</div>
         <div class="msub">Version {{ version }} &nbsp;·&nbsp; Copyright &copy; 2025–2026 James Rodman. All Rights Reserved.</div>
       </div>
       <button class="mclose" @click="$emit('close')">✕</button>
     </div>
     <div class="mbody">
       <div style="font-size:.72rem;color:var(--text-secondary);margin-bottom:18px;line-height:1.6">
-        Standalone Kafka Topic Management frontend for the Jarvis ecosystem.<br>
-        Designed for offline-capable deployment on Ubuntu 24.04 with AD authentication.
+        Standalone Kafka Topic Management frontend for the Jarvis ecosystem.
       </div>
 
       <div class="ssec" style="padding:0;overflow:hidden">

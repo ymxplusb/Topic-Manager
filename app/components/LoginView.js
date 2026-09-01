@@ -72,8 +72,7 @@ const LoginView = {
       <span v-else>Sign In</span>
     </button>
     <div class="login-meta">
-      <span>{{ host }}</span><br>
-      <span style="color:var(--text-muted)">TLS 1.3 &nbsp;·&nbsp; 30 min session &nbsp;·&nbsp; All actions audit logged</span>
+      <span>{{ host }}</span>
     </div>
   </div>
 

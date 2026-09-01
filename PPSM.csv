@@ -1,20 +1,33 @@
 "Jarvis Topic Manager — Ports Protocols and Services Management (PPSM)",,,,,
 "Version","1.0.3",,,,
 "Copyright","(c) 2025-2026 James Rodman",,,,
+"Last verified","2026-09-01 — against live listeners on 192.168.202.90",,,,
 ,,,,,,
 "Section","Service/Component","Port","Protocol","Direction","Description"
 "--- INBOUND (Topic Manager Server) ---",,,,,
-"Web","SSH","22","TCP","Inbound","Secure shell administration (claude_admin key)"
-"Web","HTTP","80","TCP","Inbound","Redirect to HTTPS (301 permanent)"
-"Web","HTTPS","443","TCP","Inbound","Topic Manager Web UI + REST API (nginx TLS termination)"
-"--- INTERNAL LOOPBACK ---",,,,,
-"App","Flask/gunicorn","5001","TCP","Loopback","nginx → gunicorn (127.0.0.1 only, not externally accessible)"
+"Web","SSH","22","TCP","Inbound","Secure shell administration (key-based; password auth disabled)"
+"Web","HTTP","80","TCP","Inbound","Redirect to HTTPS (301 permanent) — no content served"
+"Web","HTTPS","443","TCP","Inbound","Topic Manager Web UI + REST API (nginx TLS termination, TLS 1.2/1.3 only)"
+"--- INTERNAL LOOPBACK (not externally reachable) ---",,,,,
+"App","Flask/gunicorn","5001","TCP","Loopback","nginx -> gunicorn, bound 127.0.0.1 only"
+"App","systemd-resolved","53","UDP/TCP","Loopback","Local stub resolver (127.0.0.53/127.0.0.54)"
 "--- OUTBOUND (Topic Manager Server initiates) ---",,,,,
-"Auth","Active Directory LDAPS","636","TCP","Outbound","AD credential validation and group membership check"
-"Auth","Active Directory LDAP","389","TCP","Outbound","AD fallback (plaintext — configure LDAPS where possible)"
-"Kafka","Kafka Bare Metal Brokers","9092","TCP","Outbound","Kafka AdminClient wire protocol (broker1-3.int.crypticlight.com)"
-"Kafka","Kafka K8s Cluster (SSL)","9094","TCP","Outbound","Kafka AdminClient SSL (MetalLB VIPs 192.168.202.131-133)"
+"Auth","Active Directory LDAPS","636","TCP","Outbound","AD credential validation and group membership check. TLS certificate validation is ENFORCED (CERT_REQUIRED) from v1.0.2."
+"Kafka","Kafka Brokers (PLAINTEXT)","9092","TCP","Outbound","Kafka AdminClient wire protocol — broker1-3.int.crypticlight.com"
+"Kafka","Kafka Brokers (SSL)","9094","TCP","Outbound","Kafka AdminClient over SSL — only if a cluster is configured with security_protocol SSL/SASL_SSL. Not used in the current deployment."
+"Infra","DNS","53","UDP/TCP","Outbound","Resolution of the domain controller and Kafka broker hostnames"
+"Infra","NTP","123","UDP","Outbound","Time synchronisation — required for TLS validity and audit timestamp accuracy"
+"--- OUTBOUND (INSTALL / UPGRADE TIME ONLY — not required at runtime) ---",,,,,
+"Install","Ubuntu APT repositories","80/443","TCP","Outbound","OS package installation and patching (apt). Not required on an air-gapped host."
+"Install","PyPI (pypi.org, files.pythonhosted.org)","443","TCP","Outbound","Python wheel download for the pinned dependency set. Not required on an air-gapped host."
+"Install","jsDelivr CDN (cdn.jsdelivr.net)","443","TCP","Outbound","Vue.js runtime download. Verified against a pinned SHA-256 before use. Not required on an air-gapped host."
+"Install","GitHub (github.com)","443","TCP","Outbound","Source clone performed by install/upgrade-full.sh. Not required on an air-gapped host."
+"Install","OSV.dev (api.osv.dev)","443","TCP","Outbound","Software Composition Analysis gate (tools/sca-check.sh). Developer/CI workstation only — never invoked on the target host."
 "--- DATA AT REST ---",,,,,
-"Storage","SQLite Audit DB","N/A","File","Local","/opt/topic-manager/data/tm.db — audit log (user, action, target, timestamp)"
-"Storage","Session Data","N/A","Cookie","Browser","Signed Flask session cookie (HTTPOnly, Secure, SameSite=Lax)"
+"Storage","SQLite Audit DB","N/A","File","Local","/opt/topic-manager/data/tm.db — audit log (user, action, target, timestamp, cluster) and application settings"
+"Storage","Server-side Sessions","N/A","File","Local","sessions table in the same SQLite DB — session id, user, created/last-seen/expiry, source IP. The browser cookie carries only a signed session id, never user data."
+"Storage","Session Cookie","N/A","Cookie","Browser","Signed Flask cookie holding the session id only. HTTPOnly, Secure, SameSite=Lax."
 "Storage","Theme/Banner Prefs","N/A","localStorage","Browser","UI preferences only — no credentials or sensitive data"
+"Storage","TLS Private Key","N/A","File","Local","/etc/topic-manager/tls/server.key — 0640 root:topic-manager"
+"Storage","Application Config","N/A","File","Local","/etc/topic-manager/config.yaml — 0640 root:topic-manager. Contains the Flask secret_key and, if a service account is configured, the LDAP bind password."
+"Storage","Backups","N/A","File","Local","/var/backups/topic-manager/<timestamp>/ — 0700 root:root. Contains config, TLS key and audit DB; archives are 0600."

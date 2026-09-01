@@ -1298,7 +1298,7 @@ fi
 rm -f "$VUE_TMP" 2>/dev/null || true
 [[ $VUE_OK == true ]] || fail "No verified Vue bundle available — the UI would not load."
 
-for asset in jarvis-favicon.ico jarvis-glyph-32.png jarvis-logo.png; do
+for asset in jarvis-favicon.ico jarvis-glyph-32.png jarvis-logo.png jarvis-mark.png; do
     [[ -f "${WORK_DIR}/${asset}" ]] && cp "${WORK_DIR}/${asset}" "${FRONTEND_DIR}/${asset}"
 done
 

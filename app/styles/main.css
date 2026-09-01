@@ -131,7 +131,7 @@ body {
    HEADER ELEMENTS
    ══════════════════════════════════════════════════ */
 .hdr-logo { display:flex; align-items:center; gap:9px; flex-shrink:0; text-decoration:none }
-.hdr-logo .glyph { font-size:1.3rem; line-height:1 }
+.hdr-logo .glyph { font-size:1.3rem; line-height:1; display:inline-flex; align-items:center; flex-shrink:0 }
 .hdr-logo .name { line-height:1.2 }
 .hdr-logo .name .sub { font-size:.58rem; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--accent-cyan); display:block }
 .hdr-logo .name .main { font-size:.72rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--text-primary) }

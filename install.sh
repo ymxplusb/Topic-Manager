@@ -172,6 +172,18 @@ rsync -a --delete \
     "${SCRIPT_DIR}/app" \
     "${SCRIPT_DIR}/lib" \
     "$FRONTEND_DIR/"
+
+# Image assets. These were NOT copied before 2026-09-01, so a FRESH install had
+# no favicon, no login wordmark and no header mark — index.html and LoginView
+# reference them by absolute path, so they 404'd. Upgraded hosts looked fine
+# because upgrade-full.sh copies them, which is exactly why the gap survived.
+for asset in jarvis-favicon.ico jarvis-glyph-32.png jarvis-logo.png jarvis-mark.png; do
+    if [[ -f "${SCRIPT_DIR}/${asset}" ]]; then
+        install -m 644 "${SCRIPT_DIR}/${asset}" "${FRONTEND_DIR}/${asset}"
+    else
+        warn "asset missing from the source tree: ${asset}"
+    fi
+done
 chown -R www-data:www-data "$FRONTEND_DIR"
 success "Frontend installed at ${FRONTEND_DIR}"
 

@@ -72,7 +72,7 @@ Copyright (c) 2017-2021 Ingy döt Net; Copyright (c) 2006-2016 Kirill Simonov
 
 ## cryptography
 Version: 50.0.1
-License: Apache-2.0 and BSD
+License: Apache-2.0 OR BSD-3-Clause
 Copyright (c) Individual contributors.
 
 ---
@@ -92,6 +92,29 @@ Source: sqlite.org
 SQLite is in the public domain. No attribution is required, but the authors
 request that credit be given where possible. The SQLite source code is
 available at https://www.sqlite.org/download.html.
+
+---
+
+## Transitive dependencies
+
+These are not named in `requirements.txt` but are installed into the runtime
+virtual environment as dependencies of the packages above, so they ship with the
+product and their licences apply. Versions and licence expressions were read
+from each package's own `dist-info/METADATA` on the deployed host (2026-09-01).
+
+| Component | Version | License | Required by |
+|-----------|---------|---------|-------------|
+| Jinja2 | 3.1.6 | BSD-3-Clause | Flask |
+| MarkupSafe | 3.0.3 | BSD-3-Clause | Jinja2, Werkzeug |
+| itsdangerous | 2.2.0 | BSD-3-Clause | Flask |
+| click | 8.5.0 | BSD-3-Clause | Flask |
+| blinker | 1.9.0 | MIT | Flask |
+| cffi | 2.1.1 | MIT-0 | cryptography |
+| pycparser | 3.0 | BSD-3-Clause | cffi |
+| pyasn1 | 0.6.4 | BSD-2-Clause | ldap3 |
+
+Full licence texts ship inside each package's `dist-info` directory in the
+virtual environment at `/opt/topic-manager/venv`.
 
 ---
 

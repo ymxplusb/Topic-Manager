@@ -206,20 +206,6 @@ const SettingsTab = {
     </div>
   </div>
 
-  <!-- STIG Compliance -->
-  <div class="ssec">
-    <div class="ssec-title">STIG / Compliance Controls</div>
-    <div class="srow"><div class="srow-lbl">Audit Logging</div><div><span class="stig">✓ Enabled</span></div></div>
-    <div class="srow"><div class="srow-lbl">TLS Enforcement</div><div><span class="stig">TLS 1.2 / 1.3</span></div></div>
-    <div class="srow"><div class="srow-lbl">HTTPS Only</div><div><span class="stig">✓ nginx redirect</span></div></div>
-    <div class="srow"><div class="srow-lbl">Session Timeout</div><div><span class="stig">✓ 30 min</span></div></div>
-    <div class="srow"><div class="srow-lbl">HTTPOnly Cookies</div><div><span class="stig">✓ Enabled</span></div></div>
-    <div class="srow"><div class="srow-lbl">Destructive Confirmation</div><div><span class="stig">✓ Name-match required</span></div></div>
-    <div class="srow"><div class="srow-lbl">Password Complexity</div><div><span class="stig">Delegated to AD</span></div></div>
-    <div class="srow"><div class="srow-lbl">Security Headers</div><div><span class="stig">✓ Set by nginx</span></div></div>
-    <div class="srow"><div class="srow-lbl">Concurrent Session Limit<span class="hint">Server-side session table, enforced at login (set max_concurrent in config.yaml)</span></div><div><span class="stig">✓ Enforced</span></div></div>
-  </div>
-
   <!-- Support / PPSM -->
   <div class="ssec">
     <div class="ssec-title">Support &amp; Compliance Downloads</div>
