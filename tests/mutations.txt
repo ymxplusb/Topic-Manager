@@ -1,0 +1,233 @@
+# =============================================================================
+# tests/mutations.txt — the mutation controls for install/upgrade-full.sh.
+#
+# A passing test proves the code works on the inputs someone thought of. It
+# does NOT prove the test would notice if the code were wrong. Each record
+# below breaks one thing on purpose; tests/mutate.sh applies it to a COPY of
+# the script held outside the repo, runs the covering test files, and expects
+# them to go RED. A mutation that SURVIVES is a finding about the TEST.
+#
+# The operators are mechanical, not imagined: every comparison in the changed
+# regions flipped, every guard neutralised, every returned value discarded,
+# every derived constant replaced by the literal it used to be. Nothing here
+# was chosen by asking what the tests would catch.
+#
+# FORMAT (line-oriented; everything after the first '|' is literal, so anchors
+# keep their exact indentation and may themselves contain '|'):
+#   --- <id>
+#   DESC|<what this reintroduces>
+#   TESTS|<space-separated test files that must go red>
+#   EQUIV|yes|no       yes = a documented equivalent mutation, expected to live
+#   ANCHOR|<exact source line>      (repeat for a multi-line anchor)
+#   REPLACE|<exact replacement line>  (repeat; omit entirely to DELETE)
+#
+# The anchor block must occur EXACTLY ONCE in the target. Zero or two matches
+# is an ABORTED control, never a pass — a mutation that did not apply proves
+# nothing, and the run reports it as such.
+# =============================================================================
+
+# ─── the ERR-vs-EXIT trap (t01) ──────────────────────────────────────────────
+--- M01
+DESC|the rollback is armed on ERR again — the defect exactly as it shipped
+TESTS|t01-exit-trap.sh
+EQUIV|no
+ANCHOR|trap _on_exit EXIT
+REPLACE|trap _on_exit ERR
+
+--- M02
+DESC|the destructive-phase guard is inverted
+TESTS|t01-exit-trap.sh
+EQUIV|no
+ANCHOR|    if [[ $DESTRUCTIVE_STARTED != true ]]; then
+REPLACE|    if [[ $DESTRUCTIVE_STARTED == true ]]; then
+
+--- M03
+DESC|the exit-status test in the trap is inverted
+TESTS|t01-exit-trap.sh
+EQUIV|no
+ANCHOR|    [[ $rc -ne 0 ]] && rollback || true
+REPLACE|    [[ $rc -eq 0 ]] && rollback || true
+
+--- M04
+DESC|the trap flattens the original exit code to 0
+TESTS|t01-exit-trap.sh
+EQUIV|no
+ANCHOR|    exit $rc
+REPLACE|    exit 0
+
+--- M05
+DESC|the verified-restore-point guard is inverted
+TESTS|t01-exit-trap.sh
+EQUIV|no
+ANCHOR|    if [[ $RESTORE_POINT_READY != true ]]; then
+REPLACE|    if [[ $RESTORE_POINT_READY == true ]]; then
+
+# ─── the systemd drop-in (t02, t05) ──────────────────────────────────────────
+--- M06
+DESC|backup_dropin copies nothing — THE DEFECT EXACTLY AS IT SHIPPED
+TESTS|t02-dropin-backup.sh t05-local-expansion.sh
+EQUIV|no
+ANCHOR|    cp -a "$DROPIN_DIR" "${BD}/system/${DROPIN_BACKUP_NAME}"
+REPLACE|    true
+
+--- M07
+DESC|restore_dropin's backup-present guard is inverted
+TESTS|t02-dropin-backup.sh
+EQUIV|no
+ANCHOR|    if [[ -d "$SRC" ]]; then
+REPLACE|    if [[ ! -d "$SRC" ]]; then
+
+--- M08
+DESC|restore_dropin copies nothing back
+TESTS|t02-dropin-backup.sh
+EQUIV|no
+ANCHOR|        cp -a "$SRC" "$DROPIN_DIR"
+REPLACE|        true
+
+--- M09
+DESC|restore_dropin no longer clears the live drop-in first, so a file absent from the restore point survives it
+TESTS|t02-dropin-backup.sh
+EQUIV|no
+ANCHOR|        rm -rf "${DROPIN_DIR:?}"
+REPLACE|        true
+
+--- M10
+DESC|the no-backup branch is made symmetrical with the nginx snippet — it DELETES the host drop-in, taking the only copy of the secret key
+TESTS|t02-dropin-backup.sh
+EQUIV|no
+ANCHOR|        warn "  Either it was added after that backup was taken, or the backup predates"
+REPLACE|        rm -rf "${DROPIN_DIR:?}"
+
+--- M11
+DESC|the completeness check is downgraded from refuse to warn
+TESTS|t02-dropin-backup.sh
+EQUIV|no
+ANCHOR|            || fail "Unit drop-in ${f} did not reach the backup.
+REPLACE|            || warn "Unit drop-in ${f} did not reach the backup.
+
+--- M12
+DESC|the completeness test is inverted
+TESTS|t02-dropin-backup.sh
+EQUIV|no
+ANCHOR|        [[ -f "${BD}/system/${DROPIN_BACKUP_NAME}/${rel}" ]] \
+REPLACE|        [[ ! -f "${BD}/system/${DROPIN_BACKUP_NAME}/${rel}" ]] \
+
+--- M13
+DESC|the two `local` statements are folded back into one, so the second word expands a name that has not been assigned yet
+TESTS|t05-local-expansion.sh t02-dropin-backup.sh
+EQUIV|no
+ANCHOR|    local SRC="${BD}/system/${DROPIN_BACKUP_NAME}"
+REPLACE|    local BDX="$1" SRC="${BDX}/system/${DROPIN_BACKUP_NAME}"
+
+--- M14
+DESC|the backup directory name is renamed consistently on both sides
+TESTS|t02-dropin-backup.sh
+EQUIV|yes
+ANCHOR|DROPIN_BACKUP_NAME="topic-manager.service.d"
+REPLACE|DROPIN_BACKUP_NAME="topic-manager.service.d.renamed"
+
+# ─── the permission baseline (t03) ───────────────────────────────────────────
+--- M15
+DESC|record_baseline stops recording the individual drop-in files
+TESTS|t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|        find "$DROPIN_DIR" -mindepth 1 \( -type f -o -type d \) -printf '%p|%u|%g|%m\n' >> "$out"
+REPLACE|        true
+
+--- M16
+DESC|DROPIN_DIR is dropped from BASELINE_PATHS
+TESTS|t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|  "$DROPIN_DIR"
+
+--- M17
+DESC|the baseline lookup loses its field-separator anchor and can match a longer path
+TESTS|t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|        line="$(grep -m1 -F "$(printf '%s|' "$p")" "$PERM_BASELINE" 2>/dev/null || true)"
+REPLACE|        line="$(grep -m1 -F "$p" "$PERM_BASELINE" 2>/dev/null || true)"
+
+--- M18
+DESC|THE PERMISSIVE MUTATION — the effective-access check always says yes instead of asking the kernel
+TESTS|t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|can_access() { sudo -u "$1" test "$2" "$3" 2>/dev/null; }
+REPLACE|can_access() { true; }
+
+--- M19
+DESC|apply_baseline discards the recorded ownership
+TESTS|t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|            chown "${o}:${g}" "$p" 2>/dev/null || true
+REPLACE|            true
+
+--- M20
+DESC|apply_baseline discards the recorded mode
+TESTS|t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|            chmod "$m" "$p" 2>/dev/null || true
+REPLACE|            true
+
+--- M21
+DESC|the Phase 10 re-application loop discards the recorded ownership
+TESTS|t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|    chown "${fo}:${fg}" "$fp" 2>/dev/null || true
+REPLACE|    true
+
+--- M22
+DESC|the Phase 10 re-application loop discards the recorded mode
+TESTS|t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|    chmod "$fm" "$fp" 2>/dev/null || true
+REPLACE|    true
+
+# ─── the frontend mode derivation (t04) ──────────────────────────────────────
+--- M23
+DESC|the derived file mode goes back to the fixed 644 — THE DEFECT EXACTLY AS IT SHIPPED
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|FE_FILE_MODE="$(printf '%o' $(( 8#${FE_DIR_MODE} & 8#666 )))"
+REPLACE|FE_FILE_MODE=644
+
+--- M24
+DESC|the derivation mask is widened from 0666 to 0777, so served files inherit the execute bit
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|FE_FILE_MODE="$(printf '%o' $(( 8#${FE_DIR_MODE} & 8#666 )))"
+REPLACE|FE_FILE_MODE="$(printf '%o' $(( 8#${FE_DIR_MODE} & 8#777 )))"
+
+--- M25
+DESC|the access test before widening is inverted, so every new file is widened
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|        if ! can_access "$WEB_USER" -r "$f"; then
+REPLACE|        if can_access "$WEB_USER" -r "$f"; then
+
+--- M26
+DESC|a widening that did not achieve access is NOT reverted, leaving the host loosened for nothing
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|                chmod "$FE_FILE_MODE" "$f"
+REPLACE|                true
+
+--- M27
+DESC|the baseline-recorded test is inverted, so files the restore already handled are re-chmodded
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|    if grep -qF -- "$(printf '%s|' "$f")" "$PERM_BASELINE" 2>/dev/null; then
+REPLACE|    if ! grep -qF -- "$(printf '%s|' "$f")" "$PERM_BASELINE" 2>/dev/null; then
+
+--- M28
+DESC|new directories no longer take the tree's mode
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|        chmod "$FE_DIR_MODE" "$f"
+REPLACE|        true
+
+--- M29
+DESC|new files no longer take the derived mode at all
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|        chmod "$FE_FILE_MODE" "$f"
+REPLACE|        true

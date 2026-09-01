@@ -5,6 +5,79 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
+## [1.0.3] — 2026-08-30
+
+Tooling and dependency release. No application code changed; the frontend and the Flask
+backend are byte-identical to 1.0.2.
+
+### Security
+- **HIGH** `requirements.txt`: `cryptography` `44.0.2 → 50.0.1`. The 44.0.2 pin carried five
+  advisories (CVE-2026-69247, CVE-2026-69248, CVE-2026-69249, CVE-2026-26007,
+  CVE-2026-34073). Deploying 1.0.2 exactly as released did **not** clear them, because the
+  released pin was the vulnerable one.
+- **MED** `requirements.txt`: `gunicorn 26.0.0 → 26.2.0`, `PyYAML 6.0.2 → 6.0.3`,
+  `confluent-kafka 2.14.0 → 2.15.0`. Every pin is now CVE-clean as of 2026-08-30, verified
+  against OSV.dev.
+- **MED** The Vue bundle is pinned **by content hash**, not by a version in a URL:
+  `install/upgrade-full.sh` refuses to deploy `vue.global.prod.js` unless its SHA-256
+  matches, and `prepare-offline.sh` verifies the same hash before it puts the file in an
+  offline bundle. (`install.sh` still fetches Vue 3.5.35 from the CDN with no integrity
+  check — open defect, tracked for the next release.)
+- **MED** The systemd unit **drop-in directory** is now backed up, permission-baselined and
+  restored. It is where `TM_SECRET_KEY` and `TM_LDAP_BIND_PASSWORD` live on a host
+  configured by environment; backing up the unit but not its drop-ins meant a `--restore`
+  handed back a service with no secret key, which the application refuses to start with.
+  The upgrade also refuses to proceed if a drop-in file on the host did not reach the backup.
+- **LOW** New SCA gate `tools/sca-check.sh` queries OSV.dev for every `==` pin in
+  `requirements.txt` and for the Vue pin, and exits non-zero on any advisory — or if OSV
+  cannot be reached, rather than reporting a pass it did not earn.
+
+### Added
+- `install/upgrade-full.sh` — the single, version-agnostic upgrade path: permission and
+  platform audit, upgrade-blocker checks, verified backup, automatic rollback on any
+  failure, `--restore`/`--list-backups`, `--audit-only`, `--dry-run`, `--backup-only`,
+  `--skip-os`, `--offline`, `--force`.
+- A documented **offline upgrade** procedure. It has never existed in this repo: the script
+  reads the bundle from `/var/lib/topic-manager/offline-src` and the tarball extracts under a
+  different name, so an operator following the old documentation could not succeed. See
+  README.md → *Offline (air-gapped) upgrade*.
+
+### Changed
+- `requirements.txt` is the **single source of truth** for every Python pin.
+  `install/upgrade-full.sh` reads it at run time and refuses to run if a pin has no install
+  stage or a stage has no pin; `prepare-offline.sh` downloads exactly those versions and
+  fails on the networked machine if any wheel is missing, rather than on the air-gapped host
+  that cannot fix it.
+- `prepare-offline.sh` no longer keeps its own copy of the Vue version and hash, and no
+  longer prepends a licence comment to the downloaded file — that prepend made the bundled
+  bytes unhashable, so **every** `--offline` upgrade aborted at "Bundled Vue hash mismatch".
+- A successful offline run no longer deletes the bundle the operator transferred.
+- Phase 3's blocker checks resolve configuration the way the service sees it — unit
+  `Environment=` / `EnvironmentFile=` (drop-ins included), then the shell, then
+  `config.yaml`. On a host configured by environment the LDAP bind probe previously read a
+  blank password, concluded "no service bind configured", and reported PASS for the one
+  check it exists to make.
+- Documentation rewritten against the current tooling: README.md (Upgrading, Offline
+  upgrade, File Layout, Stack), TROUBLESHOOTING.md (rewritten), docs/INSTALL.md §15,
+  install/README.md, SBOM.md and NOTICES.md.
+
+### Removed
+- **`upgrade.sh`** (repo root). It only upgraded 1.0.0 → 1.0.2, had no rollback, no
+  permission handling, fetched Vue with no integrity check, and its failure message always
+  claimed "System is unchanged — your v1.0.0 install is still running" — including after the
+  phase that had already deleted the venv, application, frontend, nginx config and systemd
+  unit. `install/upgrade-full.sh` replaces it for every version.
+
+### Known issues
+- `install.sh` fetches Vue 3.5.35 from the CDN without verifying it, and its
+  `rsync -a --delete` makes it unsafe on an existing deployment. Use the upgrade script on
+  any host that already has Topic Manager.
+- `SBOM.md` and `NOTICES.md` had drifted apart (1.0.2 set vs 1.0.0 set) and neither matched
+  `requirements.txt`. Both now match it; the drift itself is what the SCA gate exists to
+  catch next time.
+
+---
+
 ## [1.0.2] — 2026-05-28
 
 ### Security
@@ -23,6 +96,8 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ### Upgrade
 - Run `sudo bash install/upgrade-1.0.2.sh` on any host not connected to the repo.
+  *(Historical: that script was never committed to this repo. Use
+  `sudo bash install/upgrade-full.sh` — see 1.0.3 above.)*
 - After upgrade, verify LDAPS: `openssl s_client -connect dc1.int.crypticlight.com:636 -CAfile /etc/ssl/certs/ca-certificates.crt`
 - If DC cert not in system store, set `ldap_ca_cert:` in `/etc/topic-manager/config.yaml` to the CA PEM path.
 

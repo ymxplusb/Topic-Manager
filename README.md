@@ -1,4 +1,4 @@
-# Jarvis Topic Manager v1.0.2
+# Jarvis Topic Manager v1.0.3
 
 **Standalone Kafka topic administration frontend for the Jarvis ecosystem.**
 
@@ -33,13 +33,15 @@ Jarvis Topic Manager is a lightweight web application that provides a secure, AD
 
 | Layer    | Technology                              |
 |----------|-----------------------------------------|
-| Frontend | Vue.js 3.5.35 (Options API, no build tools) |
-| Backend  | Python 3.12 / Flask 3.1.3 / gunicorn 26 |
-| Auth     | AD/LDAPS via ldap3                      |
-| Kafka    | confluent-kafka 2.14.0 AdminClient      |
+| Frontend | Vue.js 3.5.42 (Options API, no build tools) |
+| Backend  | Python 3.12 / Flask 3.1.3 / gunicorn 26.2.0 |
+| Auth     | AD/LDAPS via ldap3 2.9.1                |
+| Kafka    | confluent-kafka 2.15.0 AdminClient      |
 | Web      | nginx (TLS termination, reverse proxy)  |
 | DB       | SQLite (audit log + server-side sessions) |
 | OS       | Ubuntu Server 24.04 LTS                 |
+
+Every Python version above is pinned in `requirements.txt`, which is the single source of truth — the upgrade script and the offline bundler both read their pins from it. The Vue version and its SHA-256 are pinned in `install/upgrade-full.sh`. See `SBOM.md` for the full inventory, including the two places a *fresh* `install.sh` still differs.
 
 ---
 
@@ -73,7 +75,7 @@ sudo bash install.sh
 
 The script:
 - Installs system packages (python3, python3-venv, nginx, libldap, libssl, build-essential)
-- Downloads Vue.js 3.5.35 from CDN automatically (online mode)
+- Downloads Vue.js from the CDN automatically (online mode). Note that `install.sh` still asks for **3.5.35** and takes whatever the CDN returns, with no integrity check; the upgrade path pins **3.5.42** by SHA-256 and refuses anything else. A host that has been upgraded is therefore on a *verified* newer Vue than a host freshly installed — see `SBOM.md`
 - Creates the `topic-manager` system user
 - Creates `/opt/topic-manager/`, `/var/www/topic-manager/`, `/etc/topic-manager/`
 - Sets up the Python virtual environment and installs all packages
@@ -97,9 +99,13 @@ auth:
   ldap_server:       "ldaps://your-dc.yourdomain.com:636"
   ldap_domain:       "yourdomain.com"
   ldap_base_dn:      "DC=yourdomain,DC=com"
-  ldap_bind_dn:      "CN=svc-topic-mgr,OU=ServiceAccounts,DC=yourdomain,DC=com"
-  ldap_bind_password: "the-service-account-password"
   required_group:    "CN=Kafka-Admins,CN=Users,DC=yourdomain,DC=com"
+
+  # OPTIONAL — leave BOTH empty to use the direct user bind (see
+  # "LDAP authentication" below). If you set them they must WORK: from
+  # v1.0.2 onward every login is gated on this bind succeeding.
+  ldap_bind_dn:       ""
+  ldap_bind_password: ""
 
 clusters:
   - id:   "production"
@@ -109,13 +115,14 @@ clusters:
     active: true
 ```
 
-The `ldap_bind_dn` must be the full Distinguished Name of your service account.  
-The `required_group` must be the full DN of the AD group whose members are allowed to log in.
+The `required_group` must be the full DN of the AD group whose members are allowed to log in.  
+`ldap_bind_dn` / `ldap_bind_password` are **optional** — see [LDAP authentication](#ldap-authentication).
 
 To find these values from any domain-joined Windows machine:
 ```powershell
-Get-ADUser    -Identity "svc-topic-mgr"    | Select-Object DistinguishedName
 Get-ADGroup   -Identity "Kafka-Admins"     | Select-Object DistinguishedName
+# only if you are using a service account:
+Get-ADUser    -Identity "svc-topic-mgr"    | Select-Object DistinguishedName
 ```
 
 Validate the YAML syntax before proceeding:
@@ -178,7 +185,7 @@ curl http://127.0.0.1:5001/api/health
 curl -sk https://localhost/api/health
 ```
 
-Both should return: `{"status":"ok","version":"1.0.2"}`
+Both should return: `{"status":"ok","version":"1.0.3"}`
 
 Then open `https://your-hostname.yourdomain.com` in a browser and sign in with an AD account that is a member of `Kafka-Admins`.
 
@@ -186,41 +193,174 @@ Then open `https://your-hostname.yourdomain.com` in a browser and sign in with a
 
 ---
 
+## LDAP authentication
+
+Topic Manager supports **two** bind modes. Both authenticate the user against
+Active Directory and both enforce `required_group`; they differ only in which
+identity performs the directory *search*.
+
+| Mode | `ldap_bind_dn` / `ldap_bind_password` | Directory search runs as | Setup |
+|---|---|---|---|
+| **Direct user bind** (default) | both empty | the user logging in | none |
+| **Service-account bind** | both set | a dedicated read-only account | AD account required |
+
+The service account is **optional hardening, not a requirement**. If you have no
+particular reason to prefer it, leave both fields empty and skip the rest of
+this section.
+
+### ⚠ Upgrading from v1.0.0 — read this first
+
+This is the most likely way to break an upgrade out of v1.0.0, and it fails
+*silently*: the health check, `/api/version` and the UI all stay green while
+**nobody can log in**.
+
+- **v1.0.0 has no service-bind logic at all.** It binds directly as the user, so
+  whatever sits in `ldap_bind_dn` is simply ignored. A wrong or stale value can
+  sit in the config for months causing no symptom whatsoever.
+- **v1.0.2 and later** treat a populated `ldap_bind_dn` plus a non-placeholder
+  password as "use the service bind", and gate **every** login on it succeeding.
+
+A setting that was inert becomes load-bearing the moment the new code starts.
+
+Check it before upgrading — this is exactly what the upgrade script's Phase 3
+blocker does, and it refuses to proceed if the bind fails:
+
+```bash
+sudo bash install/upgrade-full.sh --audit-only
+# "LDAP service bind" must report PASS, or "no service bind configured"
+```
+
+To test the bind by hand:
+
+```bash
+ldapwhoami -H ldaps://your-dc.yourdomain.com:636 -x -W \
+  -D "$(sudo grep ldap_bind_dn /etc/topic-manager/config.yaml | cut -d'"' -f2)"
+# Expected: dn:CN=svc-...
+```
+
+If it fails, take Fix A or Fix B below.
+
+### Fix A — disable the service account (fastest, needs no secret)
+
+This leaves you on the direct user bind, which is what v1.0.0 was doing anyway,
+so there is **no change in behaviour**:
+
+```bash
+sudo sed -i 's/^\(\s*ldap_bind_dn:\).*/\1 ""/'       /etc/topic-manager/config.yaml
+sudo sed -i 's/^\(\s*ldap_bind_password:\).*/\1 ""/' /etc/topic-manager/config.yaml
+python3 -c "import yaml; yaml.safe_load(open('/etc/topic-manager/config.yaml'))" && echo "YAML OK"
+sudo systemctl restart topic-manager
+```
+
+Re-run `--audit-only`; the LDAP row should now read *no service bind configured*.
+
+### Fix B — repair the service account
+
+1. Confirm the account's **real** DN. The `CN` and the `sAMAccountName` are
+   frequently different, and inferring the DN from the login name is a common
+   cause of this exact failure:
+
+   ```powershell
+   Get-ADUser -Identity "svc-topic-mgr" -Properties DistinguishedName |
+     Select-Object Name, SamAccountName, DistinguishedName
+   ```
+
+2. Reset the password if it is unknown or stale, and record it wherever your
+   secrets live.
+
+3. Set both fields, validate the YAML, restart:
+
+   ```bash
+   sudo nano /etc/topic-manager/config.yaml     # ldap_bind_dn + ldap_bind_password
+   python3 -c "import yaml; yaml.safe_load(open('/etc/topic-manager/config.yaml'))" && echo "YAML OK"
+   sudo systemctl restart topic-manager
+   ```
+
+4. Prove it before trusting it:
+
+   ```bash
+   sudo bash install/upgrade-full.sh --audit-only   # LDAP service bind -> PASS
+   ```
+
+> **Do not brute-force the bind to discover the right password.** Every attempt
+> is a real AD authentication, and enough failures lock the account. Because
+> every login is gated on that same bind, a locked service account is a total
+> outage for the application. The upgrade script caches a *failing* verdict for
+> a given (server, DN, password) and will not re-bind the same tuple;
+> `--no-bind-probe` skips the check entirely.
+
+### Certificate trust
+
+From v1.0.2 the LDAPS connection uses `CERT_REQUIRED`, so the domain
+controller's certificate must validate against the system trust store:
+
+```bash
+openssl s_client -connect your-dc.yourdomain.com:636 \
+  -CAfile /etc/ssl/certs/ca-certificates.crt </dev/null 2>&1 | grep 'Verify return code'
+# Expected: Verify return code: 0 (ok)
+```
+
+If it does not verify, add your CA and re-run:
+
+```bash
+sudo cp your-ca.crt /usr/local/share/ca-certificates/
+sudo update-ca-certificates
+```
+
+Alternatively point `ldap_ca_cert` at a CA PEM file; leaving it blank uses the
+system trust store.
+
+---
+
 ## Upgrading
 
-### From v1.0.0 → v1.0.2
+> **Do not run `install.sh` on an existing deployment.** It uses `rsync -a --delete` on the backend and frontend directories and will remove files it did not put there.
 
-> **Do not run `install.sh` on an existing deployment.** It uses `rsync --delete` and will wipe your existing installation.
+Upgrades are run by **`install/upgrade-full.sh`**, which is the only supported upgrade path in this repo. It is version-agnostic: it upgrades whatever is installed — including v1.0.0 — to whatever the source tree it fetches declares in `tm/VERSION`. It audits the host first, takes a verified backup before touching anything, and rolls back automatically if a phase fails.
 
-`upgrade.sh` uses a backup → clean uninstall → fresh install → restore approach. Your config, audit database, and TLS certificates are preserved exactly. The script has been validated in three consecutive runs with zero errors.
+What it does, in order:
+
+| Phase | |
+|-------|--|
+| 1–2  | Preflight and permission audit — disk, ownership and modes, immutable attributes, POSIX ACLs, AppArmor/SELinux, auditd/AIDE/fapolicyd, and effective access asked of the kernel as the real `www-data` and `topic-manager` principals |
+| 3    | Upgrade blockers — `server.secret_key` must be set, and if a service bind is configured the LDAP bind must actually succeed. Both are resolved the way the *service* sees them: the unit's `Environment=` / `EnvironmentFile=` (drop-ins included) first, then the shell, then `config.yaml` |
+| 4    | Backup to `/var/backups/topic-manager/<TIMESTAMP>` plus a `.tar.gz` alongside it — config, TLS key and certificate, extra CA material, a consistent SQLite snapshot, the venv, the nginx config, the systemd unit **and its drop-in directory**, and a recorded permission baseline. Checksummed and verified before the upgrade is allowed to continue |
+| 5    | Fetch the target source and read every Python pin from its `requirements.txt` — the script keeps no pins of its own |
+| 6    | OS packages (`apt full-upgrade`), unless `--skip-os` |
+| 7–9  | Replace venv, backend, frontend, nginx config and unit. Vue is verified by SHA-256 before it is allowed to serve |
+| 10   | Restore `config.yaml`, the audit database, TLS material, the systemd drop-in, and the recorded ownership and modes verbatim — a deliberately narrowed permission is never widened back to a script default |
+| 11–12| Config migration, then start and verify: health, reported version, effective access, and the security headers on every route class |
 
 **Step 1 — Take a vCSA snapshot** of the VM before doing anything else.
 
-**Step 2 — Check your current version:**
+**Step 2 — Check what is actually installed:**
 ```bash
 curl -sk https://localhost/api/health
 # {"status":"ok","version":"1.0.0"}
 ```
 
-**Step 3 — Run the upgrade:**
+**Step 3 — Get the script and audit the host.** The clone below only supplies the script; the upgrade fetches its own copy of the target source in Phase 5.
 ```bash
 sudo apt-get install -y git
 git clone https://github.com/ymxplusb/Topic-Manager.git /tmp/topic-manager-upgrade
 cd /tmp/topic-manager-upgrade
-sudo bash upgrade.sh
+sudo bash install/upgrade-full.sh --audit-only
+```
+`--audit-only` changes nothing and exits **0** clear, **1** warnings only, **2** blockers present. Resolve every blocker before going further — they are the failures that otherwise appear an hour later as "nobody can log in".
+
+**Step 4 — Take the verified restore point:**
+```bash
+sudo bash install/upgrade-full.sh --backup-only
+sudo bash install/upgrade-full.sh --list-backups
 ```
 
-The script phases:
-1. Pre-flight — version gate, health check, disk space check
-2. Backup — config.yaml, audit DB, TLS certs saved to a timestamped directory
-3. Fetch — clones v1.0.2 source from this repo
-4. Uninstall — removes venv, backend, frontend, nginx config, systemd unit
-5. Install — fresh venv, packages installed in dependency order, import sanity check
-6. Restore — config, DB, and certs placed back exactly as they were
-7. Migrate — adds `ldap_ca_cert: ""` to config if missing (the one new field)
-8. Start and verify — health endpoint must return `"version":"1.0.2"` before script exits
+**Step 5 — Run the upgrade:**
+```bash
+sudo bash install/upgrade-full.sh
+```
+Useful flags: `--dry-run` (audit + plan, no changes), `--skip-os` (application and dependencies only), `--offline` (see below), `--force` (proceed past blockers — the backup is still taken first).
 
-**Step 4 — Follow the post-upgrade checklist** printed at the end of the run:
+**Step 6 — Follow the post-upgrade checklist** printed at the end of the run:
 
 1. Verify LDAPS cert is trusted:
 ```bash
@@ -242,6 +382,47 @@ If `ldap_bind_password` is `CHANGE_ME`, auth falls back to direct user bind — 
 
 4. Hard-refresh all browsers — `Ctrl+Shift+R`.
 
+### Rolling back
+
+Every run leaves a verified restore point. Nothing is deleted by a rollback that is not put back from it.
+
+```bash
+sudo bash install/upgrade-full.sh --list-backups
+# 20260830-141205  v1.0.0  412M  verified OK  perms recorded
+
+sudo bash install/upgrade-full.sh --restore 20260830-141205
+```
+`--restore` verifies the backup's `SHA256SUMS` before it restores from it, puts back the recorded ownership and modes, and reports the health of what it restored. A vCSA snapshot revert remains the fastest option if the host itself is in doubt.
+
+### Offline (air-gapped) upgrade
+
+The bundle is built on a machine that **has** a network, then carried to the target. The path below is not optional — the upgrade script reads the bundle from exactly one location.
+
+On the internet-connected machine, with this repo checked out:
+```bash
+bash prepare-offline.sh --bundle
+# Downloads the wheels for every pin in requirements.txt, verifies each one is
+# present, downloads Vue and checks it against the SHA-256 that
+# install/upgrade-full.sh will check on the target, then writes
+# topic-manager-offline-<version>.tar.gz one directory above the repo.
+```
+
+Transfer it, then on the air-gapped host:
+```bash
+sudo install -d -m 700 -o root -g root /var/lib/topic-manager/offline-src
+sudo tar xzf topic-manager-offline-<version>.tar.gz -C /tmp
+# The tarball extracts to a directory named after the repo checkout:
+sudo mv /tmp/topic-manager/* /var/lib/topic-manager/offline-src/
+
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline
+```
+
+- **`/var/lib/topic-manager/offline-src` is fixed.** The script does not search for the bundle and will stop with `Offline source not found` if it is anywhere else.
+- `--offline` forces offline mode; the script also selects it on its own when `pypi.org` is unreachable, so a genuinely air-gapped host takes this path with or without the flag.
+- The bundle is **not** deleted on success — an air-gapped host cannot fetch another one, and a re-upgrade after a `--restore` needs it.
+- `--offline` implies no OS patching: `apt` has no repository to reach.
+- The Python versions installed offline are the ones in the bundle's `requirements.txt`, which is the same file the online path installs from. If `prepare-offline.sh` reported a missing pin, fix it on the networked machine — the target cannot.
+
 See `TROUBLESHOOTING.md` for diagnosis procedures for every known failure mode.
 
 ---
@@ -252,19 +433,19 @@ On an **internet-connected** machine with the repo checked out:
 
 ```bash
 bash prepare-offline.sh --bundle
-# Creates: topic-manager-offline-1.0.2.tar.gz
+# Creates: topic-manager-offline-1.0.3.tar.gz
 # Contains: all source files + Python wheels + Vue.js lib
 ```
 
 Transfer the bundle to the air-gapped host:
 ```bash
-scp topic-manager-offline-1.0.2.tar.gz user@target:/tmp/
+scp topic-manager-offline-1.0.3.tar.gz user@target:/tmp/
 ```
 
 On the air-gapped host:
 ```bash
 cd /tmp
-tar xzf topic-manager-offline-1.0.2.tar.gz
+tar xzf topic-manager-offline-1.0.3.tar.gz
 cd topic-manager
 sudo bash install.sh    # auto-detects offline mode, uses bundled packages
 ```
@@ -301,7 +482,6 @@ Key settings:
   tm/                        Flask application package
   data/tm.db                 SQLite audit + session database
   logs/                      gunicorn access + error logs
-  backup-pre-1.0.2/          Pre-upgrade file backups (after upgrade only)
 /var/www/topic-manager/      Frontend static files (nginx root)
 /etc/topic-manager/          Configuration
   config.yaml                Main config — edit this
@@ -309,7 +489,17 @@ Key settings:
   tls/server.key             TLS private key
 /etc/nginx/sites-available/topic-manager   nginx site config
 /etc/nginx/snippets/tm-security-headers.conf   Security header snippet
-/etc/systemd/system/topic-manager.service  systemd unit
+/etc/systemd/system/topic-manager.service    systemd unit
+/etc/systemd/system/topic-manager.service.d/ unit drop-ins, if used — this is
+                             where TM_SECRET_KEY and TM_LDAP_BIND_PASSWORD live
+                             when the configuration is held in the environment
+                             rather than in config.yaml. Backed up and restored
+                             with everything else
+/var/backups/topic-manager/  Upgrade restore points
+  <TIMESTAMP>/               One per run: etc/ data/ app/ frontend/ system/
+                             manifest/ + SHA256SUMS
+  topic-manager-backup-<TIMESTAMP>.tar.gz   The same tree, archived (mode 600)
+/var/log/topic-manager-upgrade-<TIMESTAMP>.log   Full transcript of an upgrade
 ```
 
 ---

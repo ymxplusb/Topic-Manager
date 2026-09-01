@@ -10,12 +10,18 @@ const App = {
         const brokerMeta  = ref(null);
         const topicCount  = ref(0);
         const showAbout   = ref(false);
-        const version     = ref('1.0.0');
+        // Not a version literal: this is the value shown BEFORE /api/version
+        // answers. A hardcoded fallback asserts a specific version, so a host
+        // that cannot reach its own API displays a confident wrong number —
+        // exactly how this system showed 1.0.2 while running 1.0.0 for months.
+        // 'unknown' renders literally in the Settings > Version row, which is
+        // the truth when the API has not answered.
+        const version     = ref('unknown');
 
         async function fetchVersion() {
             try {
                 const r = await fetch('/api/version');
-                if (r.ok) { const d = await r.json(); version.value = d.version || '1.0.0'; }
+                if (r.ok) { const d = await r.json(); version.value = d.version || 'unknown'; }
             } catch { /* network unavailable — UI stays in previous state */ }
         }
 

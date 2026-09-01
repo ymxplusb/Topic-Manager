@@ -1,6 +1,6 @@
 # Jarvis Topic Manager — Installation Guide
 
-**Version:** 1.0.2
+**Version:** 1.0.3
 **Platform:** Ubuntu Server 24.04 LTS
 **Completed by:** Human administrator
 **Copyright (c) 2025-2026 James Rodman. All Rights Reserved.**
@@ -367,11 +367,11 @@ sudo systemctl status nginx
 
 # Quick health check (backend directly)
 curl http://127.0.0.1:5001/api/health
-# Expected: {"status":"ok","version":"1.0.2"}
+# Expected: {"status":"ok","version":"1.0.3"}
 
 # Health check through nginx (HTTPS)
 curl -sk https://localhost/api/health
-# Expected: {"status":"ok","version":"1.0.2"}
+# Expected: {"status":"ok","version":"1.0.3"}
 ```
 
 If `topic-manager` fails to start:
@@ -490,16 +490,16 @@ curl -sk https://localhost/api/version | python3 -m json.tool
 ### On internet-connected machine (Linux/WSL/Mac):
 
 ```bash
-cd /c/Users/jrodm/Scripts/topic-manager   # or wherever the repo lives
+cd /path/to/topic-manager                 # wherever the repo is checked out
 bash prepare-offline.sh --bundle
-# Creates: topic-manager-offline-1.0.2.tar.gz
+# Creates: topic-manager-offline-1.0.3.tar.gz  (named from VERSION)
 ```
 
 ### Transfer to air-gapped host:
 
 ```bash
 scp -i ~/.ssh/claude_admin \
-  topic-manager-offline-1.0.2.tar.gz \
+  topic-manager-offline-1.0.3.tar.gz \
   claude_admin@192.168.202.90:/tmp/
 ```
 
@@ -507,7 +507,7 @@ scp -i ~/.ssh/claude_admin \
 
 ```bash
 cd /tmp
-tar xzf topic-manager-offline-1.0.2.tar.gz
+tar xzf topic-manager-offline-1.0.3.tar.gz
 cd topic-manager
 sudo bash install.sh
 # Script detects offline mode and uses install/packages/
@@ -519,67 +519,96 @@ Continue from Section 5 (Configure the Application).
 
 ## 15. Upgrading
 
-### v1.0.0 / v1.0.1 → v1.0.2 (security patch)
+There is **one** upgrade path: `install/upgrade-full.sh`. It applies to every version — it
+upgrades whatever is installed (including 1.0.0) to whatever the source tree it fetches
+declares in `tm/VERSION`, so there is no per-release upgrade script to find.
 
-Use the dedicated upgrade script — it handles all file patches, dependency updates, and nginx changes automatically.
+> **Do not run `install.sh` on a host that already has Topic Manager.**
+> `install.sh` uses `rsync -a --delete` on the backend and frontend directories: it removes
+> anything there that is not in the source tree. Earlier editions of this guide gave exactly
+> that as the "general procedure for future versions" — that instruction was wrong, and it
+> is why this section now describes the upgrade script instead.
 
-**Online (target has internet):**
+### Online (target has internet)
+
 ```bash
-# Transfer the script to the target:
-scp -i ~/.ssh/claude_admin \
-  /c/Users/jrodm/Scripts/topic-manager/install/upgrade-1.0.2.sh \
-  claude_admin@192.168.202.90:/tmp/
+ssh -i ~/.ssh/claude_admin claude_admin@192.168.202.90
 
-# Run it:
-ssh -i ~/.ssh/claude_admin claude_admin@192.168.202.90 \
-  "sudo bash /tmp/upgrade-1.0.2.sh"
+# 1. The script is obtained by cloning the repo. The upgrade fetches its own copy
+#    of the target source later, in Phase 5 — this clone only supplies the script.
+sudo apt-get install -y git
+git clone https://github.com/ymxplusb/Topic-Manager.git /tmp/topic-manager-upgrade
+cd /tmp/topic-manager-upgrade
+
+# 2. Audit. Changes nothing. Exit 0 = clear, 1 = warnings, 2 = blockers.
+sudo bash install/upgrade-full.sh --audit-only
+
+# 3. Take the vCSA snapshot NOW, then a verified restore point.
+sudo bash install/upgrade-full.sh --backup-only
+sudo bash install/upgrade-full.sh --list-backups
+
+# 4. Upgrade. Rolls back automatically on any failure.
+sudo bash install/upgrade-full.sh
 ```
 
-**Offline (air-gapped target):**
-```bash
-# On internet-connected machine first:
-bash prepare-offline.sh --bundle
-# → creates topic-manager-offline-1.0.2.tar.gz
+Do not skip step 2. The blockers it reports are the failures that otherwise appear an hour
+after an apparently successful upgrade — an unset `server.secret_key`, an LDAP service bind
+that the previous version ignored and the new one gates every login on, a DC certificate
+that is not trusted, or assets the web user cannot read.
 
-# Transfer and run:
-scp -i ~/.ssh/claude_admin topic-manager-offline-1.0.2.tar.gz \
+Useful flags: `--dry-run` (audit and plan only), `--skip-os` (application and dependencies
+only, no `apt`), `--force` (proceed past blockers; the backup is still taken first),
+`--list-backups`, `--restore <TIMESTAMP>`.
+
+### Offline (air-gapped target)
+
+The bundle is built where there **is** a network, then carried across. The target path is
+fixed — the script reads the bundle from `/var/lib/topic-manager/offline-src` and nowhere else.
+
+```bash
+# On the internet-connected machine, in the repo:
+cd /path/to/topic-manager
+bash prepare-offline.sh --bundle
+# Downloads a wheel for every pin in requirements.txt and verifies each one is present,
+# fetches Vue and checks it against the SHA-256 the target will check, then writes
+# topic-manager-offline-<version>.tar.gz one directory above the repo.
+
+scp -i ~/.ssh/claude_admin ../topic-manager-offline-<version>.tar.gz \
   claude_admin@192.168.202.90:/tmp/
+
 ssh -i ~/.ssh/claude_admin claude_admin@192.168.202.90 "
-  cd /tmp && tar xzf topic-manager-offline-1.0.2.tar.gz
-  sudo bash topic-manager/install/upgrade-1.0.2.sh
+  sudo install -d -m 700 -o root -g root /var/lib/topic-manager/offline-src
+  sudo tar xzf /tmp/topic-manager-offline-<version>.tar.gz -C /tmp
+  sudo mv /tmp/topic-manager/* /var/lib/topic-manager/offline-src/
+  sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline
 "
 ```
 
-See `install/UPGRADE-1.0.2.md` for the full list of fixes and post-upgrade verification steps.
+- The tarball extracts to a directory named after the repo checkout, which is why it has to
+  be moved into place. `Offline source not found at /var/lib/topic-manager/offline-src` is what
+  a skipped `mv` looks like.
+- The bundle is **not** deleted on success. An air-gapped host cannot fetch another one, and
+  a re-upgrade after a `--restore` needs it.
+- `--offline` implies no OS patching — `apt` has no repository to reach. Patch the OS from
+  your own mirror separately.
 
-### Future versions (general procedure)
+### Rolling back
 
 ```bash
-# 1. On workstation — pull new version:
-cd /c/Users/jrodm/Scripts/topic-manager
-git pull origin main
-
-# 2. SCP to server:
-scp -i ~/.ssh/claude_admin -r \
-  /c/Users/jrodm/Scripts/topic-manager \
-  claude_admin@192.168.202.90:/tmp/topic-manager-new
-
-# 3. On server — run install (non-destructive — does not overwrite config):
-ssh -i ~/.ssh/claude_admin claude_admin@192.168.202.90
-cd /tmp/topic-manager-new
-sudo bash install.sh
-
-# 4. Restart services:
-sudo systemctl restart topic-manager
-sudo systemctl reload nginx
-
-# 5. Verify:
-curl -sk https://localhost/api/health
+sudo bash install/upgrade-full.sh --list-backups
+sudo bash install/upgrade-full.sh --restore <TIMESTAMP>
 ```
 
-The config at `/etc/topic-manager/config.yaml` is **never overwritten** by the install script.
+Restore points live in `/var/backups/topic-manager/<TIMESTAMP>/`, with a `.tar.gz` of the
+same tree beside them. Each one carries the config, the TLS key and certificate, a
+consistent database snapshot, the venv, the nginx config, the systemd unit **and its
+drop-in directory**, and a recorded permission baseline, all covered by a `SHA256SUMS` that
+`--restore` verifies before it restores anything.
+
+The config at `/etc/topic-manager/config.yaml` is never overwritten by an upgrade: it is
+backed up in Phase 4 and put back in Phase 10, along with the ownership and modes it had.
 
 ---
 
 *End of Installation Guide*
-*Jarvis Topic Manager v1.0.2 — Copyright (c) 2025-2026 James Rodman*
+*Jarvis Topic Manager v1.0.3 — Copyright (c) 2025-2026 James Rodman*

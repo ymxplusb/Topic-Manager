@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Jarvis Topic Manager — Install Script
-# Version: 1.0.2
+# Version: 1.0.3
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 #
 # Usage:
@@ -121,18 +121,48 @@ chown "$APP_USER:$APP_USER" "${APP_HOME}/wsgi.py"
 success "Backend installed"
 
 # ─── frontend lib: Vue.js ────────────────────────────────────────────────────
-VUE_VERSION="3.5.35"
+# Version AND hash come from install/upgrade-full.sh — the single pin, same as
+# prepare-offline.sh reads. A version in a URL is not an integrity control:
+# until 2026-08-30 this fetched whatever the CDN returned and served it as the
+# framework rendering every authenticated page, with no SRI, checksum or
+# signature. The fresh-install path is now held to the same standard as upgrade.
+UPGRADE_SH="${SCRIPT_DIR}/install/upgrade-full.sh"
+[[ -f "$UPGRADE_SH" ]] || die "${UPGRADE_SH} not found — it holds the Vue version and hash pin."
+VUE_VERSION="$(sed -n 's/^VUE_VERSION="\([^"]*\)".*/\1/p' "$UPGRADE_SH" | head -1)"
+VUE_SHA256="$(sed -n 's/^VUE_SHA256="\([^"]*\)".*/\1/p' "$UPGRADE_SH" | head -1)"
+[[ -n "$VUE_VERSION" && -n "$VUE_SHA256" ]] \
+    || die "Could not read VUE_VERSION/VUE_SHA256 from ${UPGRADE_SH}."
 VUE_URL="https://cdn.jsdelivr.net/npm/vue@${VUE_VERSION}/dist/vue.global.prod.js"
-if [[ ! -f "${SCRIPT_DIR}/lib/vue.global.prod.js" ]]; then
-    if [[ $ONLINE == true ]]; then
-        info "Downloading Vue.js ${VUE_VERSION}..."
-        mkdir -p "${SCRIPT_DIR}/lib"
-        curl -fsSL --max-time 30 "$VUE_URL" -o "${SCRIPT_DIR}/lib/vue.global.prod.js" \
-            || die "Failed to download Vue.js from CDN. For offline install, run prepare-offline.sh first."
-        success "Vue.js ${VUE_VERSION} downloaded"
-    else
-        die "lib/vue.global.prod.js is missing. Run prepare-offline.sh on an internet host first, then transfer the bundle."
+VUE_DEST="${SCRIPT_DIR}/lib/vue.global.prod.js"
+
+vue_sha256() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+
+if [[ -f "$VUE_DEST" ]]; then
+    # A pre-existing file (offline bundle, or a previous run) is NOT trusted
+    # just because it is present — verify it or refuse.
+    GOT="$(vue_sha256 "$VUE_DEST")"
+    [[ "$GOT" == "$VUE_SHA256" ]] \
+        || die "Existing ${VUE_DEST} FAILED its integrity check.
+     Expected ${VUE_SHA256}
+     Got      ${GOT}
+     Delete it and re-run, or rebuild the bundle with prepare-offline.sh."
+    success "Vue.js ${VUE_VERSION} already present (sha256 verified)"
+elif [[ $ONLINE == true ]]; then
+    info "Downloading Vue.js ${VUE_VERSION}..."
+    mkdir -p "${SCRIPT_DIR}/lib"
+    TMP_VUE="$(mktemp)"
+    curl -fsSL --max-time 30 "$VUE_URL" -o "$TMP_VUE" \
+        || { rm -f "$TMP_VUE"; die "Failed to download Vue.js from CDN. For offline install, run prepare-offline.sh first."; }
+    GOT="$(vue_sha256 "$TMP_VUE")"
+    if [[ "$GOT" != "$VUE_SHA256" ]]; then
+        rm -f "$TMP_VUE"
+        die "Vue integrity check FAILED. Expected ${VUE_SHA256}, got ${GOT}.
+     Refusing to install an unverified script as the application's framework."
     fi
+    mv "$TMP_VUE" "$VUE_DEST"
+    success "Vue.js ${VUE_VERSION} downloaded (sha256 verified)"
+else
+    die "lib/vue.global.prod.js is missing. Run prepare-offline.sh on an internet host first, then transfer the bundle."
 fi
 
 # ─── frontend ────────────────────────────────────────────────────────────────
