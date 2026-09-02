@@ -131,7 +131,7 @@ REPLACE|DROPIN_BACKUP_NAME="topic-manager.service.d.renamed"
 DESC|record_baseline stops recording the individual drop-in files
 TESTS|t03-permission-baseline.sh
 EQUIV|no
-ANCHOR|        find "$DROPIN_DIR" -mindepth 1 \( -type f -o -type d \) -printf '%p|%u|%g|%m\n' >> "$out"
+ANCHOR|        find "$DROPIN_DIR" -mindepth 1 \( -type f -o -type d \) -printf '%p\0%u\0%g\0%m\0' >> "$out"
 REPLACE|        true
 
 --- M16
@@ -141,11 +141,11 @@ EQUIV|no
 ANCHOR|  "$DROPIN_DIR"
 
 --- M17
-DESC|the baseline lookup loses its field-separator anchor and can match a longer path
-TESTS|t03-permission-baseline.sh
+DESC|the baseline lookup matches on a PREFIX, so a longer path's record is used
+TESTS|t03-permission-baseline.sh t10-baseline-record-format.sh
 EQUIV|no
-ANCHOR|        line="$(grep -m1 -F "$(printf '%s|' "$p")" "$PERM_BASELINE" 2>/dev/null || true)"
-REPLACE|        line="$(grep -m1 -F "$p" "$PERM_BASELINE" 2>/dev/null || true)"
+ANCHOR|        if [[ "$fp" == "$want" ]]; then
+REPLACE|        if [[ "$fp" == "$want"* ]]; then
 
 --- M18
 DESC|THE PERMISSIVE MUTATION — the effective-access check always says yes instead of asking the kernel
@@ -158,28 +158,28 @@ REPLACE|can_access() { true; }
 DESC|apply_baseline discards the recorded ownership
 TESTS|t03-permission-baseline.sh
 EQUIV|no
-ANCHOR|            chown "${o}:${g}" "$p" 2>/dev/null || true
-REPLACE|            true
+ANCHOR|        chown -h "${o}:${g}" -- "$p" || fail "chown failed on ${p}"
+REPLACE|        true
 
 --- M20
 DESC|apply_baseline discards the recorded mode
 TESTS|t03-permission-baseline.sh
 EQUIV|no
-ANCHOR|            chmod "$m" "$p" 2>/dev/null || true
-REPLACE|            true
+ANCHOR|        chmod "$mo" -- "$p" || fail "chmod failed on ${p}"
+REPLACE|        true
 
 --- M21
 DESC|the Phase 10 re-application loop discards the recorded ownership
 TESTS|t03-permission-baseline.sh
 EQUIV|no
-ANCHOR|    chown "${fo}:${fg}" "$fp" 2>/dev/null || true
+ANCHOR|    chown -h "${fo}:${fg}" -- "$fp" || fail "chown failed on ${fp}"
 REPLACE|    true
 
 --- M22
 DESC|the Phase 10 re-application loop discards the recorded mode
 TESTS|t03-permission-baseline.sh
 EQUIV|no
-ANCHOR|    chmod "$fm" "$fp" 2>/dev/null || true
+ANCHOR|    chmod "$fm" -- "$fp" || fail "chmod failed on ${fp}"
 REPLACE|    true
 
 # ─── the frontend mode derivation (t04) ──────────────────────────────────────
@@ -215,8 +215,8 @@ REPLACE|                true
 DESC|the baseline-recorded test is inverted, so files the restore already handled are re-chmodded
 TESTS|t04-frontend-mode.sh
 EQUIV|no
-ANCHOR|    if grep -qF -- "$(printf '%s|' "$f")" "$PERM_BASELINE" 2>/dev/null; then
-REPLACE|    if ! grep -qF -- "$(printf '%s|' "$f")" "$PERM_BASELINE" 2>/dev/null; then
+ANCHOR|    if baseline_has "$PERM_BASELINE" "$f"; then
+REPLACE|    if ! baseline_has "$PERM_BASELINE" "$f"; then
 
 --- M28
 DESC|new directories no longer take the tree's mode
@@ -231,3 +231,291 @@ TESTS|t04-frontend-mode.sh
 EQUIV|no
 ANCHOR|        chmod "$FE_FILE_MODE" "$f"
 REPLACE|        true
+
+# ─── v1.0.4: the cluster store and its permission boundary ───────────────────
+# TARGET|install selects install.sh; the default is still the upgrade script,
+# so every record above is unchanged.
+
+--- M30
+DESC|the v1.0.4 cluster-store paths drop out of BASELINE_PATHS
+TESTS|t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|  "$CLUSTERS_DIR" "$CLUSTERS_FILE" "$CERT_DIR"
+REPLACE|  "$CLUSTERS_DIR"
+
+--- M31
+DESC|BASELINE_PATHS loses the cluster store entirely, so an upgrade restores it to a script default
+TESTS|t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|  "$CLUSTERS_DIR" "$CLUSTERS_FILE" "$CERT_DIR"
+
+--- M32
+DESC|THE SECURITY MUTATION: /etc/topic-manager becomes app-owned, so the app can unlink config.yaml
+TESTS|t09-clusters-permission-model.sh
+TARGET|install
+EQUIV|no
+ANCHOR|safe_install_dir 750 root "$APP_USER" "$CONFIG_DIR"
+REPLACE|safe_install_dir 750 "$APP_USER" "$APP_USER" "$CONFIG_DIR"
+
+--- M33
+DESC|the config directory becomes group-writable, which is unlink permission by another name
+TESTS|t09-clusters-permission-model.sh
+TARGET|install
+EQUIV|no
+ANCHOR|safe_install_dir 750 root "$APP_USER" "$CONFIG_DIR"
+REPLACE|safe_install_dir 770 root "$APP_USER" "$CONFIG_DIR"
+
+--- M34
+DESC|config.yaml is installed group-writable, so the app can rewrite required_group in place
+TESTS|t09-clusters-permission-model.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    install -m 640 -o root -g "$APP_USER" \
+REPLACE|    install -m 660 -o root -g "$APP_USER" \
+
+--- M35
+DESC|clusters.d is created root-owned, so the Cluster Builder cannot save at all
+TESTS|t09-clusters-permission-model.sh
+TARGET|install
+EQUIV|no
+ANCHOR|# create a temp file beside the target, which needs directory write.
+ANCHOR|safe_install_dir 750 "$APP_USER" "$APP_USER" "$CLUSTERS_DIR"
+REPLACE|# create a temp file beside the target, which needs directory write.
+REPLACE|safe_install_dir 750 root "$APP_USER" "$CLUSTERS_DIR"
+
+--- M36
+DESC|the cert directory is created 0755, exposing uploaded Kafka private keys
+TESTS|t09-clusters-permission-model.sh
+TARGET|install
+EQUIV|no
+ANCHOR|safe_install_dir 700 "$APP_USER" "$APP_USER" "$CERT_DIR"
+REPLACE|safe_install_dir 755 "$APP_USER" "$APP_USER" "$CERT_DIR"
+
+--- M37
+DESC|the config install reverts to cp+chmod, reopening the umask-077 window
+TESTS|t09-clusters-permission-model.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    install -m 640 -o root -g "$APP_USER" \
+ANCHOR|        "${SCRIPT_DIR}/config/config.yaml.example" "${CONFIG_DIR}/config.yaml"
+REPLACE|    cp "${SCRIPT_DIR}/config/config.yaml.example" "${CONFIG_DIR}/config.yaml"
+REPLACE|    chmod 600 "${CONFIG_DIR}/config.yaml"
+
+
+# ─── v1.0.4 security pass: the baseline record format (t10) ──────────────────
+# The producer half. Each of these puts back exactly the format that let a
+# FILENAME forge a record root then replayed as chown+chmod.
+
+--- M38
+DESC|the frontend recording reverts to the pipe format — THE DEFECT EXACTLY AS IT SHIPPED
+TESTS|t10-baseline-record-format.sh t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|        find "$FRONTEND_DIR" -mindepth 1 \( -type f -o -type d \) -printf '%p\0%u\0%g\0%m\0' >> "$out"
+REPLACE|        find "$FRONTEND_DIR" -mindepth 1 \( -type f -o -type d \) -printf '%p|%u|%g|%m\n' >> "$out"
+
+--- M39
+DESC|the drop-in recording reverts to the pipe format
+TESTS|t10-baseline-record-format.sh t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|        find "$DROPIN_DIR" -mindepth 1 \( -type f -o -type d \) -printf '%p\0%u\0%g\0%m\0' >> "$out"
+REPLACE|        find "$DROPIN_DIR" -mindepth 1 \( -type f -o -type d \) -printf '%p|%u|%g|%m\n' >> "$out"
+
+--- M40
+DESC|the enumerated BASELINE_PATHS records revert to the pipe format
+TESTS|t10-baseline-record-format.sh t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|        printf '%s\0%s\0%s\0%s\0' "$p" \
+REPLACE|        printf '%s|%s|%s|%s\n' "$p" \
+
+# The consumer half. A record is four attacker-influenced fields handed to
+# chown and chmod as root; each guard is neutralised on its own.
+
+--- M41
+DESC|THE PERMISSIVE MUTATION — the containment check accepts a record naming any path at all
+TESTS|t10-baseline-record-format.sh
+EQUIV|no
+ANCHOR|    fail "Permission baseline record points outside the recorded roots:
+ANCHOR|     recorded as ${fp}
+ANCHOR|     resolves to ${real}
+ANCHOR|     Nothing was chowned or chmodded. record_baseline can only produce paths
+ANCHOR|     under ${FRONTEND_DIR}, under ${DROPIN_DIR}, or exactly one of the
+ANCHOR|     BASELINE_PATHS entries, so this record is corrupt or forged."
+REPLACE|    BASELINE_REAL_PATH="$real"; return 0
+
+--- M42
+DESC|the mode field is no longer required to be octal before it reaches chmod
+TESTS|t10-baseline-record-format.sh
+EQUIV|no
+ANCHOR|    [[ "$fm" =~ ^[0-7]{3,4}$ ]] \
+ANCHOR|        || fail "Permission baseline: the mode field for ${fp} is not octal: '${fm}'.
+ANCHOR|     Nothing was chowned or chmodded. This is what a record the format cannot
+ANCHOR|     represent — or a forged one — looks like."
+REPLACE|    true
+
+--- M43
+DESC|the Phase 10 loop stops validating records altogether
+TESTS|t10-baseline-record-format.sh
+EQUIV|no
+ANCHOR|    baseline_assert_record "$fp" "$fo" "$fg" "$fm"
+ANCHOR|    [[ -e "$fp" ]] || continue
+REPLACE|    [[ -e "$fp" ]] || continue
+
+--- M44
+DESC|the record is validated only for paths that already exist, so a record can skip the guard by naming one that does not
+TESTS|t10-baseline-record-format.sh
+EQUIV|no
+ANCHOR|    baseline_assert_record "$fp" "$fo" "$fg" "$fm"
+ANCHOR|    [[ -e "$fp" ]] || continue
+REPLACE|    [[ -e "$fp" ]] || continue
+REPLACE|    baseline_assert_record "$fp" "$fo" "$fg" "$fm"
+
+# M45 is a DOCUMENTED EQUIVALENT, and the reason is worth keeping.
+# baseline_assert_record refuses a recorded path that is a symlink AT ALL
+# ([[ -L "$fp" ]]), and it runs before the chown — so with the guard in place no
+# test can reach a chown on a symlink, and -h is unreachable. It stays because
+# the guard and the chown are two syscalls apart: -h is what closes the window
+# between them, and that race is not something a test here can create.
+--- M45
+DESC|chown loses -h, so a recorded path swapped for a symlink has its TARGET chowned
+TESTS|t10-baseline-record-format.sh
+EQUIV|yes
+ANCHOR|    chown -h "${fo}:${fg}" -- "$fp" || fail "chown failed on ${fp}"
+REPLACE|    chown "${fo}:${fg}" "$fp" || fail "chown failed on ${fp}"
+
+--- M46
+DESC|the replay swallows chown failures again (2>/dev/null || true)
+TESTS|t10-baseline-record-format.sh t03-permission-baseline.sh
+EQUIV|no
+ANCHOR|    chown -h "${fo}:${fg}" -- "$fp" || fail "chown failed on ${fp}"
+REPLACE|    chown -h "${fo}:${fg}" -- "$fp" 2>/dev/null || true
+
+--- M47
+DESC|a pre-v1.0.4 baseline is read as if it were NUL-delimited, so a restore silently puts NOTHING back
+TESTS|t10-baseline-record-format.sh
+EQUIV|no
+ANCHOR|    if ! baseline_is_legacy "$bl"; then
+ANCHOR|        cat -- "$bl"
+ANCHOR|        return 0
+ANCHOR|    fi
+REPLACE|    cat -- "$bl"
+REPLACE|    return 0
+
+# ─── v1.0.4 security pass: install -d through a symlink (t11) ────────────────
+
+--- M48
+DESC|THE SECURITY MUTATION — the upgrade script applies ownership through a symlink again
+TESTS|t11-safe-install-dir.sh
+EQUIV|no
+ANCHOR|    [[ -L "$p" ]] && fail "${p} is a symlink; refusing to apply ownership through it.
+ANCHOR|     install -d would chmod and chown whatever it points at. Remove it, or put
+ANCHOR|     the real directory back, and run again."
+REPLACE|    true
+
+--- M49
+DESC|THE SECURITY MUTATION — install.sh applies ownership through a symlink again
+TESTS|t11-safe-install-dir.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ -L "$p" ]] && fail "${p} is a symlink; refusing to apply ownership through it.
+ANCHOR|     install -d would chmod and chown whatever it points at. Remove it, or put
+ANCHOR|     the real directory back, and run again."
+REPLACE|    true
+
+--- M50
+DESC|the guard no longer refuses a path that exists and is not a directory
+TESTS|t11-safe-install-dir.sh
+EQUIV|no
+ANCHOR|    [[ -e "$p" && ! -d "$p" ]] && fail "${p} exists and is not a directory."
+REPLACE|    true
+
+--- M51
+DESC|the cert directory is created with a bare install -d again, bypassing the guard entirely
+TESTS|t11-safe-install-dir.sh
+TARGET|install
+EQUIV|no
+ANCHOR|safe_install_dir 700 "$APP_USER" "$APP_USER" "$CERT_DIR"
+REPLACE|install -d -m 700 -o "$APP_USER" -g "$APP_USER" "$CERT_DIR"
+
+--- M52
+DESC|safe_install_dir stops applying the mode, so a widened directory stays widened
+TESTS|t11-safe-install-dir.sh
+EQUIV|no
+ANCHOR|    install -d -m "$m" -o "$o" -g "$g" "$p"
+REPLACE|    install -d -o "$o" -g "$g" "$p"
+
+# ─── v1.0.4 security pass: the boundary is ASSERTED (t09) ────────────────────
+
+--- M53
+DESC|install.sh stops checking that the app cannot WRITE config.yaml — the reinstall path is blind again
+TESTS|t09-clusters-permission-model.sh
+TARGET|install
+EQUIV|no
+ANCHOR|if can_access "$APP_USER" -w "$CONFIG_FILE"; then
+ANCHOR|    die "${APP_USER} can WRITE ${CONFIG_FILE}. The application must never be able
+ANCHOR|     to modify the file holding secret_key and ldap_bind_password.
+ANCHOR|     Fix: sudo chown root:${APP_USER} ${CONFIG_FILE}; sudo chmod 640 ${CONFIG_FILE}"
+ANCHOR|fi
+REPLACE|true
+
+--- M54
+DESC|install.sh stops checking that the app cannot WRITE the config DIRECTORY (directory write is unlink)
+TESTS|t09-clusters-permission-model.sh
+TARGET|install
+EQUIV|no
+ANCHOR|if can_access "$APP_USER" -w "$CONFIG_DIR"; then
+ANCHOR|    die "${APP_USER} can WRITE ${CONFIG_DIR}. Directory write is UNLINK: the
+ANCHOR|     application could delete config.yaml and write its own, choosing its
+ANCHOR|     own required_group, then restart the service.
+ANCHOR|     Fix: sudo chown root:${APP_USER} ${CONFIG_DIR}; sudo chmod 750 ${CONFIG_DIR}"
+ANCHOR|fi
+REPLACE|true
+
+--- M55
+DESC|install.sh stops checking that the app can WRITE clusters.d, so a broken Cluster Builder installs clean
+TESTS|t09-clusters-permission-model.sh
+TARGET|install
+EQUIV|no
+ANCHOR|can_access "$APP_USER" -w "$CLUSTERS_DIR" \
+ANCHOR|    || die "${APP_USER} cannot WRITE ${CLUSTERS_DIR} — the Cluster Builder could not save."
+REPLACE|true
+
+--- M56
+DESC|the RESTORE path stops checking that the app cannot write config.yaml
+TESTS|t09-clusters-permission-model.sh
+EQUIV|no
+ANCHOR|    if can_access "$APP_USER" -w "$CONFIG_FILE"; then
+ANCHOR|        fail "${APP_USER} can WRITE ${CONFIG_FILE} after the restore. The application must
+ANCHOR|     never be able to modify the file holding secret_key and ldap_bind_password.
+ANCHOR|     Fix: sudo chown root:${APP_USER} ${CONFIG_FILE}; sudo chmod 640 ${CONFIG_FILE}"
+ANCHOR|    fi
+REPLACE|    true
+
+--- M57
+DESC|the RESTORE path stops checking that the app cannot write the config directory
+TESTS|t09-clusters-permission-model.sh
+EQUIV|no
+ANCHOR|    if can_access "$APP_USER" -w "$CONFIG_DIR"; then
+ANCHOR|        fail "${APP_USER} can WRITE ${CONFIG_DIR} after the restore. Directory write is
+ANCHOR|     UNLINK: the application could delete config.yaml and write its own,
+ANCHOR|     choosing its own required_group, then restart the service.
+ANCHOR|     Fix: sudo chown root:${APP_USER} ${CONFIG_DIR}; sudo chmod 750 ${CONFIG_DIR}"
+ANCHOR|    fi
+REPLACE|    true
+
+# ─── v1.0.4 security pass: root-owned staging (t11) ──────────────────────────
+
+--- M58
+DESC|the online branch stages the tree root executes under /tmp again, at a predictable name
+TESTS|t11-safe-install-dir.sh
+EQUIV|no
+ANCHOR|    WORK_DIR="$(mktemp -d "${STAGE_ROOT}/src-${TIMESTAMP}-XXXXXX")" \
+ANCHOR|        || fail "Could not create a staging directory under ${STAGE_ROOT}."
+REPLACE|    WORK_DIR="/tmp/topic-manager-src-${TIMESTAMP}"
+
+--- M59
+DESC|the online branch stops asserting that the staged tree is root-owned — the assertion is on the offline branch only, exactly as before
+TESTS|t11-safe-install-dir.sh
+EQUIV|no
+ANCHOR|    WORK_DIR_OWNED=true          # this run created it, so this run may delete it
+ANCHOR|    assert_root_owned_path "$WORK_DIR"
+REPLACE|    WORK_DIR_OWNED=true          # this run created it, so this run may delete it

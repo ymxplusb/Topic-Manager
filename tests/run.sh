@@ -61,7 +61,12 @@ if [ -n "$REMOTE" ]; then
     RDIR="/tmp/tm-tests-$(date +%Y%m%d-%H%M%S)"
     echo "${C_BLD}── shipping tests + install/upgrade-full.sh to ${REMOTE}:${RDIR}${C_OFF}"
     TAR="$(mktemp "${TMPDIR:-/tmp}/tm-tests.XXXXXX.tar")"
-    ( cd "$TM_REPO_ROOT" && tar -cf "$TAR" tests install/upgrade-full.sh ) \
+    # The tree the cases drive: install/upgrade-full.sh AND the backend they
+    # import, the installer whose permission lines they extract, and the
+    # config examples. Shipping only the first two made t06/t07 die with
+    # ModuleNotFoundError on the remote host, which is a harness error, not
+    # a result.
+    ( cd "$TM_REPO_ROOT" && tar -cf "$TAR" tests tm app index.html config systemd install.sh install/upgrade-full.sh install/polkit ) \
         || { echo "could not build the transfer tarball" >&2; exit 2; }
     ssh -i "$RKEY" -o BatchMode=yes "$REMOTE" "mkdir -p '$RDIR'" || exit 2
     scp -q -i "$RKEY" -o BatchMode=yes "$TAR" "${REMOTE}:${RDIR}/t.tar" || exit 2
@@ -69,7 +74,7 @@ if [ -n "$REMOTE" ]; then
     # CRLF: this repo is cloned on Windows (contract hazards[windows-clone-crlf]).
     # A \r on a shebang line makes every script "not found" on Linux.
     ssh -i "$RKEY" -o BatchMode=yes "$REMOTE" \
-        "cd '$RDIR' && tar -xf t.tar && find tests install -type f -exec sed -i 's/\r\$//' {} + && sudo -n TM_NO_COLOUR=1 bash tests/run.sh --strict"
+        "cd '$RDIR' && tar -xf t.tar && find tests install tm app config systemd install.sh index.html -type f -exec sed -i 's/\r\$//' {} + && sudo -n TM_NO_COLOUR=1 bash tests/run.sh --strict"
     rc=$?
     echo "${C_BLD}── remote run exit ${rc}; tree left at ${REMOTE}:${RDIR}${C_OFF}"
     exit $rc
@@ -131,10 +136,14 @@ if [ "$S" -gt 0 ]; then
     echo "  ${C_YEL}${C_BLD}╚══════════════════════════════════════════════════════════╝${C_OFF}"
     grep '^SKIP' "$TM_RESULTS" | awk -F'\t' '{ printf "    %-22s %-30s %s\n", $2, $3, $5 }'
     echo
-    echo "  This host cannot hold POSIX modes/ownership, so those assertions"
-    echo "  would pass VACUOUSLY. Run them for real on a Linux host:"
-    echo "      bash tests/run.sh --remote claude_admin@<linux-host>"
-    echo "  (--strict there; a skip on that host is a failure.)"
+    echo "  Each line above names what it needed. The two usual reasons:"
+    echo "    modes/chown  this host cannot hold POSIX modes, so the assertion"
+    echo "                 would pass VACUOUSLY. Prove it on Linux:"
+    echo "                     bash tests/run.sh --remote claude_admin@<linux-host>"
+    echo "    node         the frontend cases. node is on the Windows"
+    echo "                 workstation and NOT on the Linux host, so those run"
+    echo "                 here and skip there. The two runs are complementary;"
+    echo "                 neither alone covers the suite."
 fi
 echo "${C_BLD}══════════════════════════════════════════════════════════════${C_OFF}"
 

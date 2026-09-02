@@ -1,0 +1,60 @@
+/*
+ * Jarvis Topic Manager — polkit authorisation for the Settings restart control.
+ * Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
+ *
+ * WHY POLKIT AND NOT SUDOERS
+ *
+ * topic-manager.service sets NoNewPrivileges=true. Measured on prod
+ * 2026-08-30: sudo under it dies with
+ *     sudo: The "no new privileges" flag is set, which prevents sudo
+ *           from running as root
+ * while the control run with NoNewPrivileges=no reached "a password is
+ * required". A sudoers entry is therefore dead code as the unit stands, and
+ * the hardening is not being removed to revive it.
+ *
+ * `systemctl` over D-Bus survives NoNewPrivileges because the caller never
+ * escalates — it asks PID 1 to act. Without a rule the denial is
+ * "Interactive authentication required", which is polkit refusing, not the
+ * sandbox. This file is that rule.
+ *
+ * SCOPE. Three units and an explicit verb each. addRule is evaluated for
+ * EVERY manage-units action on the system, so anything not matched here falls
+ * through to the default policy untouched — this file only ever returns YES,
+ * never NO, and never widens anything for any other subject.
+ *
+ * polkitd journals every authorisation it grants, so each restart leaves a
+ * record outside the application's own audit database.
+ */
+
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (subject.user !== "topic-manager") {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+
+    /* The application restarts itself. */
+    if (unit === "topic-manager.service" && verb === "restart") {
+        return polkit.Result.YES;
+    }
+
+    /* nginx: reload is the normal path; restart only when the operator ticks
+     * the box in Settings. Nothing here permits stop or kill — leaving the
+     * site down is not one of the outcomes this feature offers. */
+    if (unit === "nginx.service" && (verb === "reload" || verb === "restart")) {
+        return polkit.Result.YES;
+    }
+
+    /* The root-side `nginx -t` gate. Type=oneshot, so `systemctl start`
+     * returns the test's own verdict. It reads configuration and writes
+     * nothing; see systemd/topic-manager-nginx-test.service. */
+    if (unit === "topic-manager-nginx-test.service" && verb === "start") {
+        return polkit.Result.YES;
+    }
+
+    return polkit.Result.NOT_HANDLED;
+});

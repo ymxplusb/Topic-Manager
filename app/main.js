@@ -2,11 +2,19 @@ const { createApp, ref, computed, onMounted } = Vue;
 
 const App = {
     components: { LoginView, TopBar, TopicsTab, ConsumerGroupsTab, AuditTab, SettingsTab, AboutModal },
+    // ClusterModal is registered by SettingsTab, which is the only component
+    // that renders it. Naming it here too would add a second definition-time
+    // reference to the same global for no benefit.
     setup() {
         const user        = ref(null);
         const currentTab  = ref('topics');
         const clusters    = ref([]);
         const activeCluster = ref('');
+        // Served by /api/clusters so the Cluster Builder offers exactly what
+        // the backend will accept, rather than a second hardcoded list that
+        // drifts from tm/clusters.py.
+        const protocols   = ref([]);
+        const mechanisms  = ref([]);
         const brokerMeta  = ref(null);
         const topicCount  = ref(0);
         const showAbout   = ref(false);
@@ -31,8 +39,17 @@ const App = {
                 if (r.ok) {
                     const d = await r.json();
                     clusters.value = d.clusters || [];
+                    protocols.value = d.protocols || [];
+                    mechanisms.value = d.sasl_mechanisms || [];
                     const active = clusters.value.find(c => c.active);
-                    if (active && !activeCluster.value) activeCluster.value = active.id;
+                    // The selected cluster can be deleted by the Cluster
+                    // Builder while it is selected. Leaving activeCluster
+                    // pointing at a profile that no longer exists makes every
+                    // topic and consumer-group view fail with "cluster not
+                    // found", so fall back to whichever profile is active now.
+                    const stillThere = clusters.value.some(c => c.id === activeCluster.value);
+                    if (!stillThere) activeCluster.value = active ? active.id
+                        : (clusters.value[0] ? clusters.value[0].id : '');
                 }
             } catch { /* network unavailable — UI stays in previous state */ }
         }
@@ -102,8 +119,9 @@ const App = {
             });
         });
 
-        return { user, currentTab, clusters, activeCluster, brokerMeta, topicCount, showAbout, version,
-                 onLoggedIn, logout, onClusterChanged };
+        return { user, currentTab, clusters, activeCluster, protocols, mechanisms,
+                 brokerMeta, topicCount, showAbout, version,
+                 onLoggedIn, logout, onClusterChanged, fetchClusters };
     },
     template: `
 <div id="app-shell" v-if="user">
@@ -132,8 +150,11 @@ const App = {
       :clusters="clusters"
       :active-cluster-id="activeCluster"
       :version="version"
+      :protocols="protocols"
+      :mechanisms="mechanisms"
       @open-about="showAbout = true"
       @cluster-changed="onClusterChanged"
+      @clusters-changed="fetchClusters"
     />
   </div>
   <AboutModal v-if="showAbout" @close="showAbout = false" />

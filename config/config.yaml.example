@@ -24,19 +24,16 @@ auth:
   # Full DN of the AD group required for access
   required_group: "CN=Kafka-Admins,CN=Users,DC=int,DC=crypticlight,DC=com"
 
-clusters:
-  - id: "bare-metal"
-    name: "Bare Metal — Legacy Jarvis"
-    bootstrap_servers: "broker1.int.crypticlight.com:9092,broker2.int.crypticlight.com:9092,broker3.int.crypticlight.com:9092"
-    security_protocol: "PLAINTEXT"
-    active: true
-
-  - id: "k8s-jarvis"
-    name: "K8s Jarvis"
-    bootstrap_servers: "192.168.202.131:9094,192.168.202.132:9094,192.168.202.133:9094"
-    security_protocol: "SSL"
-    ssl_cafile: "/etc/topic-manager/kafka-k8s-ca.crt"
-    active: false
+# NOTE: cluster profiles are NOT in this file any more.
+#
+# As of v1.0.4 they live in /etc/topic-manager/clusters.d/clusters.yaml, which
+# the application owns and writes through the Cluster Builder in Settings. See
+# config/clusters.yaml.example. This file stays root-owned 0640
+# root:topic-manager and the application can only READ it, so an add/edit of a
+# cluster can never reach secret_key or ldap_bind_password.
+#
+# The upgrade moves an existing clusters: block out of here automatically and
+# idempotently; nothing needs to be done by hand.
 
 session:
   timeout_minutes: 30
