@@ -59,7 +59,13 @@ for rel, tags in EXPECTED.items():
         print("FAIL: %s not found" % rel); failures += 1; continue
 
     # bytes -> explicit utf-8, never a lossy decode
-    src = open(path, "rb").read().decode("utf-8")
+    # bytes -> explicit utf-8, then normalise CRLF. git autocrlf rewrites these
+    # files on every Windows checkout and the heredoc regex anchors on a bare
+    # \n, so without this the gate reports "expected heredoc not present" for
+    # heredocs that are plainly there — a false red that teaches people to
+    # ignore it. Measured 2026-09-02: a merge checkout turned all four
+    # "missing". Normalising is safe; the heredoc BODY is compiled either way.
+    src = open(path, "rb").read().decode("utf-8").replace("\r\n", "\n")
 
     found = re.findall(r"<<'([A-Z][A-Z0-9_]*)'\n", src)
     for tag in tags:

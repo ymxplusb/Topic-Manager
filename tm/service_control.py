@@ -44,6 +44,7 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 """
 import logging
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -184,7 +185,26 @@ def _restart_sequence(hard_nginx, on_result):
     # Waiting would mean waiting for the process this thread runs in to be
     # killed, and the client would be reaped with the cgroup either way.
     rc, out = _unit_action('restart', SERVICE_UNIT, extra=('--no-block',))
-    if rc != 0:
+
+    # Being SIGTERMed here is SUCCESS, not failure. systemd stops the whole
+    # cgroup, and this systemctl client is inside the very unit it just asked
+    # to restart — so it is killed before it can report, and returncode comes
+    # back as -SIGTERM (and occasionally -SIGKILL, after TimeoutStopSec).
+    #
+    # Measured on prod 2026-09-02: the unit restarted cleanly
+    # (Result=success, NRestarts=0, a clean Stopped -> Started pair) while this
+    # branch wrote "topic-manager restart FAILED (exit -15)" into the audit log.
+    # An operator reading that would conclude restarts are broken when they
+    # work. That is hazards[misleading-failure-message] — the same defect this
+    # project has already removed from die() and from the upgrade summary, so
+    # do not reintroduce it by treating a signal as an exit status.
+    _EXPECTED_SELF_KILL = (-signal.SIGTERM, -signal.SIGKILL)
+    if rc == 0:
+        on_result('topic-manager restart queued')
+    elif rc in _EXPECTED_SELF_KILL:
+        on_result('topic-manager restart queued; this worker was replaced '
+                  'mid-call (signal %d), which is the expected outcome' % -rc)
+    else:
         on_result('topic-manager restart FAILED (exit %d): %s'
                   % (rc, out or 'no output'))
 
