@@ -99,6 +99,11 @@ def require_auth(f):
         username = validate_session(db, sid)
         if not username:
             db.close()
+            # The other way a session ends. Recorded so the trail shows why a
+            # user stopped appearing, rather than leaving a silent gap.
+            audit.log_action(_cfg(), session.get('user', {}).get('username', '?'),
+                             'SESSION_EXPIRED', request.remote_addr or 'unknown',
+                             'session no longer valid', '')
             session.clear()
             return jsonify({'error': 'Session expired'}), 401
 
@@ -130,6 +135,14 @@ def login():
     ok, result = auth.validate_credentials(_cfg(), username, password)
     if not ok:
         log.warning('Login failed for user %s from %s: %s', username, request.remote_addr, result)
+        # The username here is ATTACKER-CONTROLLED and this row is downloadable
+        # by any authenticated user via /api/audit/export. audit.py neutralises
+        # spreadsheet formula prefixes and quotes with csv.writer, so it is safe
+        # to record — but it is bounded anyway, because an unbounded attacker
+        # string in a shared export is not something to rely on one control for.
+        audit.log_action(_cfg(), username[:64] or '(empty)', 'LOGIN_FAILED',
+                         request.remote_addr or 'unknown',
+                         'reason=%s' % str(result)[:120], '')
         return jsonify({'error': result}), 401
 
     cfg = _cfg()
@@ -144,6 +157,9 @@ def login():
         if active >= max_s:
             db.close()
             log.warning('Concurrent session limit (%d) reached for user %s', max_s, result['username'])
+            audit.log_action(cfg, result['username'], 'LOGIN_REFUSED',
+                             request.remote_addr or 'unknown',
+                             'concurrent session limit reached (%d/%d)' % (active, max_s), '')
             return jsonify({
                 'error': f'Concurrent session limit reached ({active}/{max_s}). '
                          f'Sign out from another session first.'
@@ -157,6 +173,15 @@ def login():
     session['user'] = result
 
     log.info('Login success: user=%s ip=%s', result['username'], request.remote_addr)
+    # Authentication events belong in the audit trail, not only the app log:
+    # the app log is not exported, not shown in the Audit tab, and rotates out
+    # after 14 days. NIST AU-2 treats logon/logoff as auditable events.
+    # request.remote_addr is meaningful as of v1.0.4 (ProxyFix, one hop) —
+    # before that every row would have recorded 127.0.0.1.
+    audit.log_action(cfg, result['username'], 'LOGIN',
+                     request.remote_addr or 'unknown',
+                     'bind=%s' % ('service' if _cfg().get('auth', {}).get('ldap_bind_dn')
+                                  else 'direct-user'), '')
     return jsonify({'user': result})
 
 
@@ -164,11 +189,16 @@ def login():
 @require_auth
 def logout():
     sid = session.get('sid')
+    user = session.get('user', {}).get('username', '?')
     if sid:
         db = get_db(_cfg())
         delete_session(db, sid)
         db.close()
-    log.info('Logout: user=%s', session.get('user', {}).get('username', '?'))
+    log.info('Logout: user=%s', user)
+    # Audited BEFORE session.clear(), because the username is read from the
+    # session and clearing it first would record '?' for every logout.
+    audit.log_action(_cfg(), user, 'LOGOUT',
+                     request.remote_addr or 'unknown', 'explicit sign-out', '')
     session.clear()
     return jsonify({'ok': True})
 

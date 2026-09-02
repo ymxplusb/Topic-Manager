@@ -1,10 +1,10 @@
 # Jarvis Topic Manager — Software Bill of Materials (SBOM)
 
-**Version:** 1.0.4
-**Date:** 2026-09-01
+**Version:** 1.0.5
+**Date:** 2026-09-02
 **Format:** CycloneDX-compatible markdown
 **Copyright:** (c) 2025–2026 James Rodman. All Rights Reserved.
-**SBOM Serial:** urn:topic-manager:sbom:1.0.4
+**SBOM Serial:** urn:topic-manager:sbom:1.0.5
 
 > The backend table below is generated from `requirements.txt`, which is the single source
 > of truth for every Python pin: `install/upgrade-full.sh` installs exactly these versions on
@@ -50,21 +50,44 @@ it is used, not a new pin. The pin remains 50.0.1 for the advisories listed unde
 
 ## Infrastructure
 
-| Component     | Version    | License    | Source            |
-|---------------|------------|------------|-------------------|
-| nginx         | 1.24.0     | BSD-2-Clause | nginx.org       |
-| Ubuntu Server | 24.04.4 LTS | Various   | ubuntu.com        |
-| Python        | 3.12.3     | PSF-2.0    | python.org        |
-| Apache Kafka  | 4.2.1      | Apache-2.0 | kafka.apache.org  |
-| polkit (`polkitd`) | 124 (Ubuntu `124-2ubuntu1.24.04.3`) | LGPL-2.0+ and Expat | polkit.freedesktop.org |
+Installed on the host by `install.sh`. Every row here is something this product
+adds to a machine, so every row can be checked against an advisory feed.
 
-**polkit is an OS component, not a bundled dependency.** It ships with Ubuntu Server 24.04
-and nothing here installs or vendors it. What v1.0.4 adds is one rules file,
-`/etc/polkit-1/rules.d/50-topic-manager.rules`, authorising the `topic-manager` account for
-three systemd unit/verb pairs (`restart topic-manager.service`, `reload`/`restart
-nginx.service`, `start topic-manager-nginx-test.service`) and nothing else. The version and
-licence above were read from the deployment host on 2026-09-01; on a host without polkit the
-product installs and runs, and only the Settings restart control is unavailable.
+| Component | Version | License | Source |
+|-----------|---------|---------|--------|
+| nginx | 1.24.0 | BSD-2-Clause | nginx.org |
+| polkit (`polkitd`) | 124 | LGPL-2.0+ and Expat | polkit.freedesktop.org |
+| Python | 3.12.3 | PSF-2.0 | python.org |
+| SQLite | 3.45.1 | Public Domain | sqlite.org |
+
+**SQLite is not a separate package.** `sqlite3` is not installed on the target;
+3.45.1 is the library compiled into Python 3.12.3's stdlib `_sqlite3`. It moves
+when Python moves, and cannot be upgraded independently.
+
+**polkit is an OS component we configure, not one we vendor.** It ships with
+Ubuntu Server 24.04. `install.sh` adds `/etc/polkit-1/rules.d/50-topic-manager.rules`,
+which authorises the `topic-manager` account for exactly three unit/verb pairs
+(`restart topic-manager.service`, `reload`/`restart nginx.service`,
+`start topic-manager-nginx-test.service`) and nothing else.
+
+### Target platform
+
+Ubuntu Server **24.04.4 LTS** — the platform this product is installed onto, not
+a component it ships. Recorded here so the baseline is not lost; patch state is
+the host owner's responsibility.
+
+### External services — NOT components
+
+These are connected to, never installed or shipped. Ports, protocols and
+directions are in `PPSM.csv`.
+
+| Service | Where | Measured |
+|---------|-------|----------|
+| Apache Kafka | broker1-3.int.crypticlight.com:9092 | 4.2.1 (`kafka_2.13-4.2.1`) |
+| Active Directory | dc1.int.crypticlight.com:636 (LDAPS) | — |
+
+Listing Kafka as a component overstated what this product ships: it is not
+present on the application host at all.
 
 ## Tooling (not shipped to the target host)
 

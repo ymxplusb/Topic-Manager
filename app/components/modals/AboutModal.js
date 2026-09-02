@@ -27,11 +27,13 @@ const AboutModal = {
                 { name: 'cryptography',    version: '50.0.1',   license: 'Apache-2.0 / BSD', url: 'cryptography.io' },
                 { name: 'Werkzeug',        version: '3.1.8',    license: 'BSD-3',     url: 'werkzeug.palletsprojects.com' },
             ],
+            // Installed on the host by install.sh. NOT a list of things the
+            // product talks to — Kafka and AD are external peers and live in
+            // PPSM.csv, and Ubuntu is the target platform, not a component.
             infra: [
-                { name: 'nginx',           version: '1.24.0',   license: 'BSD-2',      url: 'nginx.org' },
-                { name: 'Ubuntu',          version: '24.04.4 LTS', license: 'Various', url: 'ubuntu.com' },
-                { name: 'Python',          version: '3.12.3',   license: 'PSF-2.0',    url: 'python.org' },
-                { name: 'Apache Kafka',    version: '4.2.1',    license: 'Apache-2.0', url: 'kafka.apache.org' },
+                { name: 'nginx',           version: '1.24.0',   license: 'BSD-2',         url: 'nginx.org' },
+                { name: 'polkit',          version: '124',      license: 'LGPL-2.0+ / Expat', url: 'polkit.freedesktop.org' },
+                { name: 'Python',          version: '3.12.3',   license: 'PSF-2.0',       url: 'python.org' },
                 { name: 'SQLite',          version: '3.45.1',   license: 'Public Domain', url: 'sqlite.org' },
             ],
         };
@@ -41,7 +43,7 @@ const AboutModal = {
   <div class="modal xl">
     <div class="mhdr">
       <div>
-        <div class="mtitle"><img src="/jarvis-mark.png?v=1004" alt="" style="height:22px;width:22px;object-fit:contain;vertical-align:-4px;margin-right:8px">Jarvis Topic Manager</div>
+        <div class="mtitle"><img src="/jarvis-mark.png?v=1005" alt="" style="height:22px;width:22px;object-fit:contain;vertical-align:-4px;margin-right:8px">Jarvis Topic Manager</div>
         <div class="msub">Version {{ version }} &nbsp;·&nbsp; Copyright &copy; 2025–2026 James Rodman. All Rights Reserved.</div>
       </div>
       <button class="mclose" @click="$emit('close')">✕</button>
@@ -91,6 +93,9 @@ const AboutModal = {
       </div>
 
       <div style="margin-top:14px;font-size:.65rem;color:var(--text-muted);line-height:1.6">
+        Infrastructure above is installed on the host by the installer. SQLite is provided by
+        Python&rsquo;s standard library, not a separate package. Target platform: Ubuntu Server 24.04.4 LTS.<br>
+        Kafka brokers and Active Directory are external services this product connects to, not components it ships &mdash; see PPSM.<br>
         Third-party licenses are reproduced in <strong style="color:var(--text-secondary)">NOTICES.md</strong> in the repository root.<br>
         This product includes software developed by third parties under the licenses listed above.
       </div>

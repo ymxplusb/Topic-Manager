@@ -85,7 +85,7 @@ Copyright 2007 Pallets
 ---
 
 ## SQLite
-Version: 3.x
+Version: 3.45.1 (provided by Python 3.12.3 stdlib `_sqlite3`, not a separate package)
 License: Public Domain
 Source: sqlite.org
 

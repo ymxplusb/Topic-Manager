@@ -244,7 +244,7 @@ const SettingsTab = {
         downloadPpsm() {
             const rows = [
                 ['Jarvis Topic Manager — PPSM', '', '', '', '', ''],
-                ['Version', '1.0.4', '', '', '', ''],
+                ['Version', '1.0.5', '', '', '', ''],
                 ['Generated', new Date().toISOString().split('T')[0], '', '', '', ''],
                 ['', '', '', '', '', ''],
                 ['Section', 'Service/Component', 'Port', 'Protocol', 'Direction', 'Description'],

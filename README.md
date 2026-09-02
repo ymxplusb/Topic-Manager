@@ -1,4 +1,4 @@
-# Jarvis Topic Manager v1.0.4
+# Jarvis Topic Manager v1.0.5
 
 **Standalone Kafka topic administration frontend for the Jarvis ecosystem.**
 
@@ -191,7 +191,7 @@ curl http://127.0.0.1:5001/api/health
 curl -sk https://localhost/api/health
 ```
 
-Both should return: `{"status":"ok","version":"1.0.4"}`
+Both should return: `{"status":"ok","version":"1.0.5"}`
 
 Then open `https://your-hostname.yourdomain.com` in a browser and sign in with an AD account that is a member of `Kafka-Admins`.
 
@@ -714,20 +714,20 @@ On an **internet-connected** machine with the repo checked out:
 
 ```bash
 bash prepare-offline.sh --bundle
-# Creates: topic-manager-offline-1.0.4.tar.gz
+# Creates: topic-manager-offline-1.0.5.tar.gz
 # Contains: all source files + Python wheels + Vue.js lib
 ```
 
 Transfer the bundle to the air-gapped host:
 ```bash
-scp topic-manager-offline-1.0.4.tar.gz user@target:/tmp/
+scp topic-manager-offline-1.0.5.tar.gz user@target:/tmp/
 ```
 
 On the air-gapped host — root runs `install.sh`, so the tree it runs from is
 created root-owned first and the bundle is unpacked straight into it:
 ```bash
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/install-src
-sudo tar xzf /tmp/topic-manager-offline-1.0.4.tar.gz   -C /var/lib/topic-manager/install-src --strip-components=1
+sudo tar xzf /tmp/topic-manager-offline-1.0.5.tar.gz   -C /var/lib/topic-manager/install-src --strip-components=1
 sudo bash /var/lib/topic-manager/install-src/install.sh   # auto-detects offline mode
 ```
 
@@ -836,7 +836,7 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
 - HTTPOnly + Secure + SameSite=Lax session cookies
 - Security headers on all routes: HSTS, CSP (`frame-ancestors 'none'`, `form-action 'none'`, `base-uri 'self'`), X-Content-Type-Options, Referrer-Policy
 - Server-side session store (SQLite); session tokens never leave the server in a readable form
-- Audit log for all create/delete/config-change operations with user, IP, timestamp, and detail — including cluster profile changes (`CLUSTER_CREATE` / `CLUSTER_UPDATE` / `CLUSTER_DELETE`, before and after) and service restarts (`SERVICE_RESTART`, `SERVICE_RESTART_REFUSED`, `SERVICE_RESTART_STEP`). SASL passwords are redacted and certificate paths reduced to basenames before anything is logged, because any authenticated user can export the log
+- Audit log with user, IP, timestamp and detail. **15 audited actions**: topics (`CREATE`, `DELETE`, `UPDATE_CONFIG`); cluster profiles (`CLUSTER_CREATE`, `CLUSTER_UPDATE`, `CLUSTER_DELETE`, before and after); service restarts (`SERVICE_RESTART`, `SERVICE_RESTART_STEP`, `SERVICE_RESTART_REFUSED`, `SERVICE_RESTART_THROTTLED`); and authentication (`LOGIN`, `LOGIN_FAILED`, `LOGIN_REFUSED`, `LOGOUT`, `SESSION_EXPIRED`). SASL passwords are redacted and certificate paths reduced to basenames before anything is logged, because any authenticated user can export the log
 - Destructive actions require name-match confirmation
 - Session timeout: 30 minutes (configurable)
 - Fail-closed: application refuses to start if `secret_key` is absent or still the placeholder

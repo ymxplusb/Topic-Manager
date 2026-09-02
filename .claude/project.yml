@@ -68,7 +68,23 @@ surfaces:
       v1.0.0 dependency drift was corrected on 2026-08-30; it now lists the
       CVE-clean set. A version cascade normally makes no edit here.
   - path: README.md
-    note: version references + the Upgrading section operators are sent to
+    note: >-
+      version references + the Upgrading section operators are sent to.
+      ALSO carries the Compliance audit-actions list, which is coupled to the
+      audit.log_action() call sites in tm/routes.py and must enumerate every
+      one of them. Found 2026-09-02 (v1.0.5): the list named 6 of the 10
+      actions then in the code — SERVICE_RESTART_THROTTLED, CREATE, DELETE and
+      UPDATE_CONFIG were absent, so a compliance reader was given an
+      undercount. It now lists all 15. Re-derive the set with the AST, never
+      with grep: the action is the THIRD POSITIONAL ARG and sits on the line
+      AFTER log_action( at most call sites, so a line-oriented grep sees 6 of
+      15 and a multi-line regex truncated CLUSTER_CREATE to "STER_CREATE"
+      while still returning a count of 15 — a right total made of a wrong set.
+      Both were tried on 2026-09-02 and both were wrong. Use:
+      python3 -c "import ast;t=ast.parse(open('tm/routes.py').read());
+      print(sorted({n.args[2].value for n in ast.walk(t)
+      if isinstance(n,ast.Call) and getattr(n.func,'attr','')=='log_action'
+      and len(n.args)>2 and isinstance(n.args[2],ast.Constant)}))"
   - path: CHANGELOG.md
     note: new section per release
   - path: TROUBLESHOOTING.md
@@ -121,6 +137,31 @@ surfaces:
 # NOT a version surface, deliberately: sonar-project.properties carries
 # projectKey/projectName/sources/exclusions/python.version and NO
 # sonar.projectVersion. Do not add one during a cascade.
+# INFRASTRUCTURE VERSIONS ARE NOT GATED. tools/check-sbom-consistency.sh
+# validates only components present in requirements.txt, so the SBOM's
+# Infrastructure rows have no source of truth and are skipped by design
+# ("if want is None: continue"). The gate was not wrong, it was SILENT — which
+# is how nginx read "latest", SQLite read "3.x", and Apache Kafka sat at 3.8.x
+# for months while the brokers actually ran 4.2.1, a whole major version out.
+# Kafka was also not a component at all: it is not installed on the app host.
+# Re-measure these from the deployed host EVERY release and pin the result into
+# SBOM.md and app/components/modals/AboutModal.js.
+# MEASURED 2026-09-02 on 192.168.202.90 for the v1.0.5 cascade: nginx 1.24.0,
+# polkitd 124 (124-2ubuntu1.24.04.3), Python 3.12.3, SQLite 3.45.1, Ubuntu
+# 24.04.4 LTS. All five unchanged from the v1.0.4 pinning — no SBOM or
+# AboutModal edit was owed. "Unchanged" is a measurement result, not a reason
+# to skip the measurement next time.
+# NOTE the ssh quoting trap: `dpkg-query -W -f='${Version}'` sent through a
+# double-quoted ssh command has ${Version} eaten by the LOCAL shell and prints
+# the literal "%s". Send it single-quoted with \${Version}, or the gate reads
+# as run and measures nothing.
+infra_remeasure:
+  - "nginx -v"
+  - "dpkg-query -W -f='${Version}' polkitd"
+  - "/opt/topic-manager/venv/bin/python3 --version"
+  - "/opt/topic-manager/venv/bin/python3 -c 'import sqlite3; print(sqlite3.sqlite_version)'"
+  - ". /etc/os-release; echo $VERSION    # target-platform line, not a component"
+
 straggler_sweep:
   - "grep -rn '1\\.0\\.[0-9]' --include='*.md' --include='*.js' --include='*.py' --include='*.html' . | grep -v CHANGELOG"
   # The .md/.js/.py/.html sweep above globs no .sh and no .csv, which is why
@@ -313,16 +354,15 @@ promote:
     name: TopicManager
     user: claude_admin
     key: ~/.ssh/claude_admin
-    running_version: "1.0.3"
+    running_version: "1.0.4"
     note: >-
-      MEASURED 2026-09-01: `curl -sk https://192.168.202.90/api/health` returns
-      {"status":"ok","version":"1.0.3"}, so running_version above is correct and
-      the box is current with the last release. The previous note here still
-      said "PROD IS ON 1.0.0, NOT 1.0.3" and contradicted the very field it
-      annotated — it was written before the v1.0.3 deploy and never revised.
-      v1.0.4 is NOT deployed: running_version tracks the HOST, never the repo,
-      so a version cascade must not move it. Verify with the curl above before
-      assuming anything.
+      MEASURED 2026-09-02: `curl -sk https://192.168.202.90/api/health` returns
+      {"status":"ok","version":"1.0.4"}, so the host has taken the v1.0.4
+      release since the last sweep and running_version above was moved 1.0.3 ->
+      1.0.4 to match the MEASUREMENT, not the repo. This field tracks the HOST,
+      never the repo: the v1.0.5 cascade did NOT move it to 1.0.5, because
+      1.0.5 is not deployed. Two earlier notes here asserted a remembered
+      number that contradicted the field they annotated. Run the curl.
   qc_host: none
   note: >-
     cortex-2 (192.168.202.96) is RESERVED for CORTEX /qc and must not be used
@@ -492,10 +532,12 @@ hosts:
 # ── principles ──────────────────────────────────────────────────────────────
 principles:
   - "Never assume the repo version is the deployed version — check
-     /api/health first, every time. This principle used to assert 'Prod is on
-     1.0.0'; measured 2026-09-01 prod answers 1.0.3, so the principle had
-     itself become the stale version claim it warns about. State the check,
-     not a remembered number."
+     /api/health first, every time. This principle has now gone stale TWICE by
+     baking in the answer: it asserted 'Prod is on 1.0.0', was corrected on
+     2026-09-01 to 'prod answers 1.0.3', and on 2026-09-02 prod answered 1.0.4.
+     A principle that carries a number is a principle with a shelf life. The
+     number lives in promote.prod.running_version and NOWHERE else; this
+     principle states only the check: curl -sk https://192.168.202.90/api/health"
   - "This repo has no CI. It DOES have a test suite (tests/, 120 cases) as of 2026-09-01. Never report that CI passed or that tests
      are green; say exactly which of the eight declared gates (5 syntax/consistency + sca + the repo test suite) ran."
   - "Every authenticated user is a Kafka admin by design. There is no role

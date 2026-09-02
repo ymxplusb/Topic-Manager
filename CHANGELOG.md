@@ -5,6 +5,54 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
+## [1.0.5] — 2026-09-02
+
+Security release. Authentication events are now written to the audit database, not only to
+the application log.
+
+### Added
+- **Five audit actions for authentication**, bringing the total to **15**
+  (`tm/routes.py`): `LOGIN` (successful sign-in, recording whether the service bind or the
+  direct user bind was used), `LOGIN_FAILED` (rejected credentials, with the reason),
+  `LOGIN_REFUSED` (credentials were good but the concurrent-session limit was already
+  reached), `LOGOUT` (explicit sign-out) and `SESSION_EXPIRED` (the session was no longer
+  valid when a request arrived).
+
+  **Why the app log was not enough.** `log.info('Login success: ...')` and its `log.warning`
+  counterpart already existed, but the application log is not exported by
+  `/api/audit/export`, is not shown in the Audit tab, and `install/logrotate.d/topic-manager`
+  rotates it daily with `rotate 14` — so who signed in three weeks ago was simply gone. NIST
+  SP 800-53 **AU-2** treats logon, logoff and logon failure as auditable events; every other
+  privileged action in this product was already audited and authentication was the gap.
+
+  `LOGOUT` is recorded **before** `session.clear()`, because the username is read out of the
+  session and clearing it first would have written `?` on every row.
+
+- The client address on these rows is the **real** client IP. That is the v1.0.4 ProxyFix
+  (one hop) working: a login through nginx now records `10.250.0.2` rather than the
+  `127.0.0.1` every row would have carried before it.
+
+### Security
+- **`LOGIN_FAILED` records an attacker-controlled value.** The attempted username is
+  whatever was posted to `/api/auth/login`, by definition unauthenticated input, and the row
+  it lands in is downloadable as CSV by **any** authenticated user through
+  `/api/audit/export`. Two controls apply: the username is **bounded to 64 characters**
+  before it is stored, and `tm/audit.py` already neutralises spreadsheet formula prefixes
+  (`_csv_safe`) and quotes every field (`csv.writer(..., quoting=csv.QUOTE_ALL)`) on export.
+  The bound is deliberately belt-and-braces — an unbounded attacker-controlled string in a
+  shared export is not something to rest on a single control.
+
+### Known limitations
+- **`/api/auth/login` still has no rate limiting.** Nothing in the application or in the
+  nginx configuration throttles authentication attempts. A brute-force run now writes **one
+  audit row per attempt** into a table that has **no retention or pruning of any kind** —
+  there is no `DELETE FROM audit` anywhere in the codebase. This is a real improvement for
+  detection and a real growth risk: the audit database is bounded only by how many times an
+  unauthenticated client is willing to guess. Rate limiting on the login route, and a
+  retention policy for the audit table, are both outstanding.
+
+---
+
 ## [1.0.4] — 2026-09-01
 
 Feature release. Cluster profiles become editable from the UI, the service can be restarted

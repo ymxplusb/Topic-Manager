@@ -1,6 +1,6 @@
 # Jarvis Topic Manager — Installation Guide
 
-**Version:** 1.0.4
+**Version:** 1.0.5
 **Platform:** Ubuntu Server 24.04 LTS
 **Completed by:** Human administrator
 **Copyright (c) 2025-2026 James Rodman. All Rights Reserved.**
@@ -493,11 +493,11 @@ sudo systemctl status nginx
 
 # Quick health check (backend directly)
 curl http://127.0.0.1:5001/api/health
-# Expected: {"status":"ok","version":"1.0.4"}
+# Expected: {"status":"ok","version":"1.0.5"}
 
 # Health check through nginx (HTTPS)
 curl -sk https://localhost/api/health
-# Expected: {"status":"ok","version":"1.0.4"}
+# Expected: {"status":"ok","version":"1.0.5"}
 ```
 
 If `topic-manager` fails to start:
@@ -623,14 +623,14 @@ curl -sk https://localhost/api/version | python3 -m json.tool
 ```bash
 cd /path/to/topic-manager                 # wherever the repo is checked out
 bash prepare-offline.sh --bundle
-# Creates: topic-manager-offline-1.0.4.tar.gz  (named from VERSION)
+# Creates: topic-manager-offline-1.0.5.tar.gz  (named from VERSION)
 ```
 
 ### Transfer to air-gapped host:
 
 ```bash
 scp -i ~/.ssh/claude_admin \
-  topic-manager-offline-1.0.4.tar.gz \
+  topic-manager-offline-1.0.5.tar.gz \
   claude_admin@192.168.202.90:/tmp/
 ```
 
@@ -641,7 +641,7 @@ scp -i ~/.ssh/claude_admin \
 # the bundle is unpacked straight into it — never staged in /tmp, where the
 # directory would be created by whichever account got there first.
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/install-src
-sudo tar xzf /tmp/topic-manager-offline-1.0.4.tar.gz   -C /var/lib/topic-manager/install-src --strip-components=1
+sudo tar xzf /tmp/topic-manager-offline-1.0.5.tar.gz   -C /var/lib/topic-manager/install-src --strip-components=1
 sudo bash /var/lib/topic-manager/install-src/install.sh
 # Script detects offline mode and uses install/packages/
 ```
@@ -796,4 +796,4 @@ of profiles is never replaced by the example — along with the ownership and mo
 ---
 
 *End of Installation Guide*
-*Jarvis Topic Manager v1.0.4 — Copyright (c) 2025-2026 James Rodman*
+*Jarvis Topic Manager v1.0.5 — Copyright (c) 2025-2026 James Rodman*
