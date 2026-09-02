@@ -46,16 +46,16 @@ it is used, not a new pin. The pin remains 50.0.1 for the advisories listed unde
 
 | Component | Version | License      | Source       |
 |-----------|---------|--------------|--------------|
-| SQLite    | 3.x     | Public Domain | sqlite.org  |
+| SQLite    | 3.45.1  | Public Domain | sqlite.org  |
 
 ## Infrastructure
 
 | Component     | Version    | License    | Source            |
 |---------------|------------|------------|-------------------|
 | nginx         | 1.24.0     | BSD-2-Clause | nginx.org       |
-| Ubuntu Server | 24.04 LTS  | Various    | ubuntu.com        |
-| Python        | 3.12       | PSF-2.0    | python.org        |
-| Apache Kafka  | 3.8.x      | Apache-2.0 | kafka.apache.org  |
+| Ubuntu Server | 24.04.4 LTS | Various   | ubuntu.com        |
+| Python        | 3.12.3     | PSF-2.0    | python.org        |
+| Apache Kafka  | 4.2.1      | Apache-2.0 | kafka.apache.org  |
 | polkit (`polkitd`) | 124 (Ubuntu `124-2ubuntu1.24.04.3`) | LGPL-2.0+ and Expat | polkit.freedesktop.org |
 
 **polkit is an OS component, not a bundled dependency.** It ships with Ubuntu Server 24.04
