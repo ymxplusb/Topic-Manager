@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Jarvis Topic Manager — Prepare Offline Bundle
-# Version: 1.0.3
+# Version: 1.0.4
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 #
 # Run this on an INTERNET-CONNECTED machine (Linux/Mac/WSL) to download
@@ -148,8 +148,8 @@ echo ""
 echo "  UPGRADE an existing host — NOT install.sh, which rsync --deletes the"
 echo "  deployed tree. The upgrade reads the bundle from one fixed path:"
 echo "    sudo install -d -m 700 -o root -g root /var/lib/topic-manager/offline-src"
-echo "    sudo tar xzf topic-manager-offline-${VERSION}.tar.gz -C /tmp"
-echo "    sudo mv /tmp/$(basename "$SCRIPT_DIR")/* /var/lib/topic-manager/offline-src/"
+echo "    sudo tar xzf topic-manager-offline-${VERSION}.tar.gz \\"
+echo "      -C /var/lib/topic-manager/offline-src --strip-components=1"
 echo "    sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline"
 echo ""
 echo "  Full procedure: README.md -> 'Offline (air-gapped) upgrade'"

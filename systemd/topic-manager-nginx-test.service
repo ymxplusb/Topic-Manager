@@ -1,0 +1,43 @@
+[Unit]
+Description=Jarvis Topic Manager — root-side nginx configuration test
+Documentation=man:nginx(8)
+
+# WHY THIS UNIT EXISTS
+#
+# The Settings restart control must not touch nginx on an untested
+# configuration. `nginx -t` cannot be run by the topic-manager account —
+# measured on prod 2026-09-01:
+#
+#   $ sudo -u topic-manager /usr/sbin/nginx -t
+#   nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+#   [emerg] open() "/run/nginx.pid" failed (13: Permission denied)
+#   nginx: configuration file /etc/nginx/nginx.conf test failed   (exit 1)
+#
+# and `-g 'pid /tmp/...;'` is refused as a duplicate of the pid directive
+# nginx.conf already sets at line 3. Passing `-e stderr` does not help; the
+# pid file is the blocker, not the error log.
+#
+# So the test runs as root, here, with a fixed absolute ExecStart in a
+# root-owned unit file that the application cannot influence. It is
+# Type=oneshot, so `systemctl start` blocks until it finishes and exits
+# non-zero when the test fails — a conclusive verdict, not an inference.
+#
+# It reads configuration and writes nothing.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nginx -t
+RemainAfterExit=no
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=topic-manager-nginx-test
+
+# It needs root to open /run/nginx.pid and /var/log/nginx, and nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/run /var/log/nginx
+
+# No [Install] section: this unit is never enabled. It is started on demand
+# by the restart control and exits.

@@ -5,6 +5,117 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
+## [1.0.4] — 2026-09-01
+
+Feature release. Cluster profiles become editable from the UI, the service can be restarted
+from Settings, the installer and permission model are rebuilt around both, and a banner
+defect that was silently destroying operator settings is fixed.
+
+### Added
+- **Interactive Cluster Builder** (Settings → Cluster Profiles,
+  `app/components/modals/ClusterModal.js`). Add, modify and delete cluster profiles over
+  `PLAINTEXT`, `SSL` and `SASL_SSL`, with `ssl_cafile` / `ssl_certfile` / `ssl_keyfile`
+  supplied by the operator. Certificates are chosen as **files and posted as content** — the
+  API never accepts a path, so it cannot be aimed at an arbitrary file on the server, and
+  cert filenames are generated server-side. Every add, modify and delete is written to the
+  audit log with before/after values. Changes take effect on the next request; no restart
+  is needed.
+- **Service restart control** (Settings → Service Control). Restarts `topic-manager.service`
+  and reloads `nginx.service`, with a full nginx restart available behind an explicit
+  checkbox because it drops every in-flight request for all users. The nginx configuration
+  is tested **before** anything is touched, and the UI then polls `/api/health` for 60
+  seconds and reports that the service did not come back, rather than reading the API's 202
+  as success — a 202 says only that the work was accepted.
+- `systemd/topic-manager-nginx-test.service` — a **third unit**: `Type=oneshot`, root, with a
+  fixed absolute `ExecStart` of `nginx -t` in a root-owned file. It reads configuration and
+  writes nothing. It exists because the requirement *nginx must be tested before any nginx
+  action* is otherwise unimplementable. Measured on prod 2026-09-01:
+  `sudo -u topic-manager /usr/sbin/nginx -t` exits 1 with
+  `[emerg] open() "/run/nginx.pid" failed (13: Permission denied)`, and overriding the pid
+  path is refused as a duplicate of `nginx.conf`. A successful `systemctl reload nginx` is
+  **not** a substitute: `ExecReload` is `nginx -s reload`, which exits 0 whether or not the
+  master accepted the new configuration.
+- `install/polkit/50-topic-manager.rules` — authorisation for the restart control via
+  **polkit, not sudoers**. `topic-manager.service` sets `NoNewPrivileges=true`, under which
+  sudo refuses to run at all, so a sudoers entry is dead code — and the hardening is not
+  being removed to revive it. The D-Bus path survives `NoNewPrivileges` because the caller
+  never escalates. The rule matches `subject.user == "topic-manager"`, checks
+  `action.lookup("unit")` against a unit and verb allowlist, and returns `YES` only;
+  everything else falls through as `NOT_HANDLED`.
+- `tm/migrate_clusters.py` — one migration module with two callers (`install.sh` and
+  `install/upgrade-full.sh`) rather than two copies of it. Line-based removal, so operator
+  comments in `config.yaml` survive; it verifies both files afterwards and refuses to report
+  success while `config.yaml` still carries the key.
+- `config/clusters.yaml.example`, and `tests/t06`–`t09`: new cases over the cluster store,
+  the config reload, the banner load gate and the permission boundary.
+
+### Changed
+- **The cluster list moved out of `config.yaml`** into
+  `/etc/topic-manager/clusters.d/clusters.yaml`. An editable cluster list needs a file the
+  application can write, and `config.yaml` is root-owned `0640 root:topic-manager` precisely
+  so the application can read `secret_key` and the LDAP bind password and never write them.
+  Widening that file — or its directory — was not an option: **a directory the application
+  can write is a directory in which it can UNLINK a root-owned secrets file**, because
+  directory write *is* unlink. So the store is a new file in a new directory. `clusters.d/`
+  is app-writable, since an atomic replace has to create a temp file beside its target;
+  `/etc/topic-manager` itself is pinned `root:topic-manager 0750` and stays unwritable by
+  the application. `t09` measures that boundary by asking the kernel as the unprivileged
+  principal rather than by reading mode bits.
+- Configuration staleness was **two caches, not one**. `tm/config.py` returned its first
+  parse forever, and `tm/app.py` froze a second copy into `app.config['TM_CONFIG']` that was
+  handed to every route. With four gunicorn workers, fixing either one alone leaves a newly
+  saved cluster visible on roughly one request in four, which presents as an intermittent
+  Kafka fault. The loader now keys its cache on `(inode, size, mtime_ns)`, and the second
+  copy is gone: `app.config` holds the path and routes re-read per request.
+- `systemd/topic-manager.service` declares `TM_CLUSTERS_DIR` and `TM_CLUSTER_CERT_DIR`, and
+  `ReadWritePaths` gains `/etc/topic-manager/clusters.d` — and deliberately **not** its
+  parent.
+- `install.sh` creates the store and cert directories with `install(1)`, installs
+  `config.yaml` with `install(1)` rather than `cp` plus `chmod`, runs the migration, and
+  installs the polkit rule and the nginx-test unit.
+- `install/upgrade-full.sh`: the three new paths join `BASELINE_PATHS`; Phase 4 backs them
+  up and asserts the copy; Phase 9 installs the polkit rule and the test unit; Phase 10
+  restores the store before the migration; Phase 11 runs the migration and then **measures**
+  the permission boundary as the application user, failing the upgrade if the application
+  can write `config.yaml` or its directory.
+- `tools/check-config-example.sh` follows the split: a `config.yaml.example` that still
+  carries `clusters:` is now itself a gate failure.
+
+### Fixed
+- **The Branding & Classification banner silently overwrote the operator's real banner.**
+  This was reported as a cosmetic flash of the green `UNCLASSIFIED` default before saved
+  values loaded. It was not cosmetic. `SettingsTab` seeded `UNCLASSIFIED` / `green` /
+  `white` into the same `data()` fields that `saveBanner()` reads, and `loadSettings()`
+  returned early on a non-ok response without telling anyone. An expired session on load
+  followed by one toggle therefore **PUT those defaults over the operator's configured
+  banner** — and the banner is a global setting, so the loss applied to every user. The
+  flash and the data loss are one root cause: defaults seeded into the fields the save path
+  reads. Fixed at that root — the fields start empty, the controls are not rendered until
+  `/api/settings` has actually answered, a load failure is surfaced with a Retry action, and
+  both save paths refuse while settings have not loaded. Two independent barriers.
+- Deleting the active cluster no longer leaves the active-cluster reference pointing at
+  nothing.
+- `/api/clusters` refuses a disabled cluster, and refuses a cluster id rename.
+
+### Known issues
+- The polkit rule and `topic-manager-nginx-test.service` have **never been loaded** by
+  polkitd or systemd. Nothing in this repo can load them — no agent holds a deploy verb — so
+  the end-to-end restart path is unproven on a live host. The unit needs operator sign-off.
+- The installer claim that it survives install, upgrade **and** reinstall is not proven end
+  to end; there is no QC host for this project. Proven on Linux: the permission layout, the
+  boundary itself, the migration's idempotency across three runs, and the backup path. Not
+  proven: a real fresh install and a real upgrade.
+- **Role separation is unchanged, and now wider.** Every `Kafka-Admins` member can now also
+  restart the service and rewrite the cluster list. Audit logging records that; it does not
+  control it. This needs a policy decision.
+- Documentation prose still describes the pre-split file layout in places (README.md file
+  layout, docs/INSTALL.md, TROUBLESHOOTING.md, install/README.md). A documentation pass is
+  queued; this release moved version strings and this section only.
+- `install.sh` still fetches Vue from the CDN without an integrity check (carried from
+  1.0.3).
+
+---
+
 ## [1.0.3] — 2026-08-30
 
 Tooling and dependency release. No application code changed; the frontend and the Flask

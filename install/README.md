@@ -11,7 +11,7 @@ only thing that checks the bundle is complete while there is still a network to 
 | `install/packages/python/` | One wheel (or sdist) for **every** `==` pin in `requirements.txt`. `prepare-offline.sh` refuses to declare the bundle good if any pin has no matching artefact |
 | `install/packages/apt/` | Optional `.deb` files for the Ubuntu 24.04 build dependencies. Only downloaded when the bundling machine is Debian/Ubuntu |
 | `lib/vue.global.prod.js` | Vue, at the version **and SHA-256** pinned in `install/upgrade-full.sh`, verified after download and written byte-for-byte — nothing is prepended to it |
-| everything else | The repo itself: `tm/`, `app/`, `index.html`, `nginx/`, `systemd/`, `config/`, `requirements.txt` |
+| everything else | The repo itself: `tm/` (including `tm/migrate_clusters.py`, which both the installer and the upgrade run), `app/`, `index.html`, `nginx/`, `systemd/` (**both** units: `topic-manager.service` and `topic-manager-nginx-test.service`), `install/polkit/50-topic-manager.rules`, `config/` (`config.yaml.example` **and** `clusters.yaml.example`), `requirements.txt` |
 
 `bash prepare-offline.sh --bundle` additionally writes
 `topic-manager-offline-<VERSION>.tar.gz` one directory **above** the repo. The tarball
@@ -38,8 +38,7 @@ Use the upgrade script, which reads the bundle from one fixed path:
 
 ```bash
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/offline-src
-sudo tar xzf topic-manager-offline-<version>.tar.gz -C /tmp
-sudo mv /tmp/topic-manager/* /var/lib/topic-manager/offline-src/
+sudo tar xzf topic-manager-offline-<version>.tar.gz   -C /var/lib/topic-manager/offline-src --strip-components=1
 
 sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline
 ```
@@ -53,6 +52,11 @@ sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline
 > alone, so the documented steps would not notice. The upgrade script now asserts that the
 > directory **and every ancestor** are root-owned and not group/other-writable before it
 > reads a single byte, and refuses otherwise.
+>
+> The same reasoning applies to the *staging* step. The extraction above writes straight into
+> the root-owned destination with `--strip-components=1`; it never lands in `/tmp` first. An
+> unpack into `/tmp` followed by `mv` hands the same problem back — the directory `tar`
+> extracts into is created by whoever gets there first, and root then reads every byte of it.
 
 It is not configurable and is not searched for. The bundle is
 left in place after a successful run — an air-gapped host cannot fetch another one, and a
@@ -66,3 +70,7 @@ Full procedure with the transfer steps: README.md → *Offline (air-gapped) upgr
 |---|---|
 | `upgrade-full.sh` | The upgrade script. See README.md → *Upgrading* |
 | `logrotate.d/topic-manager` | Deployed to `/etc/logrotate.d/` by both `install.sh` and the upgrade |
+| `polkit/50-topic-manager.rules` | Installed to `/etc/polkit-1/rules.d/` by both `install.sh` and the upgrade, `root:root 0644`. It authorises the `topic-manager` account for exactly three systemd unit/verb pairs — `restart topic-manager.service`, `reload`/`restart nginx.service`, `start topic-manager-nginx-test.service` — and returns `NOT_HANDLED` for everything else. No `stop`, no `kill`. Both scripts warn and continue if `/etc/polkit-1/rules.d` does not exist: only the Settings restart control depends on it. See README.md → *Privileges the install grants* |
+
+A bundled host therefore gets the same privilege model as an online one — the polkit rule
+and both systemd units travel inside the bundle, because the bundle is the repo.

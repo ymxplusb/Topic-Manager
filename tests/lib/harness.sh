@@ -28,6 +28,10 @@ TM_REPO_ROOT="${TM_REPO_ROOT:-$(cd "${TM_TESTS_DIR}/.." && pwd)}"
 # outside the repo, so a mutation control never edits a tracked file — there is
 # no cp/restore dance to get wrong, and nothing to destroy if a run is killed.
 tm_upgrade_sh() { echo "${TM_UPGRADE_SH:-${TM_REPO_ROOT}/install/upgrade-full.sh}"; }
+# install.sh is a second script under test as of v1.0.4: it creates the
+# permission boundary the cluster store depends on. Same contract — a mutation
+# control points this at a copy outside the repo, never at the tracked file.
+tm_install_sh() { echo "${TM_INSTALL_SH:-${TM_REPO_ROOT}/install.sh}"; }
 
 # ─── output ──────────────────────────────────────────────────────────────────
 if [ -t 1 ] && [ -z "${TM_NO_COLOUR:-}" ]; then
@@ -157,6 +161,36 @@ tm_probe_modes() {
 
 TM_WEB_USER="${TM_TEST_WEB_USER:-www-data}"
 
+# tm_python -> the interpreter these tests should drive tm/ with.
+#
+# On a HOST the service's own venv is the honest answer: it is the interpreter
+# gunicorn runs, and the only one with ldap3, confluent-kafka and cryptography.
+# Falling back to the system python3 would silently test a different
+# environment from the one that runs in production.
+tm_python() {
+    if [ -n "${TM_PYTHON:-}" ]; then echo "$TM_PYTHON"; return 0; fi
+    if [ -x /opt/topic-manager/venv/bin/python3 ]; then
+        echo /opt/topic-manager/venv/bin/python3; return 0
+    fi
+    if command -v python3 >/dev/null 2>&1; then echo python3; return 0; fi
+    if command -v python  >/dev/null 2>&1; then echo python;  return 0; fi
+    echo ""
+}
+
+# tm_probe_tmapp -> 0 when `import tm.routes` succeeds. It imports the real
+# module rather than checking a list of module names, so a new backend
+# dependency does not silently make this lie.
+#
+# tm.routes, NOT tm.app: tm/app.py imports .routes lazily inside create_app(),
+# so `import tm.app` succeeds on a workstation with no ldap3 and the probe
+# would report a capability the host does not have. Found while writing t07.
+tm_probe_tmapp() {
+    local py; py="$(tm_python)"
+    [ -n "$py" ] || return 1
+    PYTHONPATH="$TM_REPO_ROOT" PYTHONDONTWRITEBYTECODE=1 \
+        "$py" -c "import tm.routes" >/dev/null 2>&1
+}
+
 # tm_open_traversal <path> — mktemp -d makes 0700 directories, so a fake root
 # under it is unreachable by www-data no matter what the file mode says, and an
 # effective-access assertion would fail for a reason that has nothing to do
@@ -168,6 +202,37 @@ tm_open_traversal() {
         chmod o+x "$p" 2>/dev/null || true
         p="$(dirname "$p")"
     done
+}
+
+# tm_probe_weirdnames -> 0 when the filesystem will hold a filename containing
+# a NEWLINE. Legal on POSIX, impossible on Windows — and the forged-record cases
+# are meaningless without it, because the whole attack is a filename that looks
+# like a record separator. MEASURED, so those cases SKIP loudly on the
+# workstation instead of passing on a name the filesystem quietly rejected.
+tm_probe_weirdnames() {
+    local d f
+    d="$(_tm_scratch)"
+    f="${d}/$(printf 'tm\nprobe').$$"
+    : > "$f" 2>/dev/null || return 1
+    if [ ! -f "$f" ]; then rm -f "$f" 2>/dev/null; return 1; fi
+    rm -f "$f" 2>/dev/null
+    return 0
+}
+
+# tm_probe_symlinks -> 0 when `ln -s` really produces a SYMLINK. Git Bash
+# silently COPIES instead unless MSYS is configured otherwise, so a symlink case
+# there is not testing a symlink at all — it ran on to install(1) and failed on
+# an unrelated error, which looked like the refusal until this probe existed.
+# MEASURED with -L, not assumed from ln's exit status.
+tm_probe_symlinks() {
+    local d f l
+    d="$(_tm_scratch)"; f="${d}/.tm-symprobe.$$"; l="${f}.link"
+    : > "$f" 2>/dev/null || return 1
+    if ln -s "$f" "$l" 2>/dev/null && [ -L "$l" ]; then
+        rm -f "$f" "$l" 2>/dev/null; return 0
+    fi
+    rm -f "$f" "$l" 2>/dev/null
+    return 1
 }
 
 # tm_probe_chown <dir> -> yes|no  (root, and the web principal really exists,
@@ -211,10 +276,75 @@ tm_unmet() {
             modes) [ "$TM_CAP_MODES" = yes ] || out="${out}${out:+, }a filesystem that holds POSIX modes" ;;
             chown) [ "$TM_CAP_CHOWN" = yes ] || out="${out}${out:+, }root on Linux with a '${TM_WEB_USER}' account" ;;
             sudo)  command -v sudo >/dev/null 2>&1 || out="${out}${out:+, }sudo" ;;
+            # node is the ONLY thing in this repo that reads the frontend
+            # (contract gates[frontend-syntax]). It is present on the Windows
+            # workstation and absent on the Linux host, which is the exact
+            # mirror image of the modes/chown split — so frontend cases SKIP
+            # loudly there rather than turning the whole file into a harness
+            # error, which is what they did on the first remote run.
+            node)  command -v node >/dev/null 2>&1 || out="${out}${out:+, }node" ;;
+            weirdnames) tm_probe_weirdnames \
+                || out="${out}${out:+, }a filesystem that allows a newline in a filename" ;;
+            symlinks) tm_probe_symlinks \
+                || out="${out}${out:+, }a filesystem where ln -s makes a real symlink" ;;
+            # MEASURED, not assumed: actually import the package. The
+            # workstation has Flask and PyYAML but not ldap3 or
+            # confluent-kafka, so tm.app imports only where the venv the
+            # service runs under is present. A case that needs it must SKIP
+            # loudly here, never pass vacuously.
+            tmapp) tm_probe_tmapp || out="${out}${out:+, }an environment where tm.app imports (ldap3, confluent-kafka)" ;;
             *)     tm_die "unknown requirement '${r}'" ;;
         esac
     done
     echo "$out"
+}
+
+# ─── the permission baseline is NUL-delimited ────────────────────────────────
+# As of v1.0.4 the file record_baseline writes has NO LINES: it is
+# path\0owner\0group\0mode\0 repeated, because a filename may contain both '|'
+# and a newline and the old line format let one forge extra records. grep and
+# `read -r line` cannot be used on it, so the assertions go through these.
+
+# tm_baseline_record <baseline-file> <path> -> "owner<TAB>group<TAB>mode", or empty
+tm_baseline_record() {
+    local bl="$1" want="$2" fp fo fg fm
+    [ -f "$bl" ] || return 0
+    while IFS= read -r -d '' fp && IFS= read -r -d '' fo \
+       && IFS= read -r -d '' fg && IFS= read -r -d '' fm; do
+        if [ "$fp" = "$want" ]; then
+            printf '%s\t%s\t%s\n' "$fo" "$fg" "$fm"
+            return 0
+        fi
+    done < "$bl"
+    return 0
+}
+
+# tm_assert_recorded <baseline> <path> [owner] [group] [mode] [msg]
+# The record must exist; each field given must match.
+tm_assert_recorded() {
+    local bl="$1" p="$2" o="${3:-}" g="${4:-}" md="${5:-}" msg="${6:-}" rec ro rg rm
+    rec="$(tm_baseline_record "$bl" "$p")"
+    [ -n "$rec" ] || _tm_afail "${msg:-path is not in the recorded baseline}: ${p}"
+    IFS=$'\t' read -r ro rg rm <<<"$rec"
+    [ -z "$o"  ] || [ "$o"  = "$ro" ] || _tm_afail "${msg:-wrong recorded owner} for ${p}: expected ${o}, got ${ro}"
+    [ -z "$g"  ] || [ "$g"  = "$rg" ] || _tm_afail "${msg:-wrong recorded group} for ${p}: expected ${g}, got ${rg}"
+    [ -z "$md" ] || [ "$md" = "$rm" ] || _tm_afail "${msg:-wrong recorded mode} for ${p}: expected ${md}, got ${rm}"
+}
+
+# tm_assert_not_recorded <baseline> <path> [msg]
+tm_assert_not_recorded() {
+    local rec; rec="$(tm_baseline_record "$1" "$2")"
+    [ -z "$rec" ] || _tm_afail "${3:-path should NOT be in the baseline}: $2 (recorded as ${rec})"
+}
+
+# tm_baseline_is_nul <file> -> 0 when the file actually contains NUL bytes.
+# NUL cannot be held in a shell variable, so this is measured by length.
+tm_baseline_is_nul() {
+    local total stripped
+    [ -s "$1" ] || return 1
+    total="$(wc -c < "$1")"
+    stripped="$(LC_ALL=C tr -d '\000' < "$1" | wc -c)"
+    [ "$total" -ne "$stripped" ]
 }
 
 # ─── results ─────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 # Jarvis Topic Manager — Installation Guide
 
-**Version:** 1.0.3
+**Version:** 1.0.4
 **Platform:** Ubuntu Server 24.04 LTS
 **Completed by:** Human administrator
 **Copyright (c) 2025-2026 James Rodman. All Rights Reserved.**
@@ -95,9 +95,17 @@ ssh -i ~/.ssh/claude_admin claude_admin@192.168.202.90 \
 #   Active Directory Users and Computers → find or create "Kafka-Admins" group
 #   Add your admin user account to it
 
-# 5. Do you have a service account for LDAP bind?
-#   You need: svc-kafka-ui@int.crypticlight.com (read-only, Domain Users)
-#   If it doesn't exist, create it in ADUC first
+# 5. Do you WANT a service account for LDAP bind? (OPTIONAL)
+#   The default is a direct user bind, which needs no account at all.
+#   If you prefer a service account: svc-kafka-ui@int.crypticlight.com
+#   (read-only, Domain Users). Create it in ADUC first. See Section 5.
+#   Leave ldap_bind_dn / ldap_bind_password EMPTY to skip it entirely.
+
+# 6. Is polkit installed? (it is, on a stock Ubuntu Server 24.04)
+ssh -i ~/.ssh/claude_admin claude_admin@192.168.202.90 \
+  "systemctl is-active polkit; pkaction --version"
+#   Expected: active / pkaction version 124
+#   Without it, only the Settings restart control is affected.
 ```
 
 ---
@@ -125,7 +133,11 @@ scp -i ~/.ssh/claude_admin -r \
   claude_admin@192.168.202.90:/tmp/topic-manager-src
 
 ssh -i ~/.ssh/claude_admin claude_admin@192.168.202.90
-sudo mv /tmp/topic-manager-src /opt/topic-manager-src
+# Root runs install.sh out of this tree, so it is moved to a root-owned parent
+# and given to root before anything reads it.
+sudo install -d -m 700 -o root -g root /opt/topic-manager-src
+sudo cp -a /tmp/topic-manager-src/. /opt/topic-manager-src/
+sudo chown -R root:root /opt/topic-manager-src
 ```
 
 ### Option C — Offline bundle
@@ -146,14 +158,24 @@ sudo bash install.sh
 1. Installs system packages (python3, python3-venv, nginx, libldap, libssl)
 2. Creates the `topic-manager` system user (no login shell, no home)
 3. Creates directories: `/opt/topic-manager/`, `/var/www/topic-manager/`, `/etc/topic-manager/`
-4. Creates Python virtual environment at `/opt/topic-manager/venv`
-5. Installs Python packages (Flask, gunicorn, ldap3, confluent-kafka, PyYAML)
-6. Copies backend to `/opt/topic-manager/tm/`
-7. Copies frontend to `/var/www/topic-manager/`
-8. Installs the default config to `/etc/topic-manager/config.yaml` (with auto-generated secret key)
-9. Installs the systemd service: `topic-manager.service`
-10. Installs the nginx site config
-11. **Does NOT start services yet** — you must configure first
+4. Creates the two directories the application is allowed to write inside the configuration
+   and data trees: `/etc/topic-manager/clusters.d/` (`topic-manager:topic-manager 0750`) and
+   `/opt/topic-manager/data/cluster-certs/` (`topic-manager:topic-manager 0700`).
+   `/etc/topic-manager` itself stays `root:topic-manager 0750` — see 5b below for why
+5. Creates Python virtual environment at `/opt/topic-manager/venv`
+6. Installs Python packages (Flask, gunicorn, ldap3, confluent-kafka, PyYAML, cryptography)
+7. Copies backend to `/opt/topic-manager/tm/`
+8. Copies frontend to `/var/www/topic-manager/`
+9. Installs the default config to `/etc/topic-manager/config.yaml` (with auto-generated secret key)
+10. Runs the cluster-profile migration (`tm/migrate_clusters.py`): installs the example
+    profiles at `/etc/topic-manager/clusters.d/clusters.yaml`, or — on a reinstall over an
+    older host — moves the existing `clusters:` block out of `config.yaml`. Idempotent
+11. Installs the systemd units: `topic-manager.service` and the on-demand
+    `topic-manager-nginx-test.service`
+12. Installs `/etc/polkit-1/rules.d/50-topic-manager.rules` for the Settings restart control.
+    If `/etc/polkit-1/rules.d` is absent the installer warns and carries on
+13. Installs the nginx site config
+14. **Does NOT start services yet** — you must configure first
 
 Expected output ends with:
 ```
@@ -181,17 +203,17 @@ auth:
   ldap_ca_cert: ""         # blank = system trust store; set to CA PEM path if cert not trusted
   ldap_domain: "int.crypticlight.com"
   ldap_base_dn: "DC=int,DC=crypticlight,DC=com"
+  # OPTIONAL. Leave BOTH empty for the default direct user bind, which needs no
+  # AD service account. If you set them they must WORK — from v1.0.2 onward every
+  # login is gated on this bind succeeding.
   ldap_bind_dn: "CN=svc-kafka-ui,OU=ICLServiceAccounts,DC=int,DC=crypticlight,DC=com"
   ldap_bind_password: "THE_ACTUAL_PASSWORD_FOR_svc-kafka-ui"
   required_group: "CN=Kafka-Admins,CN=Users,DC=int,DC=crypticlight,DC=com"
-
-clusters:
-  - id: "bare-metal"
-    name: "Bare Metal — Legacy Jarvis"
-    bootstrap_servers: "broker1.int.crypticlight.com:9092,broker2.int.crypticlight.com:9092,broker3.int.crypticlight.com:9092"
-    security_protocol: "PLAINTEXT"
-    active: true
 ```
+
+> **There is no `clusters:` block in this file any more.** Since v1.0.4 cluster profiles
+> live in `/etc/topic-manager/clusters.d/clusters.yaml`. A `clusters:` block added back here
+> is ignored. See 5a below.
 
 ### Find the correct DN for `required_group`:
 
@@ -208,6 +230,107 @@ Example output: `CN=Kafka-Admins,CN=Users,DC=int,DC=crypticlight,DC=com`
 ```bash
 python3 -c "import yaml; yaml.safe_load(open('/etc/topic-manager/config.yaml'))" && echo "YAML valid"
 ```
+
+### 5a. Cluster profiles
+
+The installer has already written a starter file:
+
+```bash
+sudo cat /etc/topic-manager/clusters.d/clusters.yaml
+```
+
+Edit the brokers to match your environment. The normal route is the **Cluster Builder** in
+the UI (Settings → Cluster Profiles → **+ Add Cluster** / **Edit** / **Delete**), which
+validates the profile, writes the file atomically, and records the change in the audit log.
+Changes take effect immediately — every gunicorn worker re-reads the file when it changes,
+so no restart is required.
+
+Editing by hand is supported. Put the ownership back afterwards, because an editor that
+replaces the file leaves it root-owned and the next save from the UI would then fail:
+
+```bash
+sudo nano /etc/topic-manager/clusters.d/clusters.yaml
+sudo chown topic-manager:topic-manager /etc/topic-manager/clusters.d/clusters.yaml
+sudo chmod 640 /etc/topic-manager/clusters.d/clusters.yaml
+python3 -c "import yaml; yaml.safe_load(open('/etc/topic-manager/clusters.d/clusters.yaml'))" \
+  && echo "YAML valid"
+```
+
+For `SSL` and `SASL_SSL` clusters, supply the CA bundle, client certificate and client key
+through the Cluster Builder as **PEM content** — the form's file picker reads the file in
+your browser and posts its text. The API does not accept a path, and will not store one you
+choose: the server parses the PEM, writes it under `/opt/topic-manager/data/cluster-certs/`
+with a name it generates, and refuses on load any profile whose TLS paths resolve outside
+that directory. The reason is in README.md → *Cluster profiles*: the cluster test returns
+the Kafka driver's error verbatim, and any authenticated user can export the audit log, so a
+user-supplied path would be a file-read oracle over files the service can read — including
+`config.yaml`.
+
+The annotated reference for this file is `config/clusters.yaml.example` in the source tree.
+
+### 5b. Why the configuration is split across two files
+
+`config.yaml` holds `secret_key`, `ldap_bind_password` and `required_group`. The service
+must read it and must never write it, so it is `root:topic-manager 0640` in a directory that
+is `root:topic-manager 0750`.
+
+The Cluster Builder needs a file it *can* rewrite, and rewriting a file safely means creating
+a temporary file beside it and renaming over the target — which needs write permission on the
+**directory**. And a directory the application can write is a directory in which it can
+**unlink** files it cannot write: unlink is a directory operation, and the target file's own
+mode and owner do not enter into it. Had `/etc/topic-manager` been made writable, the
+application could
+delete `config.yaml`, write its own with its own `required_group`, and restart the service
+with the Settings control to load it — a full takeover of the authentication configuration,
+using nothing but supported features. This was measured on the host.
+
+So the writable directory is `clusters.d/`, one level below a parent that stays root-owned.
+The systemd unit's `ReadWritePaths` names `/etc/topic-manager/clusters.d` and deliberately
+not its parent. Confirm the boundary at any time:
+
+```bash
+sudo -u topic-manager test -w /etc/topic-manager             && echo "WRITABLE — WRONG" || echo "not writable (correct)"
+sudo -u topic-manager test -w /etc/topic-manager/config.yaml && echo "WRITABLE — WRONG" || echo "not writable (correct)"
+sudo -u topic-manager test -r /etc/topic-manager/config.yaml && echo "readable (correct)"
+sudo -u topic-manager test -w /etc/topic-manager/clusters.d  && echo "writable (correct)"
+systemctl show topic-manager --property=ReadWritePaths
+```
+
+### 5c. What the install grants the service account
+
+Three systemd unit/verb pairs, through polkit, and nothing else:
+
+| Unit | Verbs |
+|---|---|
+| `topic-manager.service` | `restart` |
+| `nginx.service` | `reload`, `restart` |
+| `topic-manager-nginx-test.service` | `start` |
+
+No `stop`, no `kill`. The rule
+(`/etc/polkit-1/rules.d/50-topic-manager.rules`) only ever returns `YES` for those
+combinations and leaves every other subject and action untouched. Who used the control is
+recorded in the application audit log (`SERVICE_RESTART`); that the rule is in force at all
+is confirmed from the polkit journal, which reports every load and every rule that fails to
+compile:
+
+```bash
+ls -l /etc/polkit-1/rules.d/50-topic-manager.rules
+sudo journalctl -u polkit -n 5 --no-pager
+# "Finished loading, compiling and executing N rules" — N includes this file
+```
+
+`topic-manager-nginx-test.service` is a root-side `Type=oneshot` running `nginx -t`. It
+exists because the check could not otherwise fail: `nginx -t` run as the `topic-manager`
+account dies on `open() "/run/nginx.pid" failed (13: Permission denied)` and exits 1 whether
+the configuration is good or bad, and `systemctl reload nginx` runs `nginx -s reload`, which
+exits 0 whether or not the master accepts the config. Both measured on the live host. The
+unit reads configuration, writes nothing, is never enabled, and only runs when the restart
+control starts it.
+
+Why polkit rather than sudoers: the unit sets `NoNewPrivileges=true`, under which `sudo`
+refuses to run at all. `systemctl` over D-Bus works because the caller never escalates — it
+asks PID 1 to act — so polkit, not sudo, is the mechanism that fits the hardening as it
+stands.
 
 ---
 
@@ -288,7 +411,10 @@ New-ADGroup -Name "Kafka-Admins" -GroupScope Global -GroupCategory Security `
 Add-ADGroupMember -Identity "Kafka-Admins" -Members "jrodman"
 ```
 
-### 7c. Verify the service account `svc-kafka-ui` exists
+### 7c. Verify the service account `svc-kafka-ui` exists (OPTIONAL)
+
+Skip this entirely if you left `ldap_bind_dn` / `ldap_bind_password` empty — the direct user
+bind authenticates and enforces `required_group` without any service account.
 
 The account needs:
 - Read access to AD (Domain Users is sufficient)
@@ -367,11 +493,11 @@ sudo systemctl status nginx
 
 # Quick health check (backend directly)
 curl http://127.0.0.1:5001/api/health
-# Expected: {"status":"ok","version":"1.0.3"}
+# Expected: {"status":"ok","version":"1.0.4"}
 
 # Health check through nginx (HTTPS)
 curl -sk https://localhost/api/health
-# Expected: {"status":"ok","version":"1.0.3"}
+# Expected: {"status":"ok","version":"1.0.4"}
 ```
 
 If `topic-manager` fails to start:
@@ -468,6 +594,11 @@ For process-level metrics, consider deploying `node_exporter` on the VM (standar
 | TLS cert error in browser | Check cert SANs | Reissue cert with correct SANs |
 | nginx 404 on /api/ | Proxy config | `sudo nginx -t` and check error log |
 | DB permission error | `/opt/topic-manager/data/` ownership | `sudo chown -R topic-manager:topic-manager /opt/topic-manager/data` |
+| Settings → Restart Services reports *Interactive authentication required* | Is the polkit rule installed? `ls -l /etc/polkit-1/rules.d/50-topic-manager.rules` | Install it from the source tree and check `sudo journalctl -u polkit -n 5` shows a reload |
+| Cluster Builder save fails | `sudo -u topic-manager test -w /etc/topic-manager/clusters.d` | `sudo chown -R topic-manager:topic-manager /etc/topic-manager/clusters.d`; confirm `ReadWritePaths` includes it |
+| A cluster is shown as disabled | Its TLS paths resolve outside `/opt/topic-manager/data/cluster-certs/` | Re-upload the certificates through the Cluster Builder |
+| Certificate rejected on save | Is the file really PEM? `openssl x509 -in ca.pem -noout -subject` | Convert DER to PEM, or export the correct file. Private keys must be unencrypted PEM |
+| No clusters listed at all | `sudo cat /etc/topic-manager/clusters.d/clusters.yaml` | Re-run the migration (Section 15) |
 
 **Useful log commands:**
 ```bash
@@ -492,24 +623,26 @@ curl -sk https://localhost/api/version | python3 -m json.tool
 ```bash
 cd /path/to/topic-manager                 # wherever the repo is checked out
 bash prepare-offline.sh --bundle
-# Creates: topic-manager-offline-1.0.3.tar.gz  (named from VERSION)
+# Creates: topic-manager-offline-1.0.4.tar.gz  (named from VERSION)
 ```
 
 ### Transfer to air-gapped host:
 
 ```bash
 scp -i ~/.ssh/claude_admin \
-  topic-manager-offline-1.0.3.tar.gz \
+  topic-manager-offline-1.0.4.tar.gz \
   claude_admin@192.168.202.90:/tmp/
 ```
 
 ### On the air-gapped host:
 
 ```bash
-cd /tmp
-tar xzf topic-manager-offline-1.0.3.tar.gz
-cd topic-manager
-sudo bash install.sh
+# root runs install.sh, so the tree it runs from is created root-owned first and
+# the bundle is unpacked straight into it — never staged in /tmp, where the
+# directory would be created by whichever account got there first.
+sudo install -d -m 700 -o root -g root /var/lib/topic-manager/install-src
+sudo tar xzf /tmp/topic-manager-offline-1.0.4.tar.gz   -C /var/lib/topic-manager/install-src --strip-components=1
+sudo bash /var/lib/topic-manager/install-src/install.sh
 # Script detects offline mode and uses install/packages/
 ```
 
@@ -537,8 +670,12 @@ ssh -i ~/.ssh/claude_admin claude_admin@192.168.202.90
 # 1. The script is obtained by cloning the repo. The upgrade fetches its own copy
 #    of the target source later, in Phase 5 — this clone only supplies the script.
 sudo apt-get install -y git
-git clone https://github.com/ymxplusb/Topic-Manager.git /tmp/topic-manager-upgrade
-cd /tmp/topic-manager-upgrade
+# NOT /tmp: root executes this script. A local account that pre-creates the
+# directory owns what root then runs out of it, and `git clone` into an
+# existing empty directory succeeds without noticing who made it.
+sudo install -d -m 700 -o root -g root /var/lib/topic-manager/upgrade-src
+sudo git clone https://github.com/ymxplusb/Topic-Manager.git   /var/lib/topic-manager/upgrade-src
+cd /var/lib/topic-manager/upgrade-src
 
 # 2. Audit. Changes nothing. Exit 0 = clear, 1 = warnings, 2 = blockers.
 sudo bash install/upgrade-full.sh --audit-only
@@ -550,6 +687,50 @@ sudo bash install/upgrade-full.sh --list-backups
 # 4. Upgrade. Rolls back automatically on any failure.
 sudo bash install/upgrade-full.sh
 ```
+
+**Upgrading to v1.0.4 or later** additionally moves cluster profiles out of `config.yaml`
+into `/etc/topic-manager/clusters.d/clusters.yaml` (Phase 11), and installs the polkit rule
+and the `topic-manager-nginx-test` unit (Phase 9). The upgrade then **measures** the
+permission boundary as the `topic-manager` principal and fails if the application can write
+`config.yaml` or its directory. Verify afterwards:
+
+```bash
+# Profiles moved, old block gone (the grep should print nothing)
+sudo cat /etc/topic-manager/clusters.d/clusters.yaml
+sudo grep -n '^clusters:' /etc/topic-manager/config.yaml
+
+# Ownership the application needs
+sudo ls -ld /etc/topic-manager /etc/topic-manager/clusters.d \
+            /etc/topic-manager/clusters.d/clusters.yaml \
+            /opt/topic-manager/data/cluster-certs
+
+# The restart control
+ls -l /etc/polkit-1/rules.d/50-topic-manager.rules
+systemctl cat topic-manager-nginx-test.service >/dev/null && echo "test unit installed"
+```
+
+The migration is idempotent and can be re-run by hand if it was skipped — for example on a
+host that was restored from a backup taken before the upgrade:
+
+```bash
+sudo install -d -m 750 -o topic-manager -g topic-manager /etc/topic-manager/clusters.d
+sudo env PYTHONPATH=/opt/topic-manager /opt/topic-manager/venv/bin/python3 \
+  -m tm.migrate_clusters \
+  --config /etc/topic-manager/config.yaml \
+  --clusters-dir /etc/topic-manager/clusters.d
+sudo chown topic-manager:topic-manager /etc/topic-manager/clusters.d/clusters.yaml
+sudo chmod 640 /etc/topic-manager/clusters.d/clusters.yaml
+```
+
+It prints what it did (`moved N cluster profile(s) ...`), or `already migrated` and changes
+nothing. It preserves the comments in `config.yaml`, and refuses to report success if the
+`clusters:` key survives the rewrite.
+
+If **neither** file carries a profile it stops with `neither ... carries any cluster
+profile, and no example was given` and writes nothing — an empty cluster list would leave
+every topic and consumer-group view unresolvable. Add
+`--example /var/lib/topic-manager/upgrade-src/config/clusters.yaml.example` (a path in the *source*
+tree; the example is not deployed to the host) to install the starter profiles instead.
 
 Do not skip step 2. The blockers it reports are the failures that otherwise appear an hour
 after an apparently successful upgrade — an unset `server.secret_key`, an LDAP service bind
@@ -578,15 +759,16 @@ scp -i ~/.ssh/claude_admin ../topic-manager-offline-<version>.tar.gz \
 
 ssh -i ~/.ssh/claude_admin claude_admin@192.168.202.90 "
   sudo install -d -m 700 -o root -g root /var/lib/topic-manager/offline-src
-  sudo tar xzf /tmp/topic-manager-offline-<version>.tar.gz -C /tmp
-  sudo mv /tmp/topic-manager/* /var/lib/topic-manager/offline-src/
+  sudo tar xzf /tmp/topic-manager-offline-<version>.tar.gz     -C /var/lib/topic-manager/offline-src --strip-components=1
   sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline
 "
 ```
 
-- The tarball extracts to a directory named after the repo checkout, which is why it has to
-  be moved into place. `Offline source not found at /var/lib/topic-manager/offline-src` is what
-  a skipped `mv` looks like.
+- The tarball wraps everything in a directory named after the repo checkout, which is what
+  `--strip-components=1` removes. `Offline source not found at /var/lib/topic-manager/offline-src`
+  is what a skipped extraction looks like; a tree with a `topic-manager/` directory inside it
+  is what a *forgotten* `--strip-components=1` looks like, and the run stops on the missing
+  `tm/VERSION`.
 - The bundle is **not** deleted on success. An air-gapped host cannot fetch another one, and
   a re-upgrade after a `--restore` needs it.
 - `--offline` implies no OS patching — `apt` has no repository to reach. Patch the OS from
@@ -600,15 +782,18 @@ sudo bash install/upgrade-full.sh --restore <TIMESTAMP>
 ```
 
 Restore points live in `/var/backups/topic-manager/<TIMESTAMP>/`, with a `.tar.gz` of the
-same tree beside them. Each one carries the config, the TLS key and certificate, a
-consistent database snapshot, the venv, the nginx config, the systemd unit **and its
-drop-in directory**, and a recorded permission baseline, all covered by a `SHA256SUMS` that
-`--restore` verifies before it restores anything.
+same tree beside them. Each one carries the config, the cluster store (`etc/clusters.d/` and
+`data/cluster-certs/`), the TLS key and certificate, a consistent database snapshot, the
+venv, the nginx config, the systemd unit **and its drop-in directory**, and a recorded
+permission baseline, all covered by a `SHA256SUMS` that `--restore` verifies before it
+restores anything.
 
-The config at `/etc/topic-manager/config.yaml` is never overwritten by an upgrade: it is
-backed up in Phase 4 and put back in Phase 10, along with the ownership and modes it had.
+Neither configuration file is overwritten by an upgrade. `/etc/topic-manager/config.yaml`
+and `/etc/topic-manager/clusters.d/` are backed up in Phase 4 and put back in Phase 10 —
+the cluster store deliberately *before* the migration runs in Phase 11, so an existing set
+of profiles is never replaced by the example — along with the ownership and modes they had.
 
 ---
 
 *End of Installation Guide*
-*Jarvis Topic Manager v1.0.3 — Copyright (c) 2025-2026 James Rodman*
+*Jarvis Topic Manager v1.0.4 — Copyright (c) 2025-2026 James Rodman*

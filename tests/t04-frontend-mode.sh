@@ -51,6 +51,19 @@ _build() {
         echo '  esac'
         echo '}'
         echo
+        # The block asks baseline_has whether a file is already recorded. It was
+        # a grep until v1.0.4; the baseline has no lines any more, so the real
+        # reader comes with it. Without these the call was simply "command not
+        # found", which reads as "not recorded" and re-chmods every restored
+        # file — found on the first Linux run, 2026-09-01.
+        tm_extract_func "$UP" baseline_stream
+        echo
+        tm_extract_func "$UP" baseline_is_legacy
+        echo
+        tm_extract_func "$UP" baseline_lookup
+        echo
+        tm_extract_line "$UP" '^baseline_has\(\)'
+        echo
         tm_extract_between "$UP" '^FE_DIR_MODE="\$\(stat ' '^\[\[ \$DEVIATED -gt 0 \]\]'
         echo
         # The extracted block ends on `[[ $DEVIATED -gt 0 ]] && warn ...`, which

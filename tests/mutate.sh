@@ -32,7 +32,20 @@ set -uo pipefail
 TM_TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TM_REPO_ROOT="$(cd "${TM_TESTS_DIR}/.." && pwd)"
 MUTFILE="${TM_TESTS_DIR}/mutations.txt"
-TARGET="${TM_UPGRADE_SH:-${TM_REPO_ROOT}/install/upgrade-full.sh}"
+
+# Two scripts are under test as of v1.0.4. A control names one with
+# TARGET|<key>; the default is the upgrade script, so every existing record is
+# unchanged. The KEY, not a path, so mutations.txt cannot point the harness at
+# an arbitrary file.
+declare -A TARGET_PATH=(
+  [upgrade]="${TM_UPGRADE_SH:-${TM_REPO_ROOT}/install/upgrade-full.sh}"
+  [install]="${TM_INSTALL_SH:-${TM_REPO_ROOT}/install.sh}"
+)
+declare -A TARGET_ENV=(
+  [upgrade]="TM_UPGRADE_SH"
+  [install]="TM_INSTALL_SH"
+)
+TARGET="${TARGET_PATH[upgrade]}"
 
 if [ -t 1 ] && [ -z "${TM_NO_COLOUR:-}" ]; then
     C_RED=$'\033[0;31m'; C_GRN=$'\033[0;32m'; C_YEL=$'\033[1;33m'
@@ -57,25 +70,29 @@ if [ -n "$REMOTE" ]; then
     RKEY="${TM_SSH_KEY:-$HOME/.ssh/claude_admin}"
     RDIR="/tmp/tm-mutate-$(date +%Y%m%d-%H%M%S)"
     TAR="$(mktemp "${TMPDIR:-/tmp}/tm-mut.XXXXXX.tar")"
-    ( cd "$TM_REPO_ROOT" && tar -cf "$TAR" tests install/upgrade-full.sh ) || exit 2
+    # Both scripts under test, plus the tree the covering cases import.
+    ( cd "$TM_REPO_ROOT" && tar -cf "$TAR" tests tm app index.html config systemd install.sh         install/upgrade-full.sh install/polkit ) || exit 2
     ssh -i "$RKEY" -o BatchMode=yes "$REMOTE" "mkdir -p '$RDIR'" || exit 2
     scp -q -i "$RKEY" -o BatchMode=yes "$TAR" "${REMOTE}:${RDIR}/t.tar" || exit 2
     rm -f "$TAR"
     ssh -i "$RKEY" -o BatchMode=yes "$REMOTE" \
-        "cd '$RDIR' && tar -xf t.tar && find tests install -type f -exec sed -i 's/\r\$//' {} + && sudo -n TM_NO_COLOUR=1 bash tests/mutate.sh ${WANT[*]:-}"
+        "cd '$RDIR' && tar -xf t.tar && find tests install tm app config systemd install.sh index.html -type f -exec sed -i 's/\r\$//' {} + && sudo -n TM_NO_COLOUR=1 bash tests/mutate.sh ${WANT[*]:-}"
     rc=$?
     echo "── remote mutation run exit ${rc}; tree left at ${REMOTE}:${RDIR}"
     exit $rc
 fi
 
 [ -f "$MUTFILE" ] || { echo "no mutations.txt at $MUTFILE" >&2; exit 2; }
-[ -f "$TARGET" ]  || { echo "no target at $TARGET" >&2; exit 2; }
 
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/tm-mutate.XXXXXX")" || exit 2
 trap '[ -n "${TM_KEEP:-}" ] || rm -rf "$SCRATCH"' EXIT
 
 _sha() { sha256sum "$1" 2>/dev/null | cut -d" " -f1; }
-TARGET_SHA_BEFORE="$(_sha "$TARGET")"
+declare -A SHA_BEFORE=()
+for k in "${!TARGET_PATH[@]}"; do
+    [ -f "${TARGET_PATH[$k]}" ] || { echo "no target at ${TARGET_PATH[$k]}" >&2; exit 2; }
+    SHA_BEFORE[$k]="$(_sha "${TARGET_PATH[$k]}")"
+done
 
 # ─── parse mutations.txt ─────────────────────────────────────────────────────
 # Records are written out as three files per id: .meta, .anchor, .replace
@@ -99,7 +116,7 @@ _parse() {
         case "$key" in
             ANCHOR)  printf '%s\n' "$val" >> "${SCRATCH}/${id}.anchor" ;;
             REPLACE) printf '%s\n' "$val" >> "${SCRATCH}/${id}.replace" ;;
-            DESC|TESTS|EQUIV) printf '%s=%s\n' "$key" "$val" >> "${SCRATCH}/${id}.meta" ;;
+            DESC|TESTS|EQUIV|TARGET) printf '%s=%s\n' "$key" "$val" >> "${SCRATCH}/${id}.meta" ;;
             *) echo "mutations.txt: unknown key '${key}' in ${id}" >&2; exit 2 ;;
         esac
     done < "$MUTFILE"
@@ -195,8 +212,14 @@ for id in "${IDS[@]}"; do
     equiv="$(_meta "$id" EQUIV)"
     [ -n "$tests" ] || { echo "${id}: no TESTS declared" >&2; exit 2; }
 
-    mutant="${SCRATCH}/${id}-upgrade-full.sh"
-    n="$(_mutate_copy "$TARGET" "${SCRATCH}/${id}.anchor" "${SCRATCH}/${id}.replace" "$mutant")"
+    tkey="$(_meta "$id" TARGET)"; tkey="${tkey:-upgrade}"
+    tpath="${TARGET_PATH[$tkey]:-}"
+    tenv="${TARGET_ENV[$tkey]:-}"
+    if [ -z "$tpath" ]; then
+        echo "${id}: unknown TARGET '${tkey}' (known: ${!TARGET_PATH[*]})" >&2; exit 2
+    fi
+    mutant="${SCRATCH}/${id}-$(basename "$tpath")"
+    n="$(_mutate_copy "$tpath" "${SCRATCH}/${id}.anchor" "${SCRATCH}/${id}.replace" "$mutant")"
     if [ "$n" != "1" ]; then
         ABORTED=$((ABORTED+1))
         printf '  %-5s %s%-10s%s %s\n' "$id" "$C_RED" "ABORTED" "$C_OFF" "$desc" | tee -a "$REPORT"
@@ -208,7 +231,7 @@ for id in "${IDS[@]}"; do
     files=()
     for t in $tests; do files+=("${TM_TESTS_DIR}/${t}"); done
     res="${SCRATCH}/${id}.results"
-    TM_UPGRADE_SH="$mutant" TM_RESULTS_OUT="$res" TM_NO_COLOUR=1 \
+    env "${tenv}=${mutant}" TM_RESULTS_OUT="$res" TM_NO_COLOUR=1 \
         bash "${TM_TESTS_DIR}/run.sh" "${files[@]}" > "${SCRATCH}/${id}.log" 2>&1
     rc=$?
     nf=$(grep -c '^FAIL' "$res" 2>/dev/null || true); nf=${nf:-0}
@@ -242,17 +265,19 @@ for id in "${IDS[@]}"; do
 done
 
 # ─── the target must be byte-identical to what we started with ───────────────
-TARGET_SHA_AFTER="$(_sha "$TARGET")"
 echo
-if [ "$TARGET_SHA_BEFORE" != "$TARGET_SHA_AFTER" ]; then
-    echo "${C_RED}${C_BLD}THE TARGET FILE CHANGED DURING THIS RUN${C_OFF}"
-    echo "  before: ${TARGET_SHA_BEFORE}"
-    echo "  after:  ${TARGET_SHA_AFTER}"
-    echo "  This harness never writes to it. Either something else edited it, or"
-    echo "  a control leaked. Do not trust the results above."
-    exit 2
-fi
-echo "  target sha256 unchanged: ${TARGET_SHA_BEFORE}"
+for k in "${!TARGET_PATH[@]}"; do
+    after="$(_sha "${TARGET_PATH[$k]}")"
+    if [ "${SHA_BEFORE[$k]}" != "$after" ]; then
+        echo "${C_RED}${C_BLD}A TARGET FILE CHANGED DURING THIS RUN: ${TARGET_PATH[$k]}${C_OFF}"
+        echo "  before: ${SHA_BEFORE[$k]}"
+        echo "  after:  ${after}"
+        echo "  This harness never writes to it. Either something else edited it, or"
+        echo "  a control leaked. Do not trust the results above."
+        exit 2
+    fi
+    echo "  ${k} target sha256 unchanged: ${SHA_BEFORE[$k]}"
+done
 
 echo
 printf '%sMUTATION CONTROLS: %d run — %d killed, %d SURVIVED, %d unproven here, %d aborted, %d documented-equivalent%s\n' \

@@ -7,9 +7,9 @@
 <title>Jarvis Topic Manager</title>
 <link rel="icon" type="image/x-icon" href="/jarvis-favicon.ico">
 <link rel="icon" type="image/png" sizes="32x32" href="/jarvis-glyph-32.png">
-<link rel="stylesheet" href="/app/styles/main.css?v=1003">
+<link rel="stylesheet" href="/app/styles/main.css?v=1004">
 <!-- Vue 3 — loaded from local lib/ for offline support -->
-<script src="/lib/vue.global.prod.js?v=1003"></script>
+<script src="/lib/vue.global.prod.js?v=1004"></script>
 </head>
 <body>
 <!-- Classification banners — controlled by SettingsTab.js -->
@@ -20,16 +20,19 @@
 <div id="banner-bot"  class="classification-banner-bottom" style="display:none"></div>
 
 <!-- Component scripts (cache-bust: increment v= on every release) -->
-<script src="/app/components/modals/AboutModal.js?v=1003"></script>
-<script src="/app/components/modals/DeleteTopicModal.js?v=1003"></script>
-<script src="/app/components/modals/CreateTopicModal.js?v=1003"></script>
-<script src="/app/components/modals/TopicConfigModal.js?v=1003"></script>
-<script src="/app/components/LoginView.js?v=1003"></script>
-<script src="/app/components/TopBar.js?v=1003"></script>
-<script src="/app/components/TopicsTab.js?v=1003"></script>
-<script src="/app/components/ConsumerGroupsTab.js?v=1003"></script>
-<script src="/app/components/AuditTab.js?v=1003"></script>
-<script src="/app/components/SettingsTab.js?v=1003"></script>
-<script src="/app/main.js?v=1003"></script>
+<script src="/app/components/modals/AboutModal.js?v=1004"></script>
+<script src="/app/components/modals/DeleteTopicModal.js?v=1004"></script>
+<script src="/app/components/modals/CreateTopicModal.js?v=1004"></script>
+<script src="/app/components/modals/TopicConfigModal.js?v=1004"></script>
+<!-- ClusterModal must load BEFORE SettingsTab: SettingsTab names it in
+     components: {} at definition time, and there is no module loader. -->
+<script src="/app/components/modals/ClusterModal.js?v=1004"></script>
+<script src="/app/components/LoginView.js?v=1004"></script>
+<script src="/app/components/TopBar.js?v=1004"></script>
+<script src="/app/components/TopicsTab.js?v=1004"></script>
+<script src="/app/components/ConsumerGroupsTab.js?v=1004"></script>
+<script src="/app/components/AuditTab.js?v=1004"></script>
+<script src="/app/components/SettingsTab.js?v=1004"></script>
+<script src="/app/main.js?v=1004"></script>
 </body>
 </html>

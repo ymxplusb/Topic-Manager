@@ -34,9 +34,21 @@ root = sys.argv[1]
 # Shell files that may carry embedded Python, and the heredoc tags to expect.
 # Listing the expected tags means a heredoc that is RENAMED or DELETED fails
 # the gate rather than silently reducing coverage to zero.
+#
+# install.sh's WSGI heredoc used to be invisible TWICE over: this map named only
+# upgrade-full.sh, and WSGI sat in a hardcoded skip list beside NGINXEOF and SH
+# as "obviously not Python". It is the gunicorn entry point — the most
+# load-bearing Python in the repo. Measured 2026-09-01: `def broken(:::`
+# injected into it passed ALL EIGHT GATES, shipping a wsgi.py that cannot start.
+# NGINXEOF and SH were stale; those heredocs no longer exist in the tree.
 EXPECTED = {
     os.path.join("install", "upgrade-full.sh"): ["PYRESOLVE", "PYLDAP", "PYBACKUP"],
+    "install.sh": ["WSGI"],
 }
+
+# Tags that are deliberately NOT Python. Keep this EMPTY unless a real one
+# appears; every entry is a hole in the gate and must be justified in place.
+NON_PYTHON = set()
 
 failures = 0
 checked = 0
@@ -65,7 +77,14 @@ for rel, tags in EXPECTED.items():
             continue
         body = m.group(1)
         # Only Python heredocs are compilable; skip obvious non-Python ones.
-        if tag in ("NGINXEOF", "WSGI", "SH"):
+        if tag in NON_PYTHON:
+            continue
+        if tag not in tags:
+            # An unclassified heredoc. Silently skipping is exactly how WSGI
+            # stayed invisible — make the maintainer classify it instead.
+            print("FAIL: %s: heredoc %s is not classified. Add it to EXPECTED "
+                  "if it is Python, or to NON_PYTHON with a reason." % (rel, tag))
+            failures += 1
             continue
         tmp = os.path.join(tempfile.gettempdir(), "hd_%s.py" % tag)
         with open(tmp, "w", encoding="utf-8") as fh:

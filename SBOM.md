@@ -1,10 +1,10 @@
 # Jarvis Topic Manager — Software Bill of Materials (SBOM)
 
-**Version:** 1.0.3
-**Date:** 2026-08-30
+**Version:** 1.0.4
+**Date:** 2026-09-01
 **Format:** CycloneDX-compatible markdown
 **Copyright:** (c) 2025–2026 James Rodman. All Rights Reserved.
-**SBOM Serial:** urn:topic-manager:sbom:1.0.3
+**SBOM Serial:** urn:topic-manager:sbom:1.0.4
 
 > The backend table below is generated from `requirements.txt`, which is the single source
 > of truth for every Python pin: `install/upgrade-full.sh` installs exactly these versions on
@@ -36,6 +36,12 @@ unverified 3.5.35. Tracked as an open defect against `install.sh`.
 | cryptography     | 50.0.1  | Apache-2.0/BSD  | cryptography.io                     |
 | confluent-kafka  | 2.15.0  | Apache-2.0      | confluent.io / github.com/confluentinc/confluent-kafka-python |
 
+`cryptography` became a **direct, first-party** dependency in v1.0.4: `tm/clusters.py`
+imports `x509` and `serialization` to parse every PEM the Cluster Builder accepts before it
+is written to disk. It was already pinned and already installed — this is a note about how
+it is used, not a new pin. The pin remains 50.0.1 for the advisories listed under
+*Vulnerability status*.
+
 ## Database
 
 | Component | Version | License      | Source       |
@@ -50,6 +56,15 @@ unverified 3.5.35. Tracked as an open defect against `install.sh`.
 | Ubuntu Server | 24.04 LTS  | Various    | ubuntu.com        |
 | Python        | 3.12       | PSF-2.0    | python.org        |
 | Apache Kafka  | 3.8.x      | Apache-2.0 | kafka.apache.org  |
+| polkit (`polkitd`) | 124 (Ubuntu `124-2ubuntu1.24.04.3`) | LGPL-2.0+ and Expat | polkit.freedesktop.org |
+
+**polkit is an OS component, not a bundled dependency.** It ships with Ubuntu Server 24.04
+and nothing here installs or vendors it. What v1.0.4 adds is one rules file,
+`/etc/polkit-1/rules.d/50-topic-manager.rules`, authorising the `topic-manager` account for
+three systemd unit/verb pairs (`restart topic-manager.service`, `reload`/`restart
+nginx.service`, `start topic-manager-nginx-test.service`) and nothing else. The version and
+licence above were read from the deployment host on 2026-09-01; on a host without polkit the
+product installs and runs, and only the Settings restart control is unavailable.
 
 ## Tooling (not shipped to the target host)
 
@@ -61,7 +76,7 @@ unverified 3.5.35. Tracked as an open defect against `install.sh`.
 
 ## Vulnerability status
 
-Every pin above was checked against OSV.dev on **2026-08-30** and carries no known
+Every pin above was checked against OSV.dev on **2026-09-01** and carries no known
 advisory. Superseded pins and why they moved:
 
 | Component | Was | Now | Reason |

@@ -7,7 +7,7 @@ stack: >-
   and server-side sessions, LDAP/AD auth against dc1.int.crypticlight.com,
   confluent-kafka AdminClient against the Jarvis Kafka cluster.
 
-# No CODEMAP.md exists in this repo. The tree is small enough (47 files) to read
+# No CODEMAP.md exists in this repo. The tree is small enough (75 files) to read
 # directly; create one if it grows.
 code_map: null
 
@@ -35,11 +35,26 @@ surfaces:
       Must agree with the static PPSM.csv, which is the same document.
   - path: app/main.js
     note: >-
-      TWO places: the ref() default and the `d.version || '...'` fallback, both
-      shown before/instead of /api/version responding. Was stale at '1.0.0',
-      corrected in v1.0.3. NOTE: a hardcoded version fallback is itself a latent
-      defect — it renders an unknown state as a confident version number. See
-      hazards[hardcoded-version-fallback].
+      NOT A VERSION SURFACE ANY MORE — do not give it a literal back. It seeds
+      the displayed version from ref('unknown') and falls back to
+      `d.version || 'unknown'`, so it never asserts a version it has not been
+      told by /api/version. That is the durable fix described in
+      hazards[hardcoded-version-fallback], landed before v1.0.4. Kept in
+      surfaces: so a sweep READS it and confirms the sentinel is still there —
+      a future edit that reintroduces a hardcoded literal is a regression, not
+      a cascade. Corrected 2026-09-01 (v1.0.4 sweep); the previous note
+      described the defect as if it were still present.
+  - path: app/components/TopBar.js
+    note: >-
+      Added 2026-09-01 (v1.0.4). Cache-bust token only: `jarvis-mark.png?v=NNNN`
+      at ~line 55. Carries NO product version string. It was introduced in
+      commit 0c08d1a and NEVER cascaded — it sat at the v1.0.3 token while
+      index.html moved, which is exactly the mixed-cache failure the token
+      exists to prevent. app/components/modals/AboutModal.js carries the same
+      token on the same image. Every ?v= in the repo MUST move together:
+      index.html (14), TopBar.js (1), AboutModal.js (1) = 16 tokens, ONE
+      distinct value. Verify with:
+      grep -rn '?v=[0-9]*' index.html app/ | grep -o '?v=[0-9]*' | sort -u
   - path: index.html
     note: "cache-bust token ?v=NNNN on every script/style — MUST increment per release"
   - path: docs/INSTALL.md
@@ -59,10 +74,20 @@ surfaces:
   - path: TROUBLESHOOTING.md
     note: >-
       Added 2026-08-30 after scout found it obliged-in-fact but undeclared.
-      It is keyed to the EXACT output strings of the upgrade script (e.g.
-      "Expected v1.0.0 installed") and to backup paths, so replacing the
-      upgrade script obliges rewriting it. It was the document most tightly
-      coupled to the change and surface-sweep would have skipped it.
+      It is keyed to the EXACT output strings of the upgrade script and of
+      tm/migrate_clusters.py, and to backup paths, so replacing either obliges
+      rewriting it. It was the document most tightly coupled to the change and
+      surface-sweep would have skipped it.
+      CORRECTED 2026-09-01: the previous note cited "Expected v1.0.0 installed"
+      as one of those exact strings. That string exists NOWHERE — not in
+      install/upgrade-full.sh and not in TROUBLESHOOTING.md, which states the
+      opposite ("version-agnostic — there is no 'expected installed version'
+      gate"). It described the DELETED root upgrade.sh. Verify a quoted string
+      with grep before pinning a document to it.
+      As of v1.0.4 it also carries the polkit / restart-control and Cluster
+      Builder failure modes, so it is coupled to
+      install/polkit/50-topic-manager.rules and
+      systemd/topic-manager-nginx-test.service as well.
   - path: install/README.md
     note: >-
       Added 2026-08-30, same reason. Declares the offline bundle contract that
@@ -93,6 +118,9 @@ surfaces:
   - path: .claude/project.yml
     note: this contract drifts like any other file
 
+# NOT a version surface, deliberately: sonar-project.properties carries
+# projectKey/projectName/sources/exclusions/python.version and NO
+# sonar.projectVersion. Do not add one during a cascade.
 straggler_sweep:
   - "grep -rn '1\\.0\\.[0-9]' --include='*.md' --include='*.js' --include='*.py' --include='*.html' . | grep -v CHANGELOG"
   # The .md/.js/.py/.html sweep above globs no .sh and no .csv, which is why
@@ -101,7 +129,7 @@ straggler_sweep:
   - "grep -rn '1[.]0[.][0-9]' --include='*.sh' --include='*.csv' --include='*.conf' --include='*.service' --include='*.css' --include='*.properties' --include='*.yaml' ."
   # Belt and braces: extension-agnostic. Globs are how surfaces hide — *.css was
   # missing above and app/styles/main.css sat at 1.0.0 for three releases.
-  - "grep -rInE '1[.]0[.][0-9]' . --exclude-dir=.git --exclude-dir=__pycache__ --exclude=CHANGELOG.md --exclude='SonarQube-Report-*.html' | grep -v '1[.]0[.]3'"
+  - "grep -rInE '1[.]0[.][0-9]' . --exclude-dir=.git --exclude-dir=__pycache__ --exclude=CHANGELOG.md --exclude='SonarQube-Report-*.html' | grep -v '1[.]0[.]4'"
   - "grep -o '?v=[0-9]*' index.html | sort -u   # cache-bust token must match the release"
   # Expected historical hits that are NOT stragglers: CHANGELOG.md sections,
   # SBOM.md '(moved in 1.0.2)' change-history, docs/SonarQube-Report-*.html
@@ -178,9 +206,15 @@ gates:
       class this release exists to fix. Proven RED on that same mutation and on
       a loosened (>=) specifier.
 
-  - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-08-30, note: "46 cases over the real upgrade script, extracted by anchor; 29 mutation controls in tests/mutations.txt, 28 killed + 1 documented equivalent. Git Bash CANNOT hold modes, so 15 cases SKIP LOUDLY here and are only proven on Linux: bash tests/run.sh --remote U@H (46/46, --strict). Proven RED by neutralising backup_dropin against a copy." }
+  - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-08-30, note: "120 cases and 59 mutation controls.txt, 57 killed + 2 documented equivalent + 1 documented equivalent. Git Bash CANNOT hold modes, so 46 cases SKIP LOUDLY here and are only proven on Linux: bash tests/run.sh --remote U@H (46/46, --strict). Proven RED by neutralising backup_dropin against a copy." }
 
 gate_verification:
+  - "A gate must assert its own COVERAGE, not just agreement. Guarding on
+     'found nothing' catches total parse failure and is blind to PARTIAL
+     loss. Measured 2026-09-01: a blank line mid-table dropped
+     check-sbom-consistency from 12 components to 8, and a renamed header
+     to 5, while it printed 'all 3 copies agree' both times. It now
+     requires every == pin in requirements.txt to be VISIBLE in each copy."
   - "A gate that cannot fail is not a gate. Before trusting a green run, break
      one file deliberately and confirm the gate goes red."
   - "python -m py_compile writes __pycache__ — confirm it is gitignored (it is)."
@@ -188,7 +222,7 @@ gate_verification:
   - "bash -n does NOT parse heredoc bodies. upgrade-full.sh embeds Python
      heredocs (PYRESOLVE, PYLDAP, PYBACKUP); a syntax error inside one ships
      untested. Extract each heredoc and py_compile it separately."
-  - "The four syntax gates cannot see a vulnerable dependency pin, a broken
+  - "The eight declared gates (5 syntax/consistency + sca + the repo test suite) cannot see a vulnerable dependency pin, a broken
      offline bundle, or a fail-open blocker check. Only the sca gate covers the
      first. The other two are covered by nothing automated — review them."
   - "Never compare hashes of possibly-empty command output. sha256sum emits a
@@ -202,19 +236,23 @@ accepted_test_failures: {}   # no test suite exists
 # ── what is NOT a gate here ─────────────────────────────────────────────────
 unavailable_gates:
   - name: sonarqube
-    status: UNRESOLVED
+    status: STALE
     note: >-
-      sonar-project.properties exists (projectKey=topic-manager, quality gate
-      "Jarvis Standard" on 192.168.202.76:9000) and reports from 2026-05-07 and
-      2026-05-29 are committed under docs/. But the hook-runner Vault AppRole
-      available to agents is DENIED on secret/hooks/sonarqube, so no agent can
-      authenticate a scan. Settle it by granting that AppRole read on the
-      SonarQube token path, or by declaring Sonar an operator-run gate only.
-      Until then no agent may claim a Sonar gate passed.
+      REACHABLE as of 2026-09-01 — the earlier "AppRole DENIED" was a Vault
+      user-lockout, since resolved. Endpoint is https://192.168.202.76 (443,
+      behind nginx) NOT :9000, which ufw does not open; the url field in the
+      Vault record is stale. hook-runner CAN read secret/hooks/sonarqube.
+      BUT: last analysis is 2026-05-29 of projectVersion 1.0.2, and
+      sonar.sources=tm,app/components reads only 10 of the 50 files changed
+      in v1.0.4 — install.sh, the ~2000-line install/upgrade-full.sh that does
+      the root chown/chmod replay, nginx/, systemd/, install/polkit/,
+      app/main.js and all of tests/ are outside it. 78% of the release is
+      invisible. sonar-scanner is not installed on the workstation.
+      NEVER cite a Sonar pass for this repo without stating what it read.
   - name: unit-tests-on-windows
     status: partial
     note: >-
-      `tests/` now exists (added 2026-08-30) — 46 cases and 29 mutation controls.
+      `tests/` now exists (added 2026-08-30) — 120 cases and 59 mutation controls.
       But Git Bash on the Windows workstation CANNOT HOLD POSIX MODES, so the 15
       mode/ownership cases cannot be proven here. `bash tests/run.sh` locally is a
       PARTIAL gate: it proves the EXIT trap, the drop-in behaviour, the
@@ -275,12 +313,16 @@ promote:
     name: TopicManager
     user: claude_admin
     key: ~/.ssh/claude_admin
-    running_version: "1.0.0"
+    running_version: "1.0.3"
     note: >-
-      PROD IS ON 1.0.0, NOT 1.0.3. The v1.0.2 release was recorded as deployed
-      on 2026-05-29 but the box is running v1.0.0 — most likely a vCSA snapshot
-      revert that was never re-upgraded. Verify with
-      `curl -sk https://192.168.202.90/api/health` before assuming anything.
+      MEASURED 2026-09-01: `curl -sk https://192.168.202.90/api/health` returns
+      {"status":"ok","version":"1.0.3"}, so running_version above is correct and
+      the box is current with the last release. The previous note here still
+      said "PROD IS ON 1.0.0, NOT 1.0.3" and contradicted the very field it
+      annotated — it was written before the v1.0.3 deploy and never revised.
+      v1.0.4 is NOT deployed: running_version tracks the HOST, never the repo,
+      so a version cascade must not move it. Verify with the curl above before
+      assuming anything.
   qc_host: none
   note: >-
     cortex-2 (192.168.202.96) is RESERVED for CORTEX /qc and must not be used
@@ -330,16 +372,13 @@ hazards:
 
   - id: hardcoded-version-fallback
     note: >-
-      app/main.js seeds the displayed version from a hardcoded literal
-      (ref('...') plus a `d.version || '...'`) used before/instead of
-      /api/version answering. It does not degrade to "unknown", it asserts a
-      specific version, so a host that cannot reach its own API displays a
-      confident number that may be wrong — and this repo has form: prod ran
-      1.0.0 for months while the repo said 1.0.2. Cascading the literal keeps it
-      truthful only at the moment of release. The durable fix is a neutral
-      sentinel (empty/"unknown") so the UI cannot claim a version it has not
-      been told, but that is a behaviour change needing an operator decision,
-      not a version sweep.
+      RESOLVED 2026-08-31, kept as a rule. app/main.js and AboutModal.js
+      both used to seed a hardcoded version literal, so a host that could
+      not reach /api/version displayed a confident WRONG number — this app
+      showed 1.0.2 while running 1.0.0 for three months. Both now seed
+      'unknown' (main.js:19,24; AboutModal data()). THE RULE: a fallback
+      must degrade to unknown, never assert a version. Do not let a
+      version cascade put a literal back — surface-sweep is told this too.
 
   - id: nginx-add-header-inheritance
     note: >-
@@ -418,7 +457,7 @@ hazards:
   - id: no-ci-no-tests
     note: >-
       There is no CI and no test suite. Nothing catches a regression except the
-      four syntax gates and a human. Weight review accordingly — this is not a
+      eight declared gates (5 syntax/consistency + sca + the repo test suite) and a human. Weight review accordingly — this is not a
       repo where "the tests pass" means anything.
 
 # ── hosts ───────────────────────────────────────────────────────────────────
@@ -452,10 +491,13 @@ hosts:
 
 # ── principles ──────────────────────────────────────────────────────────────
 principles:
-  - "Prod is on 1.0.0. Never assume the repo version is the deployed version —
-     check /api/health first, every time."
-  - "This repo has no CI and no tests. Never report that CI passed or that tests
-     are green; say exactly which of the four syntax gates ran."
+  - "Never assume the repo version is the deployed version — check
+     /api/health first, every time. This principle used to assert 'Prod is on
+     1.0.0'; measured 2026-09-01 prod answers 1.0.3, so the principle had
+     itself become the stale version claim it warns about. State the check,
+     not a remembered number."
+  - "This repo has no CI. It DOES have a test suite (tests/, 120 cases) as of 2026-09-01. Never report that CI passed or that tests
+     are green; say exactly which of the eight declared gates (5 syntax/consistency + sca + the repo test suite) ran."
   - "Every authenticated user is a Kafka admin by design. There is no role
      separation — 'authenticated' and 'can delete any topic' are the same thing."
   - "Security headers must be proven SERVED per route class with curl -skI.

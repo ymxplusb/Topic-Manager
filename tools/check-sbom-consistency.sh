@@ -71,6 +71,31 @@ def compare(label, rel, found):
               "checking anything." % rel)
         failures += 1
         return
+
+    # COVERAGE, not just agreement. Guarding only on "found nothing" catches a
+    # total parse failure and is blind to PARTIAL loss — and partial loss is
+    # what actually happens. Measured 2026-09-01: a blank line inserted
+    # mid-table dropped SBOM.md from 12 components to 8, and a header renamed
+    # Version -> Ver dropped it to 5; the gate printed "all 3 copies agree"
+    # both times. A prose edit could therefore delete components from this
+    # gate's view without failing anything.
+    #
+    # So: every == pin in requirements.txt must be VISIBLE in every copy. A
+    # component this gate cannot see is a component it is not checking, and
+    # that is a failure, not a pass.
+    unseen = sorted(set(truth) - set(found))
+    if unseen:
+        print("FAIL: %s — %d of %d pinned components are NOT VISIBLE to this "
+              "gate:" % (rel, len(unseen), len(truth)))
+        for n in unseen:
+            print("    %-18s expected %s" % (n, truth[n]))
+        print("    The file may still be correct — but its shape changed and "
+              "this gate can no longer see those rows,")
+        print("    so it cannot vouch for them. Fix the table shape or the "
+              "parser, not this message.")
+        failures += len(unseen)
+        return
+
     bad = []
     for name, ver in sorted(found.items()):
         want = truth.get(name)

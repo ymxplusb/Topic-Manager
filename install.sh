@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Jarvis Topic Manager — Install Script
-# Version: 1.0.3
+# Version: 1.0.4
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 #
 # Usage:
@@ -21,6 +21,20 @@ FRONTEND_DIR="/var/www/topic-manager"
 CONFIG_DIR="/etc/topic-manager"
 LOG_DIR="${APP_HOME}/logs"
 DATA_DIR="${APP_HOME}/data"
+# The one directory the application may write inside /etc. Its parent stays
+# root-owned so config.yaml can be neither modified nor unlinked by the app:
+# a directory the app can write is a directory in which it can UNLINK a
+# root-owned 0600 file, which chained with the restart control would be a
+# full auth-config takeover.
+CLUSTERS_DIR="${CONFIG_DIR}/clusters.d"
+CLUSTERS_FILE="${CLUSTERS_DIR}/clusters.yaml"
+CONFIG_FILE="${CONFIG_DIR}/config.yaml"
+CERT_DIR="${DATA_DIR}/cluster-certs"
+# The upgrade script writes its restore points here and creates the directory
+# itself. A fresh install did not, so the first upgrade of a new host was the
+# thing that decided the mode of the directory holding config.yaml, the LDAP
+# bind password and the audit database. Created here, root-only, from the start.
+BACKUP_ROOT="/var/backups/topic-manager"
 VENV="${APP_HOME}/venv"
 SERVICE_NAME="topic-manager"
 PYTHON="python3"
@@ -31,6 +45,32 @@ info()    { echo -e "${CYAN}[INFO]${NC} $*"; }
 success() { echo -e "${GREEN}[OK]${NC}   $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 die()     { echo -e "${RED}[FAIL]${NC} $*" >&2; exit 1; }
+# The same verb install/upgrade-full.sh uses, so the checks the two scripts
+# share can be one identical copy rather than two that drift apart.
+fail()    { die "$*"; }
+
+# safe_install_dir <mode> <owner> <group> <path> — install -d that refuses to
+# work through a symlink.
+#
+# install -d on an existing path is chmod() + chown(), and both FOLLOW symlinks.
+# $CERT_DIR's parent (/opt/topic-manager/data) is app-owned and inside the
+# unit's ReadWritePaths, so the application can replace cluster-certs with a
+# symlink to anything and have root apply an owner and a mode to the target on
+# the next reinstall. Refuse BEFORE the call, so the mutation cannot happen —
+# detecting it afterwards is reporting a chown that already ran.
+safe_install_dir() {   # safe_install_dir <mode> <owner> <group> <path>
+    local m="$1" o="$2" g="$3" p="$4"
+    [[ -L "$p" ]] && fail "${p} is a symlink; refusing to apply ownership through it.
+     install -d would chmod and chown whatever it points at. Remove it, or put
+     the real directory back, and run again."
+    [[ -e "$p" && ! -d "$p" ]] && fail "${p} exists and is not a directory."
+    install -d -m "$m" -o "$o" -g "$g" "$p"
+}
+
+# can_access <user> <test-flag> <path> — the honest check. Mode bits can look
+# right while an ACL, a parent directory or a MAC policy still says no, so ask
+# the kernel as the actual principal.
+can_access() { sudo -u "$1" test "$2" "$3" 2>/dev/null; }
 
 # ─── root check ──────────────────────────────────────────────────────────────
 [[ $EUID -eq 0 ]] || die "Run with sudo: sudo bash install.sh"
@@ -77,11 +117,24 @@ fi
 
 # ─── directories ─────────────────────────────────────────────────────────────
 info "Creating application directories..."
-install -d -m 750 -o "$APP_USER" -g "$APP_USER" \
-    "$APP_HOME" "$LOG_DIR" "$DATA_DIR"
-install -d -m 755 "$FRONTEND_DIR"
-install -d -m 750 "$CONFIG_DIR"
-install -d -m 750 "${CONFIG_DIR}/tls"
+safe_install_dir 750 "$APP_USER" "$APP_USER" "$APP_HOME"
+safe_install_dir 750 "$APP_USER" "$APP_USER" "$LOG_DIR"
+safe_install_dir 750 "$APP_USER" "$APP_USER" "$DATA_DIR"
+safe_install_dir 755 root root "$FRONTEND_DIR"
+# root:${APP_USER} 0750 — the app can traverse and READ config.yaml, and
+# can create nothing here. Not root:root, which would stop it reading its
+# own configuration; not group-writable, which is what would let it unlink
+# config.yaml.
+safe_install_dir 750 root "$APP_USER" "$CONFIG_DIR"
+safe_install_dir 750 root "$APP_USER" "${CONFIG_DIR}/tls"
+# The app owns this subdirectory and ONLY this. Atomic replace needs to
+# create a temp file beside the target, which needs directory write.
+safe_install_dir 750 "$APP_USER" "$APP_USER" "$CLUSTERS_DIR"
+# Uploaded Kafka TLS material. 0700: nothing but the service reads it, and
+# it is already inside the unit ReadWritePaths.
+safe_install_dir 700 "$APP_USER" "$APP_USER" "$CERT_DIR"
+# Restore points. root-only: they hold config.yaml verbatim.
+safe_install_dir 700 root root "$BACKUP_ROOT"
 success "Directories created"
 
 # ─── Python venv + packages ──────────────────────────────────────────────────
@@ -190,26 +243,66 @@ success "Frontend installed at ${FRONTEND_DIR}"
 # ─── config ──────────────────────────────────────────────────────────────────
 if [[ ! -f "${CONFIG_DIR}/config.yaml" ]]; then
     info "Installing default config..."
-    cp "${SCRIPT_DIR}/config/config.yaml.example" "${CONFIG_DIR}/config.yaml"
-    chmod 640 "${CONFIG_DIR}/config.yaml"
-    chown root:"$APP_USER" "${CONFIG_DIR}/config.yaml"
+    # install(1), not cp+chmod: cp under umask 077 lands the file 0600 and
+    # the following chmod races the window in between. install(1) creates it
+    # with the final owner and mode in one step.
+    install -m 640 -o root -g "$APP_USER" \
+        "${SCRIPT_DIR}/config/config.yaml.example" "${CONFIG_DIR}/config.yaml"
 
     # Generate a random secret key
     SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
     sed -i "s/CHANGE_ME_GENERATE_A_RANDOM_SECRET/${SECRET}/" "${CONFIG_DIR}/config.yaml"
 
     warn "Config installed at ${CONFIG_DIR}/config.yaml"
-    warn "  → Edit LDAP bind DN/password and cluster bootstrap_servers before starting."
+    warn "  → Edit the LDAP bind DN and password before starting."
 else
     info "Config already exists — not overwritten."
 fi
 
+# ─── cluster profiles ───────────────────────────────────────────────────────
+# A REINSTALL over an existing host finds a config.yaml that still carries
+# the clusters: block, so this runs on install as well as on upgrade. It is
+# the same module the upgrade calls, and it is idempotent.
+info "Migrating cluster profiles into ${CLUSTERS_DIR} ..."
+PYTHONPATH="$SCRIPT_DIR" "${VENV}/bin/python3" -m tm.migrate_clusters \
+    --config "${CONFIG_DIR}/config.yaml" \
+    --clusters-dir "$CLUSTERS_DIR" \
+    --example "${SCRIPT_DIR}/config/clusters.yaml.example" \
+    || die "Cluster profile migration failed."
+# The migration owns the DATA; permissions are set here, with install(1).
+safe_install_dir 750 "$APP_USER" "$APP_USER" "$CLUSTERS_DIR"
+chown "$APP_USER":"$APP_USER" "$CLUSTERS_FILE"
+chmod 640 "$CLUSTERS_FILE"
+success "Cluster profiles at ${CLUSTERS_FILE}"
+
 # ─── systemd service ─────────────────────────────────────────────────────────
 info "Installing systemd service..."
-cp "${SCRIPT_DIR}/systemd/topic-manager.service" /etc/systemd/system/
+install -m 644 -o root -g root \
+    "${SCRIPT_DIR}/systemd/topic-manager.service" \
+    /etc/systemd/system/topic-manager.service
+# The root-side `nginx -t` gate for the Settings restart control. Never
+# enabled, only started on demand; the unit says why it has to be root.
+install -m 644 -o root -g root \
+    "${SCRIPT_DIR}/systemd/topic-manager-nginx-test.service" \
+    /etc/systemd/system/topic-manager-nginx-test.service
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}" --quiet
 success "Service installed: ${SERVICE_NAME}"
+
+# ─── polkit ─────────────────────────────────────────────────────────────────
+# sudo cannot work under NoNewPrivileges=true (measured on prod), so the
+# restart control authorises through polkit instead.
+if [[ -d /etc/polkit-1/rules.d ]]; then
+    info "Installing polkit rule for the service restart control..."
+    install -m 644 -o root -g root \
+        "${SCRIPT_DIR}/install/polkit/50-topic-manager.rules" \
+        /etc/polkit-1/rules.d/50-topic-manager.rules
+    success "polkit rule installed (restart self, reload nginx)"
+else
+    warn "/etc/polkit-1/rules.d does not exist — polkit is not installed."
+    warn "  The Settings restart control would report 'Interactive authentication required'."
+    warn "  Install polkitd, then re-run this script."
+fi
 
 # ─── nginx ───────────────────────────────────────────────────────────────────
 info "Installing nginx site..."
@@ -246,6 +339,40 @@ success "Log rotation configured (daily, 14-day retention)"
 
 # ─── nginx test ──────────────────────────────────────────────────────────────
 nginx -t 2>/dev/null && success "nginx config valid" || warn "nginx config test failed — check cert paths"
+
+# ─── permission boundary ────────────────────────────────────────────────────
+# ASKED OF THE KERNEL as the real principal. Mode bits can look right while an
+# ACL or a parent directory still says otherwise, and this is the boundary the
+# whole clusters.d design exists to hold: the app writes its own directory and
+# cannot touch the file that holds secret_key, ldap_bind_password and
+# required_group.
+#
+# The upgrade script has asked these five questions since v1.0.4. install.sh
+# asked none of them, so the REINSTALL path — the one that runs over an
+# existing host and re-applies every mode — could put the boundary back wrong
+# and report a successful install.
+command -v sudo >/dev/null 2>&1 \
+    || die "sudo is not installed, so the permission boundary cannot be verified as
+     ${APP_USER}. Install sudo and re-run: an unverified boundary is not a
+     verified one, and this script will not claim it."
+can_access "$APP_USER" -r "$CLUSTERS_FILE" \
+    || die "${APP_USER} cannot READ ${CLUSTERS_FILE} — every cluster view would fail."
+can_access "$APP_USER" -w "$CLUSTERS_DIR" \
+    || die "${APP_USER} cannot WRITE ${CLUSTERS_DIR} — the Cluster Builder could not save."
+can_access "$APP_USER" -r "$CONFIG_FILE" \
+    || die "${APP_USER} cannot read config.yaml — the service would not start."
+if can_access "$APP_USER" -w "$CONFIG_FILE"; then
+    die "${APP_USER} can WRITE ${CONFIG_FILE}. The application must never be able
+     to modify the file holding secret_key and ldap_bind_password.
+     Fix: sudo chown root:${APP_USER} ${CONFIG_FILE}; sudo chmod 640 ${CONFIG_FILE}"
+fi
+if can_access "$APP_USER" -w "$CONFIG_DIR"; then
+    die "${APP_USER} can WRITE ${CONFIG_DIR}. Directory write is UNLINK: the
+     application could delete config.yaml and write its own, choosing its
+     own required_group, then restart the service.
+     Fix: sudo chown root:${APP_USER} ${CONFIG_DIR}; sudo chmod 750 ${CONFIG_DIR}"
+fi
+success "Permission boundary verified: the app owns clusters.d and cannot write config.yaml"
 
 # ─── summary ─────────────────────────────────────────────────────────────────
 echo ""

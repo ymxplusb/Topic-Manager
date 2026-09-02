@@ -9,6 +9,11 @@ User=topic-manager
 Group=topic-manager
 WorkingDirectory=/opt/topic-manager
 Environment="TM_CONFIG=/etc/topic-manager/config.yaml"
+# The cluster profiles the Cluster Builder writes. Declared here so the one
+# path the service uses is stated in exactly one place, and so it matches the
+# ReadWritePaths entry below.
+Environment="TM_CLUSTERS_DIR=/etc/topic-manager/clusters.d"
+Environment="TM_CLUSTER_CERT_DIR=/opt/topic-manager/data/cluster-certs"
 ExecStart=/opt/topic-manager/venv/bin/gunicorn \
     --workers 4 \
     --bind 127.0.0.1:5001 \
@@ -30,7 +35,13 @@ SyslogIdentifier=topic-manager
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/topic-manager/data /opt/topic-manager/logs /tmp
+# /etc/topic-manager/clusters.d ONLY — never /etc/topic-manager itself.
+# Measured 2026-08-30: a directory this user can write is a directory in
+# which it can UNLINK a root-owned 0600 file, and config.yaml holds
+# secret_key, the LDAP bind password and required_group. DAC still holds
+# inside the mount namespace, so the parent staying root:topic-manager 0750
+# is what actually protects it; this entry only opens the subdirectory.
+ReadWritePaths=/opt/topic-manager/data /opt/topic-manager/logs /tmp /etc/topic-manager/clusters.d
 
 [Install]
 WantedBy=multi-user.target

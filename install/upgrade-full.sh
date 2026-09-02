@@ -48,6 +48,18 @@ WEB_USER="www-data"
 APP_HOME="/opt/topic-manager"
 FRONTEND_DIR="/var/www/topic-manager"
 CONFIG_DIR="/etc/topic-manager"
+# Defined here, not in Phase 3 where it used to be: restore_from_backup is
+# called from the EXIT trap and from --restore, both of which run before Phase 3
+# ever assigns anything, and `set -u` turns a forward reference into an abort.
+CONFIG_FILE="${CONFIG_DIR}/config.yaml"
+# New in v1.0.4. The cluster list moved out of config.yaml into a
+# subdirectory the application OWNS, because atomic replace needs to create
+# a temp file beside the target and making /etc/topic-manager itself
+# app-writable was measured to let the app UNLINK the root-owned secrets
+# file. The parent stays root:topic-manager 0750.
+CLUSTERS_DIR="${CONFIG_DIR}/clusters.d"
+CLUSTERS_FILE="${CLUSTERS_DIR}/clusters.yaml"
+CERT_DIR="${APP_HOME}/data/cluster-certs"
 VENV="${APP_HOME}/venv"
 SERVICE="topic-manager"
 # Where TM_SECRET_KEY and TM_LDAP_BIND_PASSWORD live on a host configured by
@@ -60,9 +72,17 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_ROOT="/var/backups/topic-manager"
 BACKUP_DIR="${BACKUP_ROOT}/${TIMESTAMP}"
 BACKUP_TAR="${BACKUP_ROOT}/topic-manager-backup-${TIMESTAMP}.tar.gz"
-WORK_DIR="/tmp/topic-manager-src-${TIMESTAMP}"
-# Air-gapped source lives on a root-owned path, never under /tmp.
-OFFLINE_SRC_DIR="/var/lib/topic-manager/offline-src"
+# Where root stages the source tree it is about to EXECUTE. BOTH branches of
+# Phase 5 land under this root-owned 0700 parent and BOTH assert it before a
+# byte is read. The online branch used to clone into
+# /tmp/topic-manager-src-<timestamp>: a predictable name under a world-writable
+# directory, and the timestamp is printed in the log and derivable from the run,
+# so any local account that created it first chose what root then rsyncs into
+# /opt, installs as a systemd unit and pip-installs wheels from. The offline
+# branch has always been root-owned; the assertion was only ever called there.
+STAGE_ROOT="/var/lib/topic-manager"
+WORK_DIR=""                            # set in Phase 5, one value per branch
+OFFLINE_SRC_DIR="${STAGE_ROOT}/offline-src"
 WORK_DIR_OWNED=false      # true only when THIS run created WORK_DIR (see Phase 5)
 LOG_FILE="/var/log/topic-manager-upgrade-${TIMESTAMP}.log"
 PERM_BASELINE=""          # set once BACKUP_DIR exists
@@ -93,6 +113,7 @@ BASELINE_PATHS=(
   "$FRONTEND_DIR" "${FRONTEND_DIR}/index.html" "${FRONTEND_DIR}/app"
   "${FRONTEND_DIR}/lib" "${FRONTEND_DIR}/lib/vue.global.prod.js"
   "$CONFIG_DIR" "${CONFIG_DIR}/config.yaml" "${CONFIG_DIR}/tls"
+  "$CLUSTERS_DIR" "$CLUSTERS_FILE" "$CERT_DIR"
   "${CONFIG_DIR}/tls/server.crt" "${CONFIG_DIR}/tls/server.key"
   "/etc/nginx/sites-available/topic-manager"
   "/etc/nginx/snippets/tm-security-headers.conf"
@@ -142,40 +163,175 @@ info "Log: ${LOG_FILE}"
 # they have been deliberately narrowed; re-imposing this script's defaults
 # would quietly undo that hardening. So: record, then put back exactly.
 
+# THE RECORD FORMAT IS NUL-DELIMITED: path\0owner\0group\0mode\0, four fields
+# per record and no line structure at all.
+#
+# It used to be '%p|%u|%g|%m\n'. A filename may contain BOTH '|' and a newline,
+# and www-data owns /var/www/topic-manager — so a file created there and named
+#     evil<newline>/etc/shadow|root|root|777
+# put a whole extra RECORD into the baseline, which root later replayed as a
+# chown and a chmod on a path of the attacker's choosing. NUL is the one byte a
+# filename cannot contain, which is why find(1) offers it and why every consumer
+# below reads with `read -d ''`.
 record_baseline() {
     local out="$1"; : > "$out"; chmod 600 "$out"
     local p
     for p in "${BASELINE_PATHS[@]}"; do
         [[ -e "$p" ]] || continue
-        printf '%s|%s|%s|%s\n' "$p" \
+        printf '%s\0%s\0%s\0%s\0' "$p" \
             "$(stat -c '%U' "$p")" "$(stat -c '%G' "$p")" "$(stat -c '%a' "$p")" >> "$out"
     done
     # Every file actually served to browsers, so the restore can reproduce
     # exactly what nginx was able to read before.
     if [[ -d "$FRONTEND_DIR" ]]; then
-        find "$FRONTEND_DIR" -mindepth 1 \( -type f -o -type d \) -printf '%p|%u|%g|%m\n' >> "$out"
+        find "$FRONTEND_DIR" -mindepth 1 \( -type f -o -type d \) -printf '%p\0%u\0%g\0%m\0' >> "$out"
     fi
     # Every drop-in file individually, not just the directory. These carry the
     # secret_key and the LDAP bind password, so a restore that widened one from
     # 0600 to the directory's default would expose them to every local account.
     if [[ -d "$DROPIN_DIR" ]]; then
-        find "$DROPIN_DIR" -mindepth 1 \( -type f -o -type d \) -printf '%p|%u|%g|%m\n' >> "$out"
+        find "$DROPIN_DIR" -mindepth 1 \( -type f -o -type d \) -printf '%p\0%u\0%g\0%m\0' >> "$out"
     fi
 }
+
+# baseline_stream <file> — emit the baseline as NUL-delimited quadruples,
+# whichever format the file on disk is in.
+#
+# A backup taken before v1.0.4 holds the old pipe format, and `--restore` is
+# exactly the path where a NEW script reads an OLD backup. Reading one of those
+# with the NUL reader would find no record at all and report "restored 0 paths"
+# — a silent no-op on the one operation whose entire purpose is putting
+# permissions back. So the legacy shape is converted here instead.
+#
+# It never calls fail(), and it never prints a diagnostic: it runs inside a
+# process substitution, where an exit would only kill the subshell and leave the
+# caller reading a truncated stream, and where anything on stdout would be read
+# back AS A RECORD. Malformed legacy records are passed through verbatim and
+# refused by baseline_assert_record in the caller, which runs in the shell that
+# can actually stop. A legacy record for a path containing '|' therefore arrives
+# with a mode field like "www-data|644", fails the octal test, and stops the run
+# — the honest outcome, because that format cannot represent such a path at all.
+baseline_stream() {
+    local bl="$1" line f1 f2 f3 f4
+    [[ -n "$bl" && -s "$bl" ]] || return 0
+    if ! baseline_is_legacy "$bl"; then
+        cat -- "$bl"
+        return 0
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -n "$line" ]] || continue
+        IFS='|' read -r f1 f2 f3 f4 <<<"$line"
+        printf '%s\0%s\0%s\0%s\0' "$f1" "$f2" "$f3" "$f4"
+    done < "$bl"
+}
+
+# baseline_is_legacy <file> — true for a pre-v1.0.4 pipe-delimited baseline.
+# NUL cannot be held in a shell variable, so the format is measured by length:
+# a file that shortens when NULs are deleted contained NULs.
+baseline_is_legacy() {
+    local bl="$1" total stripped
+    [[ -n "$bl" && -s "$bl" ]] || return 1
+    total="$(wc -c < "$bl")"
+    stripped="$(LC_ALL=C tr -d '\000' < "$bl" | wc -c)"
+    [[ "$total" -eq "$stripped" ]]
+}
+
+# baseline_assert_record <path> <owner> <group> <mode>
+# Every field of a record is attacker-influenced until this says otherwise, and
+# the caller is about to run chown and chmod AS ROOT with all four. Sets
+# BASELINE_REAL_PATH on success.
+#
+# It returns the resolved path in a GLOBAL rather than on stdout on purpose:
+# real="$(baseline_assert_record ...)" would run fail() inside a command
+# substitution, where exit only leaves the subshell and the run carries on.
+BASELINE_REAL_PATH=""
+_BASELINE_REAL=()
+_BASELINE_REAL_INIT=""
+baseline_assert_record() {
+    local fp="$1" fo="$2" fg="$3" fm="$4" real fe di p
+    [[ "$fm" =~ ^[0-7]{3,4}$ ]] \
+        || fail "Permission baseline: the mode field for ${fp} is not octal: '${fm}'.
+     Nothing was chowned or chmodded. This is what a record the format cannot
+     represent — or a forged one — looks like."
+    [[ "$fo" =~ ^[A-Za-z0-9._@-]+$ && "$fg" =~ ^[A-Za-z0-9._@-]+$ ]] \
+        || fail "Permission baseline: the owner/group fields for ${fp} are not names: '${fo}:${fg}'."
+    # A recorded path that is NOW a symlink is a swap, full stop.
+    # record_baseline only records files and directories (find -type f -o
+    # -type d), so a symlink at a recorded path was put there afterwards —
+    # and chmod(1) has no --no-dereference, so replaying the record would
+    # follow it. Refuse on the LINK, not on where it points: that is a
+    # question with one answer, and it does not depend on resolving anything.
+    [[ -L "$fp" ]] \
+        && fail "Permission baseline: ${fp} is a symlink now and was not when it
+     was recorded. Nothing was chowned or chmodded. chmod would follow it to
+     $(readlink -f -- "$fp" 2>/dev/null || echo 'wherever it points')."
+    # LEXICAL normalisation (-s), NOT resolution. MEASURED 2026-09-01: with a
+    # resolved allowlist this check validated the attack against itself — the
+    # allowlist is built from the SAME recorded paths, so resolving it followed
+    # the attacker's symlink and the record then matched its own target. The
+    # comparison has to be about the path that was RECORDED, not about where
+    # the filesystem points today.
+    real="$(realpath -m -s -- "$fp")"
+    fe="$(realpath -m -s -- "$FRONTEND_DIR")"
+    di="$(realpath -m -s -- "$DROPIN_DIR")"
+    case "$real" in
+        "$fe"/*|"$di"/*) BASELINE_REAL_PATH="$real"; return 0 ;;
+    esac
+    # The recorded set is not only those two trees: BASELINE_PATHS also names
+    # config.yaml, the nginx site, the unit and more. The allowlist is derived
+    # from that array rather than written out a second time, so it cannot drift
+    # from what record_baseline actually writes.
+    # Built once, and built HERE rather than depending on a declaration
+    # somewhere above: under `set -u` a function that reads an array it did not
+    # create is one refactor away from aborting the run it is meant to guard.
+    if [[ -z "${_BASELINE_REAL_INIT:-}" ]]; then
+        _BASELINE_REAL=()
+        for p in "${BASELINE_PATHS[@]}"; do _BASELINE_REAL+=("$(realpath -m -s -- "$p")"); done
+        _BASELINE_REAL_INIT=1
+    fi
+    for p in "${_BASELINE_REAL[@]}"; do
+        if [[ "$real" == "$p" ]]; then BASELINE_REAL_PATH="$real"; return 0; fi
+    done
+    fail "Permission baseline record points outside the recorded roots:
+     recorded as ${fp}
+     resolves to ${real}
+     Nothing was chowned or chmodded. record_baseline can only produce paths
+     under ${FRONTEND_DIR}, under ${DROPIN_DIR}, or exactly one of the
+     BASELINE_PATHS entries, so this record is corrupt or forged."
+}
+
+# baseline_lookup <file> <path> — the recorded owner, group and mode for ONE
+# path as owner<TAB>group<TAB>mode, or exit 1 when the path is not recorded.
+# An EXACT path comparison: the previous lookup was a grep for "<path>|", which
+# is anchored on the separator but is still a substring match against the whole
+# file.
+baseline_lookup() {
+    local bl="$1" want="$2" fp fo fg fm
+    [[ -n "$bl" && -f "$bl" ]] || return 1
+    while IFS= read -r -d '' fp && IFS= read -r -d '' fo \
+       && IFS= read -r -d '' fg && IFS= read -r -d '' fm; do
+        if [[ "$fp" == "$want" ]]; then
+            printf '%s\t%s\t%s\n' "$fo" "$fg" "$fm"
+            return 0
+        fi
+    done < <(baseline_stream "$bl")
+    return 1
+}
+
+# baseline_has <file> <path> — is this path in the recorded set at all?
+baseline_has() { baseline_lookup "$1" "$2" >/dev/null; }
 
 # apply_baseline <path> [fallback_owner] [fallback_group] [fallback_mode]
 # Restores the recorded owner/mode. Falls back only when the path is new.
 apply_baseline() {
-    local p="$1" fo="${2:-}" fg="${3:-}" fm="${4:-}" line
+    local p="$1" fo="${2:-}" fg="${3:-}" fm="${4:-}" rec o g mo
     [[ -e "$p" ]] || return 0
-    if [[ -n "$PERM_BASELINE" && -f "$PERM_BASELINE" ]]; then
-        line="$(grep -m1 -F "$(printf '%s|' "$p")" "$PERM_BASELINE" 2>/dev/null || true)"
-        if [[ -n "$line" ]]; then
-            IFS='|' read -r _ o g m <<<"$line"
-            chown "${o}:${g}" "$p" 2>/dev/null || true
-            chmod "$m" "$p" 2>/dev/null || true
-            return 0
-        fi
+    if rec="$(baseline_lookup "$PERM_BASELINE" "$p")"; then
+        IFS=$'\t' read -r o g mo <<<"$rec"
+        baseline_assert_record "$p" "$o" "$g" "$mo"
+        chown -h "${o}:${g}" -- "$p" || fail "chown failed on ${p}"
+        chmod "$mo" -- "$p" || fail "chmod failed on ${p}"
+        return 0
     fi
     [[ -n "$fo" && -n "$fg" ]] && chown "${fo}:${fg}" "$p" 2>/dev/null || true
     [[ -n "$fm" ]] && chmod "$fm" "$p" 2>/dev/null || true
@@ -206,6 +362,24 @@ assert_root_owned_path() {
         cur="$(dirname "$cur")"
     done
     info "Verified root-owned, non-writable path: ${d}"
+}
+
+# safe_install_dir <mode> <owner> <group> <path> — install -d that refuses to
+# work through a symlink.
+#
+# install -d on an existing path is chmod() + chown(), and both FOLLOW symlinks.
+# $CERT_DIR's parent (/opt/topic-manager/data) is app-owned and inside the
+# unit's ReadWritePaths, so the application can replace cluster-certs with a
+# symlink to anything and have root apply an owner and a mode to the target on
+# the next upgrade or reinstall. Refuse BEFORE the call, so the mutation cannot
+# happen — detecting it afterwards is reporting a chown that already ran.
+safe_install_dir() {   # safe_install_dir <mode> <owner> <group> <path>
+    local m="$1" o="$2" g="$3" p="$4"
+    [[ -L "$p" ]] && fail "${p} is a symlink; refusing to apply ownership through it.
+     install -d would chmod and chown whatever it points at. Remove it, or put
+     the real directory back, and run again."
+    [[ -e "$p" && ! -d "$p" ]] && fail "${p} exists and is not a directory."
+    install -d -m "$m" -o "$o" -g "$g" "$p"
 }
 
 # can_access <user> <test-flag> <path> — the honest check. Mode bits can look
@@ -349,6 +523,15 @@ restore_from_backup() {
 
     local SAVED_BASELINE="$PERM_BASELINE"
     [[ -f "${BD}/manifest/permissions.baseline" ]] && PERM_BASELINE="${BD}/manifest/permissions.baseline"
+    # Said once, here, rather than by the converter: baseline_stream is called
+    # for every recorded path and cannot print anything at all (its stdout IS
+    # the record stream). Every restore point taken before v1.0.4 is in the old
+    # format, so this is the normal shape of a rollback, not an error.
+    if baseline_is_legacy "$PERM_BASELINE"; then
+        warn "${PERM_BASELINE} is a pre-v1.0.4 pipe-delimited baseline."
+        warn "  It is converted on the fly. A record that format cannot represent"
+        warn "  unambiguously — a path containing '|' or a newline — is refused, not replayed."
+    fi
 
     warn "Restoring from ${BD} ..."
     systemctl stop "$SERVICE" 2>/dev/null || true
@@ -389,14 +572,47 @@ restore_from_backup() {
     local p
     for p in "${BASELINE_PATHS[@]}"; do apply_baseline "$p"; done
     if [[ -f "$PERM_BASELINE" ]]; then
-        while IFS='|' read -r fp fo fg fm; do
+        local fp fo fg fm
+        while IFS= read -r -d '' fp && IFS= read -r -d '' fo \
+           && IFS= read -r -d '' fg && IFS= read -r -d '' fm; do
+            baseline_assert_record "$fp" "$fo" "$fg" "$fm"
             [[ -e "$fp" ]] || continue
-            chown "${fo}:${fg}" "$fp" 2>/dev/null || true
-            chmod "$fm" "$fp" 2>/dev/null || true
-        done < "$PERM_BASELINE"
+            chown -h "${fo}:${fg}" -- "$fp" || fail "chown failed on ${fp} during restore"
+            chmod "$fm" -- "$fp" || fail "chmod failed on ${fp} during restore"
+        done < <(baseline_stream "$PERM_BASELINE")
         info "Restored recorded ownership and modes"
     fi
     PERM_BASELINE="$SAVED_BASELINE"
+
+    # --- The permission boundary, ASKED OF THE KERNEL as the real principal.
+    # Same five questions Phase 11 asks, because --restore replays recorded
+    # ownership with none of Phase 11's checks: a backup taken while the
+    # boundary was wrong puts the host straight back into the state the
+    # boundary exists to prevent, and the restore would report success.
+    # The cluster-store half is conditional — a pre-v1.0.4 restore point has
+    # no clusters.d at all, and that is not a fault to abort a rollback on.
+    if [[ -e "$CLUSTERS_FILE" ]]; then
+        can_access "$APP_USER" -r "$CLUSTERS_FILE" \
+            || fail "${APP_USER} cannot READ ${CLUSTERS_FILE} after the restore — every cluster view would fail."
+    fi
+    if [[ -d "$CLUSTERS_DIR" ]]; then
+        can_access "$APP_USER" -w "$CLUSTERS_DIR" \
+            || fail "${APP_USER} cannot WRITE ${CLUSTERS_DIR} after the restore — the Cluster Builder could not save."
+    fi
+    can_access "$APP_USER" -r "$CONFIG_FILE" \
+        || fail "${APP_USER} cannot read config.yaml after the restore — the service would not start."
+    if can_access "$APP_USER" -w "$CONFIG_FILE"; then
+        fail "${APP_USER} can WRITE ${CONFIG_FILE} after the restore. The application must
+     never be able to modify the file holding secret_key and ldap_bind_password.
+     Fix: sudo chown root:${APP_USER} ${CONFIG_FILE}; sudo chmod 640 ${CONFIG_FILE}"
+    fi
+    if can_access "$APP_USER" -w "$CONFIG_DIR"; then
+        fail "${APP_USER} can WRITE ${CONFIG_DIR} after the restore. Directory write is
+     UNLINK: the application could delete config.yaml and write its own,
+     choosing its own required_group, then restart the service.
+     Fix: sudo chown root:${APP_USER} ${CONFIG_DIR}; sudo chmod 750 ${CONFIG_DIR}"
+    fi
+    success "Permission boundary verified after restore"
 
     systemctl daemon-reload
     systemctl start "$SERVICE" 2>/dev/null || true
@@ -675,8 +891,6 @@ phase "Phase 3 — Upgrade blockers (v${INSTALLED_VER} → target)"
 # Checks for things that are harmless on the installed version but fail closed
 # on the new one. These are the failures that would otherwise surface as
 # "nobody can log in" an hour after a apparently successful upgrade.
-
-CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 
 # --- 0. Resolve configuration the way the SERVICE will see it, not the way
 # config.yaml alone reads. tm/config.py:18-21 lets TM_SECRET_KEY and
@@ -1026,6 +1240,11 @@ cp -a "$AUDIT_REPORT" "${BACKUP_DIR}/manifest/permission-audit.txt" 2>/dev/null 
 info "Backing up to ${BACKUP_DIR} ..."
 cp -a "${CONFIG_DIR}/config.yaml" "${BACKUP_DIR}/etc/config.yaml"
 [[ -d "${CONFIG_DIR}/tls" ]] && cp -a "${CONFIG_DIR}/tls" "${BACKUP_DIR}/etc/tls"
+# The cluster profiles and the uploaded Kafka TLS material. Without these
+# a --restore hands back a host whose every topic view resolves through a
+# cluster that no longer exists.
+[[ -d "$CLUSTERS_DIR" ]] && cp -a "$CLUSTERS_DIR" "${BACKUP_DIR}/etc/clusters.d"
+[[ -d "$CERT_DIR" ]]     && cp -a "$CERT_DIR" "${BACKUP_DIR}/data/cluster-certs"
 # Additional CA/cert material dropped into the config dir. The shipped
 # upgrade.sh copied only tls/ and silently lost these.
 shopt -s nullglob
@@ -1096,6 +1315,14 @@ chmod 600 "$BACKUP_TAR"
 tar -tzf "$BACKUP_TAR" >/dev/null || fail "Backup archive is unreadable — refusing to proceed."
 
 [[ -s "${BACKUP_DIR}/etc/config.yaml" ]] || fail "config.yaml missing from backup."
+# Assert the copy happened, rather than trusting that it did. A cluster
+# store that exists on the host and not in the backup is a restore that
+# silently loses every profile.
+if [[ -s "$CLUSTERS_FILE" ]]; then
+    [[ -s "${BACKUP_DIR}/etc/clusters.d/clusters.yaml" ]] \
+        || fail "clusters.yaml exists on the host but is missing from the backup."
+    success "Cluster profiles backed up ($(wc -c < "$CLUSTERS_FILE") bytes)"
+fi
 verify_dropin_backed_up "$BACKUP_DIR"
 if [[ -d "${CONFIG_DIR}/tls" ]]; then
     [[ -s "${BACKUP_DIR}/etc/tls/server.key" ]] || fail "TLS private key missing from backup."
@@ -1136,9 +1363,17 @@ phase "Phase 5 — Fetch target source"
 
 if [[ $ONLINE == true ]]; then
     command -v git >/dev/null || apt-get install -y --no-install-recommends git -qq
-    info "Cloning ${REPO_URL} (${REPO_BRANCH}) ..."
-    git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$WORK_DIR" --quiet || fail "git clone failed."
+    # Root-owned, 0700 and unpredictable. mktemp -d creates the directory
+    # itself and fails rather than reusing one, so there is no race to lose;
+    # assert_root_owned_path then walks every ancestor, because a root-owned
+    # leaf under a parent someone else can write is still swappable.
+    safe_install_dir 700 root root "$STAGE_ROOT"
+    WORK_DIR="$(mktemp -d "${STAGE_ROOT}/src-${TIMESTAMP}-XXXXXX")" \
+        || fail "Could not create a staging directory under ${STAGE_ROOT}."
     WORK_DIR_OWNED=true          # this run created it, so this run may delete it
+    assert_root_owned_path "$WORK_DIR"
+    info "Cloning ${REPO_URL} (${REPO_BRANCH}) into ${WORK_DIR} ..."
+    git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$WORK_DIR" --quiet || fail "git clone failed."
 else
     # The operator transferred this by hand onto an air-gapped host. It is not
     # ours to delete — see the cleanup at the end of the script.
@@ -1318,6 +1553,24 @@ rm -f /etc/nginx/sites-enabled/default
 
 info "Installing systemd unit and logrotate ..."
 cp "${WORK_DIR}/systemd/topic-manager.service" /etc/systemd/system/
+# New in v1.0.4: the root-side `nginx -t` gate the Settings restart control
+# calls before it touches nginx. Measured on prod 2026-09-01 — `nginx -t`
+# as the topic-manager account dies on /run/nginx.pid (13: Permission
+# denied), and -g 'pid ...;' collides with nginx.conf line 3. It has to be
+# root, so it is a Type=oneshot unit with a fixed ExecStart.
+install -m 644 -o root -g root \
+    "${WORK_DIR}/systemd/topic-manager-nginx-test.service" \
+    /etc/systemd/system/topic-manager-nginx-test.service
+# polkit, not sudoers: sudo cannot run at all under NoNewPrivileges=true.
+if [[ -d /etc/polkit-1/rules.d ]]; then
+    install -m 644 -o root -g root \
+        "${WORK_DIR}/install/polkit/50-topic-manager.rules" \
+        /etc/polkit-1/rules.d/50-topic-manager.rules
+    success "polkit rule installed for the service restart control"
+else
+    warn "polkit is not installed — the Settings restart control will report"
+    warn "  'Interactive authentication required' until polkitd is present."
+fi
 [[ -f "${WORK_DIR}/install/logrotate.d/topic-manager" ]] && \
     cp "${WORK_DIR}/install/logrotate.d/topic-manager" /etc/logrotate.d/topic-manager
 systemctl daemon-reload
@@ -1337,6 +1590,20 @@ EXTRA_N=0
 
 info "Restoring config.yaml ..."
 cp -a "${BACKUP_DIR}/etc/config.yaml" "${CONFIG_DIR}/config.yaml"
+
+# The cluster store, before Phase 11 migrates. Restoring first is what
+# makes the migration idempotent across repeated upgrades: it sees the
+# profiles that already exist and leaves them alone.
+if [[ -d "${BACKUP_DIR}/etc/clusters.d" ]]; then
+    safe_install_dir 750 "$APP_USER" "$APP_USER" "$CLUSTERS_DIR"
+    cp -a "${BACKUP_DIR}/etc/clusters.d/." "${CLUSTERS_DIR}/"
+    success "Cluster profiles restored"
+fi
+if [[ -d "${BACKUP_DIR}/data/cluster-certs" ]]; then
+    safe_install_dir 700 "$APP_USER" "$APP_USER" "$CERT_DIR"
+    cp -a "${BACKUP_DIR}/data/cluster-certs/." "${CERT_DIR}/"
+    success "Kafka TLS material restored"
+fi
 
 # The unit drop-in is configuration in the same class as config.yaml: Phase 9
 # replaced the unit file, and on a host that keeps TM_SECRET_KEY there this is
@@ -1394,12 +1661,20 @@ shopt -u nullglob
 info "Re-applying the recorded permission baseline ..."
 for p in "${BASELINE_PATHS[@]}"; do apply_baseline "$p"; done
 RESTORED_N=0
-while IFS='|' read -r fp fo fg fm; do
+while IFS= read -r -d '' fp && IFS= read -r -d '' fo \
+   && IFS= read -r -d '' fg && IFS= read -r -d '' fm; do
+    # Validated BEFORE the existence test, deliberately: a check a record can
+    # skip by naming a path that is not there is a check the record turns off.
+    baseline_assert_record "$fp" "$fo" "$fg" "$fm"
     [[ -e "$fp" ]] || continue
-    chown "${fo}:${fg}" "$fp" 2>/dev/null || true
-    chmod "$fm" "$fp" 2>/dev/null || true
+    # -h and --, both load-bearing: a recorded file that has been replaced by a
+    # symlink must not have its TARGET chowned, and a path is not an option.
+    # The failures are no longer swallowed: `2>/dev/null || true` on a chown
+    # that root cannot perform is a permission model that reports success.
+    chown -h "${fo}:${fg}" -- "$fp" || fail "chown failed on ${fp}"
+    chmod "$fm" -- "$fp" || fail "chmod failed on ${fp}"
     RESTORED_N=$((RESTORED_N+1))
-done < "$PERM_BASELINE"
+done < <(baseline_stream "$PERM_BASELINE")
 success "Re-applied recorded ownership/mode on ${RESTORED_N} paths"
 
 # --- New files have no baseline entry. Give them the same treatment their
@@ -1417,7 +1692,7 @@ WIDENED=0; DEVIATED=0
 while IFS= read -r f; do
     # Anchor the baseline lookup: an unanchored substring can match a longer
     # path that merely contains this one.
-    if grep -qF -- "$(printf '%s|' "$f")" "$PERM_BASELINE" 2>/dev/null; then
+    if baseline_has "$PERM_BASELINE" "$f"; then
         continue    # recorded path — apply_baseline already restored it verbatim
     fi
     # New this release: it has no recorded owner/mode, so it takes the
@@ -1459,7 +1734,8 @@ chown -R "${APP_USER}:${APP_USER}" "${APP_HOME}/tm" "${APP_HOME}/wsgi.py" "$VENV
 apply_baseline "${APP_HOME}/tm"     "$APP_USER" "$APP_USER" 755
 apply_baseline "${APP_HOME}/wsgi.py" "$APP_USER" "$APP_USER" 644
 apply_baseline "${APP_HOME}/venv"   root root 755
-install -d -o "$APP_USER" -g "$APP_USER" "${APP_HOME}/data" "${APP_HOME}/logs"
+safe_install_dir 755 "$APP_USER" "$APP_USER" "${APP_HOME}/data"
+safe_install_dir 755 "$APP_USER" "$APP_USER" "${APP_HOME}/logs"
 apply_baseline "${APP_HOME}/data" "$APP_USER" "$APP_USER" 750
 apply_baseline "${APP_HOME}/logs" "$APP_USER" "$APP_USER" 750
 success "Ownership and modes restored"
@@ -1467,6 +1743,57 @@ success "Ownership and modes restored"
 # =============================================================================
 phase "Phase 11 — Configuration migration"
 # =============================================================================
+
+# --- The cluster store. Runs on EVERY upgrade, and does nothing on a host
+# that is already migrated.
+info "Ensuring the cluster profile store ..."
+# install(1), never cp+chmod: under umask 077 the mode between the two is
+# wrong, and on a STIG host that window is the whole exposure.
+safe_install_dir 750 root "$APP_USER" "$CONFIG_DIR"
+safe_install_dir 750 "$APP_USER" "$APP_USER" "$CLUSTERS_DIR"
+safe_install_dir 700 "$APP_USER" "$APP_USER" "$CERT_DIR"
+PYTHONPATH="$APP_HOME" "${VENV}/bin/python3" -m tm.migrate_clusters \
+    --config "$CONFIG_FILE" \
+    --clusters-dir "$CLUSTERS_DIR" \
+    --example "${WORK_DIR}/config/clusters.yaml.example" \
+    || fail "Cluster profile migration failed. It writes clusters.yaml before it
+     rewrites config.yaml, so DO NOT assume either file is untouched — read the
+     error above. A verified restore point exists:
+       ${BACKUP_DIR}
+     Restore with: sudo bash upgrade-full.sh --restore ${TIMESTAMP}"
+chown "${APP_USER}:${APP_USER}" "$CLUSTERS_FILE"
+chmod 640 "$CLUSTERS_FILE"
+# Then hand the host its own recorded values back, if it had any.
+apply_baseline "$CLUSTERS_DIR"  "$APP_USER" "$APP_USER" 750
+apply_baseline "$CLUSTERS_FILE" "$APP_USER" "$APP_USER" 640
+apply_baseline "$CERT_DIR"      "$APP_USER" "$APP_USER" 700
+"${VENV}/bin/python3" -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); sys.exit(0 if isinstance(d,dict) and d.get('clusters') else 1)" "$CLUSTERS_FILE" \
+    || fail "${CLUSTERS_FILE} does not hold a non-empty cluster list after migration."
+success "Cluster profiles at ${CLUSTERS_FILE}"
+
+# --- The permission boundary, ASKED OF THE KERNEL as the real principal.
+# Mode bits can look right while an ACL or a parent directory still says
+# otherwise, and this is the boundary the whole clusters.d design exists
+# to hold: the app writes its own directory and cannot touch the file that
+# holds secret_key, ldap_bind_password and required_group.
+can_access "$APP_USER" -r "$CLUSTERS_FILE" \
+    || fail "${APP_USER} cannot READ ${CLUSTERS_FILE} — every cluster view would fail."
+can_access "$APP_USER" -w "$CLUSTERS_DIR" \
+    || fail "${APP_USER} cannot WRITE ${CLUSTERS_DIR} — the Cluster Builder could not save."
+can_access "$APP_USER" -r "$CONFIG_FILE" \
+    || fail "${APP_USER} cannot read config.yaml — the service would not start."
+if can_access "$APP_USER" -w "$CONFIG_FILE"; then
+    fail "${APP_USER} can WRITE ${CONFIG_FILE}. The application must never be able
+     to modify the file holding secret_key and ldap_bind_password.
+     Fix: sudo chown root:${APP_USER} ${CONFIG_FILE}; sudo chmod 640 ${CONFIG_FILE}"
+fi
+if can_access "$APP_USER" -w "$CONFIG_DIR"; then
+    fail "${APP_USER} can WRITE ${CONFIG_DIR}. Directory write is UNLINK: the
+     application could delete config.yaml and write its own, choosing its
+     own required_group, then restart the service.
+     Fix: sudo chown root:${APP_USER} ${CONFIG_DIR}; sudo chmod 750 ${CONFIG_DIR}"
+fi
+success "Permission boundary verified: the app owns clusters.d and cannot write config.yaml"
 
 if ! grep -q 'ldap_ca_cert' "$CONFIG_FILE"; then
     sed -i '/ldap_server:/a\  ldap_ca_cert: ""         # blank = system trust store; set to CA PEM path if the DC cert is not trusted' "$CONFIG_FILE"
