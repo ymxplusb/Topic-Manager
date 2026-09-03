@@ -9,6 +9,13 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_CONFIG_PATH = '/etc/topic-manager/config.yaml'
 
+#: Minutes of INACTIVITY before a session ends. The value lived as a bare
+#: `30` in BOTH tm/app.py (PERMANENT_SESSION_LIFETIME) and tm/routes.py
+#: (_timeout), so the cookie lifetime and the server-side session row could
+#: be given different numbers by anyone who edited one and not the other,
+#: and nothing would have reported it. One name, read by both.
+DEFAULT_SESSION_TIMEOUT_MINUTES = 15
+
 # THERE WERE TWO CACHES, and fixing one looked like success. This module used
 # to return `_config_cache` forever after the first load, and tm/app.py froze a
 # SECOND copy into app.config['TM_CONFIG'] that every route read. With four

@@ -1,4 +1,4 @@
-# Jarvis Topic Manager v1.0.5
+# Jarvis Topic Manager v1.0.6
 
 **Standalone Kafka topic administration frontend for the Jarvis ecosystem.**
 
@@ -29,6 +29,10 @@ Jarvis Topic Manager is a lightweight web application that provides a secure, AD
 - **Classification Banner** — Fixed at top and bottom of viewport; server-side persistence
 - **Broker Hover Popup** — Hover the broker count to see all broker FQDNs and IDs
 - **Concurrent Session Limit** — Configurable max simultaneous sessions per user (default 5)
+- **Idle session timeout** — 15 minutes by default. The browser warns at 60
+  seconds remaining and then signs the user out; the server refuses the
+  session regardless. A tab's own background refresh does not count as
+  activity, so an unattended browser cannot hold a session open
 - **Offline Install** — All dependencies bundlable; no internet required on target host
 
 ## Stack
@@ -191,7 +195,7 @@ curl http://127.0.0.1:5001/api/health
 curl -sk https://localhost/api/health
 ```
 
-Both should return: `{"status":"ok","version":"1.0.5"}`
+Both should return: `{"status":"ok","version":"1.0.6"}`
 
 Then open `https://your-hostname.yourdomain.com` in a browser and sign in with an AD account that is a member of `Kafka-Admins`.
 
@@ -714,20 +718,20 @@ On an **internet-connected** machine with the repo checked out:
 
 ```bash
 bash prepare-offline.sh --bundle
-# Creates: topic-manager-offline-1.0.5.tar.gz
+# Creates: topic-manager-offline-1.0.6.tar.gz
 # Contains: all source files + Python wheels + Vue.js lib
 ```
 
 Transfer the bundle to the air-gapped host:
 ```bash
-scp topic-manager-offline-1.0.5.tar.gz user@target:/tmp/
+scp topic-manager-offline-1.0.6.tar.gz user@target:/tmp/
 ```
 
 On the air-gapped host — root runs `install.sh`, so the tree it runs from is
 created root-owned first and the bundle is unpacked straight into it:
 ```bash
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/install-src
-sudo tar xzf /tmp/topic-manager-offline-1.0.5.tar.gz   -C /var/lib/topic-manager/install-src --strip-components=1
+sudo tar xzf /tmp/topic-manager-offline-1.0.6.tar.gz   -C /var/lib/topic-manager/install-src --strip-components=1
 sudo bash /var/lib/topic-manager/install-src/install.sh   # auto-detects offline mode
 ```
 
@@ -763,8 +767,36 @@ Key settings:
 | `auth.ldap_bind_dn` | **Optional.** Full DN of a service account used for directory searches. Leave empty for the direct user bind |
 | `auth.ldap_bind_password` | **Optional.** Service account password. If both fields are set they must work — every login is gated on that bind |
 | `auth.required_group` | Full DN of the AD group required for access |
-| `session.timeout_minutes` | Session idle timeout (default: 30) |
+| `session.timeout_minutes` | Session idle timeout in minutes (default: **15**) |
 | `session.max_concurrent` | Maximum simultaneous sessions per user; 0 = unlimited |
+
+#### Session timeout
+
+`session.timeout_minutes` (default **15**) is minutes of **inactivity**, and it
+is enforced in two places that agree with each other:
+
+- **The server** stores `expires_at` on the session row and refuses an expired
+  session with `401`, writing a `SESSION_EXPIRED` audit row. This is the
+  enforcement, and it holds whether or not the browser cooperates.
+- **The browser** arms an idle timer from the same value — served on login and
+  on `/api/auth/whoami`, never hardcoded in the frontend — warns at 60 seconds
+  remaining, and then signs out. The sign-out is deliberately a few seconds
+  before the server's own expiry, so the `LOGOUT` audit row is written while
+  the session is still valid rather than lost to a `401`.
+
+**Background refreshes do not count as activity.** The Topics and Consumer
+Groups tabs refresh every 30 seconds; those requests carry `X-TM-Background: 1`
+and do not extend the session.
+
+> Before v1.0.6 they did, and the consequence is worth stating plainly: every
+> authenticated request renewed the session for another full timeout, so an open
+> tab renewed itself twice a minute and the idle timeout could only ever expire
+> a browser that was already closed. Setting `timeout_minutes` to a smaller
+> number would not have changed that.
+
+Raising `timeout_minutes` is an operator decision; the value flows to the
+browser automatically and no frontend change is needed.
+
 | `audit.db_path` | SQLite audit + session database |
 | `logging.log_level` / `logging.syslog_enabled` | Log verbosity, and syslog forwarding |
 
@@ -836,7 +868,7 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
 - HTTPOnly + Secure + SameSite=Lax session cookies
 - Security headers on all routes: HSTS, CSP (`frame-ancestors 'none'`, `form-action 'none'`, `base-uri 'self'`), X-Content-Type-Options, Referrer-Policy
 - Server-side session store (SQLite); session tokens never leave the server in a readable form
-- Audit log with user, IP, timestamp and detail. **15 audited actions**: topics (`CREATE`, `DELETE`, `UPDATE_CONFIG`); cluster profiles (`CLUSTER_CREATE`, `CLUSTER_UPDATE`, `CLUSTER_DELETE`, before and after); service restarts (`SERVICE_RESTART`, `SERVICE_RESTART_STEP`, `SERVICE_RESTART_REFUSED`, `SERVICE_RESTART_THROTTLED`); and authentication (`LOGIN`, `LOGIN_FAILED`, `LOGIN_REFUSED`, `LOGOUT`, `SESSION_EXPIRED`). SASL passwords are redacted and certificate paths reduced to basenames before anything is logged, because any authenticated user can export the log
+- Audit log with user, IP, timestamp and detail. **15 audited actions**: topics (`CREATE`, `DELETE`, `UPDATE_CONFIG`); cluster profiles (`CLUSTER_CREATE`, `CLUSTER_UPDATE`, `CLUSTER_DELETE`, before and after); service restarts (`SERVICE_RESTART`, `SERVICE_RESTART_STEP`, `SERVICE_RESTART_REFUSED`, `SERVICE_RESTART_THROTTLED`); and authentication (`LOGIN`, `LOGIN_FAILED`, `LOGIN_REFUSED`, `LOGOUT`, `SESSION_EXPIRED`). A `LOGOUT` row says in its detail whether the person signed out or the idle timeout did it, so the two are distinguishable in the export. SASL passwords are redacted and certificate paths reduced to basenames before anything is logged, because any authenticated user can export the log
 - Destructive actions require name-match confirmation
 - Session timeout: 30 minutes (configurable)
 - Fail-closed: application refuses to start if `secret_key` is absent or still the placeholder

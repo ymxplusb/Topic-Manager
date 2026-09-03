@@ -389,6 +389,25 @@ review_engines:
 # ── hazards ─────────────────────────────────────────────────────────────────
 # Learned, not imagined. Each one has actually happened in this codebase.
 hazards:
+  - id: any-request-renews-the-session
+    note: >-
+      FOUND 2026-09-02 (v1.0.6), and it is the reason a timeout NUMBER is not a
+      timeout. `require_auth` called `touch_session(db, sid, _timeout())` on
+      EVERY authenticated request, and TopicsTab and ConsumerGroupsTab each
+      auto-refresh every 30 seconds. So an open tab pushed its own `expires_at`
+      a further full timeout into the future twice a minute, for as long as the
+      browser stayed open: the idle timeout could only ever expire a tab that
+      was ALREADY CLOSED, and lowering `session.timeout_minutes` from 30 to 15
+      would not have changed that by one second. The rule now is that a request
+      carrying `X-TM-Background: 1` is not activity, and the two auto-refresh
+      call sites send it. Trusting the client is safe IN THIS DIRECTION ONLY -
+      the header can shorten a session and never lengthen one - so a caller that
+      forgets it merely gets the old behaviour and one that forges it expires
+      itself sooner. THE GENERAL SHAPE, worth carrying to any other product
+      here: a sliding-window session plus ANY background poll is a session that
+      never expires, and the polling is usually somewhere nobody thinks of as
+      auth code. tests/t14-idle-session.sh pins it, with a mutation control that
+      removes the guard and requires the real check to go red.
   - id: version-surface-drift
     note: >-
       In the v1.0.2 release, app/components/SettingsTab.js and app/main.js were

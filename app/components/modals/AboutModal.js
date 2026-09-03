@@ -43,7 +43,7 @@ const AboutModal = {
   <div class="modal xl">
     <div class="mhdr">
       <div>
-        <div class="mtitle"><img src="/jarvis-mark.png?v=1005" alt="" style="height:22px;width:22px;object-fit:contain;vertical-align:-4px;margin-right:8px">Jarvis Topic Manager</div>
+        <div class="mtitle"><img src="/jarvis-mark.png?v=1006" alt="" style="height:22px;width:22px;object-fit:contain;vertical-align:-4px;margin-right:8px">Jarvis Topic Manager</div>
         <div class="msub">Version {{ version }} &nbsp;·&nbsp; Copyright &copy; 2025–2026 James Rodman. All Rights Reserved.</div>
       </div>
       <button class="mclose" @click="$emit('close')">✕</button>

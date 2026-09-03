@@ -2,7 +2,7 @@ import logging
 import logging.handlers
 from flask import Flask
 from werkzeug.middleware.proxy_fix import ProxyFix
-from .config import config_path, load_config
+from .config import config_path, load_config, DEFAULT_SESSION_TIMEOUT_MINUTES
 from .models import init_db
 
 # gunicorn binds 127.0.0.1:5001 and nginx is the only thing that talks to it,
@@ -48,7 +48,8 @@ def create_app(config_path_arg=None):
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
     app.config['SESSION_COOKIE_SECURE']   = True
     app.config['PERMANENT_SESSION_LIFETIME'] = (
-        cfg.get('session', {}).get('timeout_minutes', 30) * 60
+        cfg.get('session', {}).get('timeout_minutes',
+                                   DEFAULT_SESSION_TIMEOUT_MINUTES) * 60
     )
     # The PATH, not the parsed dict. app.config['TM_CONFIG'] used to hold a
     # config frozen at create_app; routes read it on every request, so a

@@ -11,12 +11,19 @@ const ConsumerGroupsTab = {
         empty()    { return this.groups.filter(g => g.state === 'Empty').length; },
     },
     methods: {
-        async fetch() {
+        // `background` is true only for the tab's own 30-second refresh.
+        // It travels as X-TM-Background so require_auth does not treat the
+        // poll as user activity and slide the session; a person pressing
+        // Refresh, or switching cluster, is activity and sends nothing.
+        _bg(background) {
+            return background ? { headers: { 'X-TM-Background': '1' } } : {};
+        },
+        async fetch(background) {
             this.countdown = 30;
             this.loading = true; this.error = '';
             try {
                 const qs = this.clusterId ? `?cluster=${this.clusterId}` : '';
-                const r  = await fetch(`/api/consumer-groups${qs}`);
+                const r  = await fetch(`/api/consumer-groups${qs}`, this._bg(background));
                 const d  = await r.json();
                 if (!r.ok) { this.error = d.error || 'Failed'; return; }
                 this.groups = d.groups || [];
@@ -37,7 +44,12 @@ const ConsumerGroupsTab = {
         this.refreshTimer = setInterval(() => {
             if (this.loading) return;
             this.countdown--;
-            if (this.countdown <= 0) { this.fetch(); this.countdown = 30; }
+            // `true` = this is the tab's own 30-second refresh, not a
+            // person doing something. It travels as X-TM-Background so
+            // the server does not treat it as activity and renew the
+            // session; before v1.0.6 it did, and an open tab could never
+            // reach its idle timeout.
+            if (this.countdown <= 0) { this.fetch(true); this.countdown = 30; }
         }, 1000);
     },
     beforeUnmount() { clearInterval(this.refreshTimer); },

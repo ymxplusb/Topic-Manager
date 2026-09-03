@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Jarvis Topic Manager — Install Script
-# Version: 1.0.5
+# Version: 1.0.6
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 #
 # Usage:

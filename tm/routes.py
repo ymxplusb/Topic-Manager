@@ -9,7 +9,8 @@ from . import auth, kafka_client, audit, service_control
 from . import clusters as cluster_store
 from .models import (get_db, create_session, validate_session, touch_session,
                      delete_session, count_active_sessions, cleanup_expired_sessions)
-from .config import load_config, get_active_cluster, get_cluster_by_id
+from .config import (load_config, get_active_cluster, get_cluster_by_id,
+                     DEFAULT_SESSION_TIMEOUT_MINUTES)
 
 bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -45,7 +46,19 @@ def _cfg():
     return load_config(current_app.config['TM_CONFIG_PATH'])
 
 def _timeout():
-    return _cfg().get('session', {}).get('timeout_minutes', 30)
+    return _cfg().get('session', {}).get('timeout_minutes',
+                                        DEFAULT_SESSION_TIMEOUT_MINUTES)
+
+#: The reasons a session may END, and the sentence each one writes into the
+#: audit trail. A closed vocabulary because the value arrives from the browser;
+#: see the logout route. '' (no reason sent) is the pre-v1.0.6 client and the
+#: Sign out button, both of which are genuinely explicit.
+_LOGOUT_REASONS = {
+    '':         'explicit sign-out',
+    'explicit': 'explicit sign-out',
+    'idle':     'automatic sign-out after the idle timeout',
+}
+
 
 def _max_sessions():
     return _cfg().get('session', {}).get('max_concurrent', 0)
@@ -107,7 +120,26 @@ def require_auth(f):
             session.clear()
             return jsonify({'error': 'Session expired'}), 401
 
-        touch_session(db, sid, _timeout())
+        # AN IDLE TIMEOUT THAT BACKGROUND POLLING CANNOT DEFEAT.
+        #
+        # TopicsTab and ConsumerGroupsTab each auto-refresh every 30
+        # seconds. Every one of those refreshes is an authenticated request
+        # and every one landed here, so `expires_at` was pushed a further
+        # full timeout into the future twice a minute FOR AS LONG AS THE TAB
+        # WAS OPEN. The server-side session timeout could therefore only
+        # ever fire on a tab that was CLOSED - an unattended browser left on
+        # the Topics view held a valid session indefinitely, and changing the
+        # timeout from 30 minutes to 15 would not have altered that by one
+        # second.
+        #
+        # A request that says it is a background refresh does not count as
+        # activity. Trusting the client here is safe IN THIS DIRECTION and
+        # only in this direction: the header can only SHORTEN a session.
+        # Omitting it gives exactly the old behaviour, so a caller that
+        # forgets it loses nothing an attacker could want, and a caller that
+        # forges it expires itself sooner.
+        if request.headers.get('X-TM-Background') != '1':
+            touch_session(db, sid, _timeout())
         db.close()
 
         request.current_user = session.get('user', {})
@@ -182,7 +214,12 @@ def login():
                      request.remote_addr or 'unknown',
                      'bind=%s' % ('service' if _cfg().get('auth', {}).get('ldap_bind_dn')
                                   else 'direct-user'), '')
-    return jsonify({'user': result})
+    # The browser arms its own idle timer from THIS value. It is not sent so
+    # the client can decide policy - the server still enforces `expires_at` -
+    # but so that the countdown a person watches is the same number the
+    # session actually dies on. A hardcoded 15 in the frontend would be a
+    # second definition that drifts the first time config.yaml is edited.
+    return jsonify({'user': result, 'timeout_minutes': _timeout()})
 
 
 @bp.route('/auth/logout', methods=['POST'])
@@ -194,11 +231,24 @@ def logout():
         db = get_db(_cfg())
         delete_session(db, sid)
         db.close()
-    log.info('Logout: user=%s', user)
+    # WHY THE SESSION ENDED, IN THE ROW ITSELF. A session the browser closed
+    # after 15 idle minutes is not the same event as a person pressing Sign out,
+    # and recording both as 'explicit sign-out' would have made the audit trail
+    # say something untrue about the first. The DETAIL carries the distinction
+    # rather than a sixteenth action word: an auditor filtering the export on
+    # LOGOUT still sees every session end, which is the question usually asked.
+    #
+    # The reason is CLIENT-SUPPLIED and therefore constrained to a known set.
+    # Anything else is recorded as 'unspecified' rather than echoed - this
+    # string reaches the audit export, and an attacker-chosen sentence in an
+    # audit row is a forged record even when it is correctly escaped.
+    reason = str(((request.get_json(silent=True) or {}).get('reason') or '')).strip()
+    detail = _LOGOUT_REASONS.get(reason, 'sign-out (unspecified reason)')
+    log.info('Logout: user=%s reason=%s', user, reason or 'explicit')
     # Audited BEFORE session.clear(), because the username is read from the
     # session and clearing it first would record '?' for every logout.
     audit.log_action(_cfg(), user, 'LOGOUT',
-                     request.remote_addr or 'unknown', 'explicit sign-out', '')
+                     request.remote_addr or 'unknown', detail, '')
     session.clear()
     return jsonify({'ok': True})
 
@@ -206,7 +256,11 @@ def logout():
 @bp.route('/auth/whoami', methods=['GET'])
 @require_auth
 def whoami():
-    return jsonify({'user': session['user']})
+    # `timeout_minutes` here as well as on login: this is the call the app
+    # makes on a page RELOAD, and a reloaded tab that re-armed its idle timer
+    # from a frontend default would run a different clock from the session it
+    # just restored.
+    return jsonify({'user': session['user'], 'timeout_minutes': _timeout()})
 
 
 # ── clusters ──────────────────────────────────────────────────────

@@ -5,6 +5,69 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
+## [1.0.6] — 2026-09-02
+
+**Idle sessions now end, and the browser signs the user out when they do.**
+
+James: *"When session expires, it should automatically log the user out. this
+should be after 15 minutes."*
+
+### The part that was not the number
+
+Nothing in the browser watched the clock. An expired session was discovered only
+when some later request happened to return `401`, and until then the application
+sat on screen looking signed in.
+
+Worse, the timeout could not fire at all on an open tab. The Topics and Consumer
+Groups tabs each refresh every 30 seconds; every refresh was an authenticated
+request, and every authenticated request called `touch_session()`, which pushes
+`expires_at` a further **full timeout** into the future. An open tab therefore
+renewed its own session twice a minute for as long as the browser was open, and
+`timeout_minutes` could only ever expire a tab that was already closed.
+
+**Changing 30 to 15 alone would not have altered that by one second.**
+
+### What changed
+
+- **Default idle timeout is now 15 minutes**, defined once in `tm/config.py`.
+  `tm/app.py` (cookie lifetime) and `tm/routes.py` (session row) both read it;
+  each previously carried its own literal `30`, so they could be given different
+  values with nothing to report it.
+- **A background refresh is not activity.** The two auto-refresh timers send
+  `X-TM-Background: 1`, and `require_auth` does not extend the session for a
+  request that carries it. Trusting the client is safe in this direction only:
+  the header can shorten a session and never lengthen one, so omitting it gives
+  the old behaviour and forging it expires you sooner.
+- **The browser arms an idle timer** from the server's value (served on login
+  and `whoami`, not hardcoded), resets it on real interaction, warns at 60
+  seconds with a **Stay signed in** button, and then signs out. The sign-out
+  fires a few seconds before the server's expiry so the `LOGOUT` audit row is
+  written under a session that is still valid, instead of being lost to a `401`.
+- **The audit trail says which kind of sign-out it was.** A `LOGOUT` row records
+  *explicit sign-out* or *automatic sign-out after the idle timeout*. The reason
+  comes from the browser, so it is looked up in a closed vocabulary and never
+  echoed — this string reaches the CSV export, and an attacker-chosen sentence
+  in an audit row is a forged record even when it is correctly escaped.
+- **The login screen says why you are looking at it** after an idle sign-out,
+  styled as information rather than as an error.
+
+### Verification
+
+`tests/t14-idle-session.sh` — 7 cases. The one that matters is the mutation
+control: it removes the header guard from a copy of the tree and requires the
+real check to go **red**. It invokes the actual case function against the
+mutant rather than a copy of its logic, because a control that re-implements
+the rule it is testing can drift from it and go on passing.
+
+### Files
+
+`tm/config.py`, `tm/app.py`, `tm/routes.py`, `app/main.js`,
+`app/components/LoginView.js`, `app/components/TopicsTab.js`,
+`app/components/ConsumerGroupsTab.js`, `app/styles/main.css`,
+`config/config.yaml.example`, `tests/t14-idle-session.sh` (new).
+
+---
+
 ## [1.0.5] — 2026-09-02
 
 Security release. Authentication events are now written to the audit database, not only to

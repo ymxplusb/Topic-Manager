@@ -36,7 +36,16 @@ auth:
 # idempotently; nothing needs to be done by hand.
 
 session:
-  timeout_minutes: 30
+  # Minutes of INACTIVITY before the session ends. The browser arms its own
+  # idle timer from this value (served on login and whoami), warns at 60
+  # seconds remaining and signs the user out when it reaches zero, so the
+  # number here is the one a person actually experiences.
+  #
+  # Background tab refreshes do NOT count as activity (they send
+  # X-TM-Background: 1). Before v1.0.6 they did, which meant an open tab
+  # renewed its own session every 30 seconds and this setting could only
+  # ever expire a CLOSED one.
+  timeout_minutes: 15
   # Maximum simultaneous sessions per user. 0 = unlimited.
   # When the limit is reached the login attempt is rejected with HTTP 429.
   max_concurrent: 5

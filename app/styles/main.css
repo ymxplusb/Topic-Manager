@@ -1,6 +1,6 @@
 /*
  * Jarvis Topic Manager — Main Stylesheet
- * Version: 1.0.5
+ * Version: 1.0.6
  * Themes: dark (default), light, color-blind (cb)
  * Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
  */
@@ -417,6 +417,31 @@ select.fc option { background:var(--bg-card) }
 .login-sub { font-size:.72rem; color:var(--text-muted); text-align:center; margin-bottom:24px }
 .login-err { display:none; background:rgba(248,113,113,.08); border:1px solid rgba(248,113,113,.22); border-radius:8px; color:var(--accent-red); font-size:.72rem; padding:8px 12px; margin-bottom:14px }
 .login-err.show { display:block }
+
+/* v1.0.6 — the idle session.
+   The login notice is INFORMATIONAL, not an error: being signed out after 15
+   idle minutes is the system working, and colouring it like a failure would
+   teach people that a normal event is a fault. Blue, not red. */
+.login-notice { background:rgba(96,165,250,.08); border:1px solid rgba(96,165,250,.24);
+                border-radius:8px; color:var(--accent-blue,#60a5fa); font-size:.72rem;
+                padding:8px 12px; margin-bottom:14px }
+
+/* The warning that precedes it. Fixed and centred over everything, because a
+   warning a person can scroll past is a warning that did not happen; z-index
+   sits above the modals (900) and the classification banners. */
+.idle-warn { position:fixed; inset:0; z-index:1200; display:flex;
+             align-items:center; justify-content:center;
+             background:rgba(3,7,18,.68); backdrop-filter:blur(3px) }
+.idle-warn-card { background:var(--bg-panel,#111827); border:1px solid var(--border,#1f2937);
+                  border-radius:12px; padding:22px 26px; max-width:380px; width:calc(100% - 32px);
+                  box-shadow:0 18px 48px rgba(0,0,0,.5); text-align:left }
+.idle-warn-card h3 { margin:0 0 8px; font-size:.95rem; color:var(--text-primary,#e5e7eb) }
+.idle-warn-card p  { margin:0 0 16px; font-size:.78rem; color:var(--text-secondary,#9ca3af);
+                     line-height:1.5 }
+.idle-warn-card b  { color:var(--accent-amber,#fbbf24); font-variant-numeric:tabular-nums }
+.idle-warn-actions { display:flex; gap:8px; justify-content:flex-end }
+.light-mode .idle-warn { background:rgba(148,163,184,.55) }
+.light-mode .idle-warn-card { background:#ffffff; border-color:#cbd5e1 }
 .login-meta { margin-top:18px; text-align:center; font-size:.62rem; color:var(--text-muted); line-height:1.7 }
 .login-meta span { color:var(--accent-cyan) }
 

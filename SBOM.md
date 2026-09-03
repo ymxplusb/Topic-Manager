@@ -1,10 +1,10 @@
 # Jarvis Topic Manager — Software Bill of Materials (SBOM)
 
-**Version:** 1.0.5
+**Version:** 1.0.6
 **Date:** 2026-09-02
 **Format:** CycloneDX-compatible markdown
 **Copyright:** (c) 2025–2026 James Rodman. All Rights Reserved.
-**SBOM Serial:** urn:topic-manager:sbom:1.0.5
+**SBOM Serial:** urn:topic-manager:sbom:1.0.6
 
 > The backend table below is generated from `requirements.txt`, which is the single source
 > of truth for every Python pin: `install/upgrade-full.sh` installs exactly these versions on

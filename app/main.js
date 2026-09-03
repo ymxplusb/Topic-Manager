@@ -1,4 +1,20 @@
-const { createApp, ref, computed, onMounted } = Vue;
+const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+
+// Fired when the idle timer signs the user out, so the login view can say
+// why they are looking at it. A module-level constant rather than a magic
+// string repeated at both ends.
+const IDLE_NOTICE = 'You were signed out after 15 minutes of inactivity.';
+// Seconds of warning before the sign-out. The countdown runs INSIDE the
+// session window - the browser signs out a few seconds EARLY (see
+// LOGOUT_LEAD_MS) so the request that records the event still carries a
+// session the server considers valid.
+const IDLE_WARN_SECONDS = 60;
+// Sign out this far before the server's own expiry. Without the lead the
+// two clocks race: the browser posts /api/auth/logout at the same instant
+// the row expires, require_auth answers 401, and the sign-out is never
+// audited - the one event an auditor most wants to see would be the one
+// event reliably missing.
+const LOGOUT_LEAD_MS = 5000;
 
 const App = {
     components: { LoginView, TopBar, TopicsTab, ConsumerGroupsTab, AuditTab, SettingsTab, AboutModal },
@@ -25,6 +41,14 @@ const App = {
         // 'unknown' renders literally in the Settings > Version row, which is
         // the truth when the API has not answered.
         const version     = ref('unknown');
+        // Minutes of inactivity before sign-out. SERVED BY THE SERVER on
+        // login and whoami; this is the value shown before either answers.
+        // It is not policy - the server enforces `expires_at` regardless -
+        // it is the clock the person watches, and it must be the same one.
+        const timeoutMinutes = ref(15);
+        const idleWarning    = ref(0);      // seconds left, 0 = not warning
+        const loginNotice    = ref('');     // why the login view is showing
+        let idleTimer = null, warnTimer = null;
 
         async function fetchVersion() {
             try {
@@ -57,17 +81,81 @@ const App = {
         async function checkSession() {
             try {
                 const r = await fetch('/api/auth/whoami');
-                if (r.ok) { const d = await r.json(); user.value = d.user; }
+                if (r.ok) {
+                    const d = await r.json();
+                    user.value = d.user;
+                    // A RELOAD MUST RE-ARM FROM THE SERVER'S NUMBER. Taking the
+                    // frontend default here would run a 15-minute clock against
+                    // a session configured for something else.
+                    if (d.timeout_minutes) timeoutMinutes.value = d.timeout_minutes;
+                    armIdleTimer();
+                }
             } catch { /* network unavailable — UI stays in previous state */ }
         }
 
-        async function logout() {
-            await fetch('/api/auth/logout', { method: 'POST' });
-            user.value = null; currentTab.value = 'topics';
+        // ── the idle session ────────────────────────────────────────────
+        //
+        // James, 2026-09-02: "When session expires, it should automatically
+        // log the user out. this should be after 15 minutes." Before this,
+        // nothing in the browser watched the clock at all: an expired session
+        // was discovered only when some later request happened to 401, and
+        // until then the application sat on screen looking signed in.
+        //
+        // This is the layer a PERSON experiences. It is not the enforcement:
+        // the server owns `expires_at` and refuses an expired session whether
+        // or not any of this runs.
+        function clearIdleTimers() {
+            if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+            if (warnTimer) { clearInterval(warnTimer); warnTimer = null; }
+            idleWarning.value = 0;
         }
 
-        function onLoggedIn(u) {
+        function armIdleTimer() {
+            clearIdleTimers();
+            if (!user.value) return;
+            const totalMs = Math.max(60000, timeoutMinutes.value * 60000) - LOGOUT_LEAD_MS;
+            const warnAt  = Math.max(0, totalMs - IDLE_WARN_SECONDS * 1000);
+            idleTimer = setTimeout(() => {
+                idleWarning.value = IDLE_WARN_SECONDS;
+                warnTimer = setInterval(() => {
+                    idleWarning.value -= 1;
+                    if (idleWarning.value <= 0) logout('idle');
+                }, 1000);
+            }, warnAt);
+        }
+
+        // Any real interaction is activity. The tab's own 30-second refresh
+        // is NOT - it sends X-TM-Background so the server does not count it
+        // either, and the two ends agree about what idle means.
+        const ACTIVITY = ['mousedown', 'keydown', 'scroll', 'touchstart'];
+        function onActivity() { if (user.value) armIdleTimer(); }
+
+        async function logout(reason) {
+            clearIdleTimers();
+            const why = reason === 'idle' ? 'idle' : 'explicit';
+            try {
+                await fetch('/api/auth/logout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason: why }),
+                });
+            } catch { /* the session still ends locally; the row may be missed */ }
+            user.value = null; currentTab.value = 'topics';
+            loginNotice.value = why === 'idle' ? IDLE_NOTICE : '';
+        }
+
+        // Pressing "Stay signed in" is itself activity: it re-arms the timer
+        // and, because it is a real request, slides the server's row too.
+        function staySignedIn() {
+            armIdleTimer();
+            fetch('/api/auth/whoami').catch(() => {});
+        }
+
+        function onLoggedIn(u, timeout) {
             user.value = u;
+            if (timeout) timeoutMinutes.value = timeout;
+            loginNotice.value = '';
+            armIdleTimer();
             fetchClusters();
             fetchVersion();
         }
@@ -117,10 +205,18 @@ const App = {
             checkSession().then(() => {
                 if (user.value) { fetchClusters(); fetchVersion(); }
             });
+            ACTIVITY.forEach(e => document.addEventListener(e, onActivity,
+                                                           { passive: true }));
+        });
+
+        onUnmounted(() => {
+            clearIdleTimers();
+            ACTIVITY.forEach(e => document.removeEventListener(e, onActivity));
         });
 
         return { user, currentTab, clusters, activeCluster, protocols, mechanisms,
                  brokerMeta, topicCount, showAbout, version,
+                 idleWarning, loginNotice, staySignedIn,
                  onLoggedIn, logout, onClusterChanged, fetchClusters };
     },
     template: `
@@ -158,8 +254,18 @@ const App = {
     />
   </div>
   <AboutModal v-if="showAbout" @close="showAbout = false" />
+  <div v-if="idleWarning > 0" class="idle-warn" role="alertdialog" aria-live="assertive">
+    <div class="idle-warn-card">
+      <h3>Still there?</h3>
+      <p>You will be signed out in <b>{{ idleWarning }}</b> second{{ idleWarning === 1 ? '' : 's' }} because of inactivity.</p>
+      <div class="idle-warn-actions">
+        <button class="btn btn-primary" @click="staySignedIn">Stay signed in</button>
+        <button class="btn" @click="logout('explicit')">Sign out now</button>
+      </div>
+    </div>
+  </div>
 </div>
-<LoginView v-else @logged-in="onLoggedIn" />
+<LoginView v-else :notice="loginNotice" @logged-in="onLoggedIn" />
 `,
 };
 

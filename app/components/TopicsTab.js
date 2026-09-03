@@ -43,15 +43,23 @@ const TopicsTab = {
     },
     watch: { clusterId() { this.fetch(); } },
     methods: {
-        async fetch() {
+        // `background` is true only for the tab's own 30-second refresh.
+        // It travels as X-TM-Background so require_auth does not treat the
+        // poll as user activity and slide the session; a person pressing
+        // Refresh, or switching cluster, is activity and sends nothing.
+        _bg(background) {
+            return background ? { headers: { 'X-TM-Background': '1' } } : {};
+        },
+        async fetch(background) {
             this.countdown = 30;
             this.loading = true; this.error = ''; this.selected = new Set();
             try {
                 const qs = this.clusterId ? `?cluster=${this.clusterId}&internal=true` : '?internal=true';
                 const brokerQs = this.clusterId ? `?cluster=${this.clusterId}` : '';
+                const opts = this._bg(background);
                 const [tr, mr] = await Promise.all([
-                    fetch(`/api/topics${qs}`),
-                    fetch(`/api/broker/metadata${brokerQs}`),
+                    fetch(`/api/topics${qs}`, opts),
+                    fetch(`/api/broker/metadata${brokerQs}`, opts),
                 ]);
                 const td = await tr.json();
                 if (!tr.ok) { this.error = td.error || 'Failed to load topics'; return; }
@@ -145,7 +153,12 @@ const TopicsTab = {
         this.refreshTimer = setInterval(() => {
             if (this.loading) return;
             this.countdown--;
-            if (this.countdown <= 0) { this.fetch(); this.countdown = 30; }
+            // `true` = this is the tab's own 30-second refresh, not a
+            // person doing something. It travels as X-TM-Background so
+            // the server does not treat it as activity and renew the
+            // session; before v1.0.6 it did, and an open tab could never
+            // reach its idle timeout.
+            if (this.countdown <= 0) { this.fetch(true); this.countdown = 30; }
         }, 1000);
     },
     beforeUnmount() { clearInterval(this.refreshTimer); },

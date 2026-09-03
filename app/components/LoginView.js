@@ -2,6 +2,10 @@
 // Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 const LoginView = {
     name: 'LoginView',
+    // `notice` says WHY the login view is on screen when it is not simply the
+    // start of a visit - today, that the idle timeout signed them out. Being
+    // returned to a login screen with no explanation reads as a fault.
+    props: { notice: { type: String, default: '' } },
     emits: ['logged-in'],
     data() {
         return {
@@ -41,7 +45,9 @@ const LoginView = {
                 });
                 const data = await r.json();
                 if (!r.ok) { this.error = data.error || 'Login failed'; return; }
-                this.$emit('logged-in', data.user);
+                // The server's own timeout travels with the user, so the idle
+                // clock the browser arms is the one the session dies on.
+                this.$emit('logged-in', data.user, data.timeout_minutes);
             } catch (e) {
                 this.error = 'Network error — is the server reachable?';
             } finally {
@@ -58,6 +64,7 @@ const LoginView = {
     </div>
     <h2 class="login-title">Sign In</h2>
     <p class="login-sub">Authenticate with your Active Directory credentials</p>
+    <div v-if="notice && !error" class="login-notice">{{ notice }}</div>
     <div class="login-err" :class="{show: error}">{{ error }}</div>
     <div class="fg" style="margin-bottom:12px">
       <label>Username</label>
