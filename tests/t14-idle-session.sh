@@ -223,6 +223,74 @@ case_idle_expiry_signs_out() {
     return 0
 }
 
+# ── 8. THE UPGRADE TELLS AN OPERATOR THE NEW DEFAULT WILL NOT REACH THEM ─────
+#
+# upgrade-full.sh restores config.yaml VERBATIM, which is right — the operator's
+# configuration is theirs. The consequence is that changing a DEFAULT changes
+# nothing on a host that sets the key, and v1.0.6 changed exactly such a
+# default. MEASURED 2026-09-02 on the production host: the upgrade reported
+# success and left timeout_minutes at 30 while every document said 15.
+#
+# The check must WARN (never BLOCK — a longer timeout can be deliberate), and
+# its parser must read the value from the `session:` block and nowhere else.
+case_upgrade_warns_when_config_outranks_the_default() {
+    local up tmp out
+    up="$(tm_upgrade_sh)"
+    tm_assert_grep "session idle timeout" "$up" \
+        "the upgrade does not check the session timeout at all"
+    tm_assert_grep "restored verbatim" "$up" \
+        "the check does not say WHY the upgrade will not change it"
+
+    # It must not be a blocker: an operator's own setting is not a defect.
+    grep -n "session idle timeout is" "$up" | grep -q "row WARN" \
+        || _tm_afail "the timeout divergence must be a WARN, not a BLOCK or a bare note"
+
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' RETURN
+
+    # THE PARSER IS EXTRACTED FROM THE SCRIPT, so this case cannot drift from
+    # the program that actually ships. Extraction is done in Python: the source
+    # is CRLF and the awk body contains both quote characters, which a nested
+    # sed pipeline has to survive through two more layers of quoting. It did
+    # not, and the first version of this case failed on its own extraction
+    # rather than on the thing it was testing.
+    out="$("$PY" - "$up" "$tmp" <<'PYEOF'
+import io, os, re, subprocess, sys
+src = io.open(sys.argv[1], "rb").read().decode("utf-8").replace("\r\n", "\n")
+tmp = sys.argv[2]
+
+m = re.search(r"CFG_TIMEOUT=\\?\"?\$\(awk '(.*?)'\s", src, re.S)
+if not m:
+    print("FAIL: could not find the awk parser in the script")
+    raise SystemExit
+prog = m.group(1)
+
+cases = {
+    "thirty":  ("session:\n  timeout_minutes: 30\n", "30"),
+    "fifteen": ("session:\n  timeout_minutes: 15\n", "15"),
+    "unset":   ("session:\n  max_concurrent: 5\n", ""),
+    # THE ONE THAT MATTERS: timeout_minutes under a DIFFERENT top-level key is
+    # not this setting. A parser taking the first match anywhere would report a
+    # stranger's number and warn about the wrong thing.
+    "other":   ("session:\n  max_concurrent: 5\nother:\n  timeout_minutes: 999\n", ""),
+}
+
+for name, (body, expected) in cases.items():
+    path = os.path.join(tmp, name + ".yaml")
+    io.open(path, "w", encoding="utf-8", newline="\n").write(body)
+    got = subprocess.run(["awk", prog, path], capture_output=True,
+                         text=True).stdout.strip()
+    if got != expected:
+        print("FAIL: %s -> [%s], expected [%s]" % (name, got, expected))
+        raise SystemExit
+print("OK")
+PYEOF
+)"
+    [ "$out" = "OK" ] || _tm_afail "the timeout parser: ${out}"
+    tm_note "WARNs on 30, silent on 15/unset, and scoped to the session block"
+    return 0
+}
+
 tm_case "default-is-15-in-one-place"      ""       case_default_is_fifteen_in_one_place
 tm_case "background-does-not-extend"      ""       case_background_request_does_not_extend
 tm_case "polls-declare-themselves"        ""       case_the_polls_declare_themselves
@@ -230,5 +298,6 @@ tm_case "MUTATION-guard-can-fail"         ""       case_the_guard_can_fail
 tm_case "logout-reason-closed-vocabulary" ""       case_logout_reason_is_not_echoed
 tm_case "client-reads-server-timeout"     ""       case_client_reads_the_server_timeout
 tm_case "idle-expiry-signs-out"           ""       case_idle_expiry_signs_out
+tm_case "upgrade-warns-on-config-outrank" ""       case_upgrade_warns_when_config_outranks_the_default
 
 tm_finish

@@ -590,6 +590,60 @@ What it does, in order:
 | 10   | Restore `config.yaml`, the audit database, TLS material, the systemd drop-in, the cluster store (`clusters.d/` and `cluster-certs/`) and the recorded ownership and modes verbatim — a deliberately narrowed permission is never widened back to a script default. The store is restored *before* the migration runs, so an existing one is never overwritten by the example |
 | 11–12| Config migration — the `clusters:` block moves out of `config.yaml` — then the permission boundary is **measured** as the `topic-manager` principal (it must be able to write `clusters.d`, and must not be able to write `config.yaml` or its directory; either failure fails the upgrade), then start and verify: health, reported version, effective access, and the security headers on every route class |
 
+### What the upgrade needs, and what it will ask you
+
+**It asks you nothing.** `upgrade-full.sh` is fully non-interactive from start to
+finish — there are no prompts, no confirmations and no `[y/N]`, and `apt` runs
+under `DEBIAN_FRONTEND=noninteractive`. It either completes or it fails and rolls
+back. What it needs is *access*, not answers:
+
+| Needs | Why | If you cannot grant it |
+|-------|-----|------------------------|
+| **root** (`sudo bash`) | writes `/opt`, `/etc`, `/var`, the unit and the nginx site | it refuses immediately: `Run with sudo` |
+| **Outbound HTTPS to `github.com`** | clones the target source (`--depth 1`) | use `--offline` with a prepared bundle |
+| **Outbound HTTPS to `pypi.org`** | installs the pins from `requirements.txt` | use `--offline`; it also auto-detects and degrades |
+| **`apt`** | `apt full-upgrade` for nginx, OpenSSL, python3, krb5, kernel | use `--skip-os` to upgrade the app only |
+| **systemd** | stop/start `topic-manager`, reload nginx | none — this is required |
+
+On a STIG'd host the permission audit (phase 2) asks the **kernel**, not the file
+modes, whether `www-data` and `topic-manager` can actually reach what they need,
+so scoped-down ACLs, immutable attributes and AppArmor denials are reported
+before anything is touched rather than discovered at restart.
+
+### Your configuration is restored verbatim — including values a new release changed
+
+Phase 10 restores your `config.yaml` **exactly as it was**. That is deliberate:
+your configuration is yours, and an upgrade that silently rewrote it would be
+worse than one that leaves a setting behind.
+
+The consequence is worth stating plainly, because it is easy to miss:
+
+> **A change to a DEFAULT does not reach a host that sets the key.**
+
+v1.0.6 lowered the idle session timeout default from 30 minutes to 15. A host
+whose `config.yaml` says `timeout_minutes: 30` upgrades to v1.0.6 and **stays on
+30**, while this README, `SBOM.md` and the in-app documentation all describe 15.
+This was measured on the production host on 2026-09-02: the upgrade reported
+success and the value had to be changed by hand afterwards.
+
+`--audit-only` now reports it, as a warning rather than a blocker — a longer
+timeout can be a deliberate decision:
+
+```
+[WARN ] session idle timeout is 30 min, above the 15 min default
+        config.yaml is restored verbatim, so THIS UPGRADE WILL NOT CHANGE IT
+```
+
+To adopt the new default after upgrading:
+
+```bash
+sudo sed -i 's/^\(  timeout_minutes:\).*/\1 15/' /etc/topic-manager/config.yaml
+sudo systemctl restart topic-manager
+```
+
+Apply the same reasoning to any future release that changes a default: read the
+`--audit-only` warnings, not just its exit code.
+
 **Step 1 — Take a vCSA snapshot** of the VM before doing anything else.
 
 **Step 2 — Check what is actually installed:**

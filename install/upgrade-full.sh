@@ -1182,6 +1182,46 @@ if [[ -f "${FRONTEND_DIR}/index.html" ]] && grep -q '<script>' "${FRONTEND_DIR}/
     row PASS "v1.0.0 inline script in index.html" "replaced by app/main.js during deploy"
 fi
 
+# --- 6. A NEW DEFAULT DOES NOT REACH AN INSTALL THAT SETS THE VALUE.
+#
+# Phase 10 restores config.yaml verbatim, which is correct: the operator's
+# configuration belongs to the operator and an upgrade must not silently rewrite
+# it. The consequence is that changing a DEFAULT in the code changes nothing on
+# any host that has the key set — and v1.0.6 lowered the idle session timeout
+# from 30 minutes to 15.
+#
+# MEASURED 2026-09-02 on the production host: the upgrade completed, reported
+# success, and left `timeout_minutes: 30` in place while README.md, SBOM.md and
+# the in-app documentation all described a 15-minute default. The value had to
+# be edited by hand afterwards.
+#
+# WARN, never BLOCK. A longer timeout can be a deliberate decision, and refusing
+# to upgrade over an operator's own setting would be presumptuous. What the
+# operator is owed is to be TOLD, at audit time, that the file disagrees with
+# the version they are moving to.
+TM_DEFAULT_TIMEOUT=15
+CFG_TIMEOUT="$(awk '
+    /^session:/        { in_s = 1; next }
+    /^[^[:space:]#]/   { in_s = 0 }
+    in_s && $1 == "timeout_minutes:" { print $2; exit }
+' "${CONFIG_FILE}" 2>/dev/null || true)"
+
+if [[ -z "$CFG_TIMEOUT" ]]; then
+    row PASS "session idle timeout" \
+        "not set in config.yaml — the new default of ${TM_DEFAULT_TIMEOUT} min will apply"
+elif [[ "$CFG_TIMEOUT" =~ ^[0-9]+$ ]] && (( CFG_TIMEOUT > TM_DEFAULT_TIMEOUT )); then
+    row WARN "session idle timeout is ${CFG_TIMEOUT} min, above the ${TM_DEFAULT_TIMEOUT} min default" \
+        "config.yaml is restored verbatim, so THIS UPGRADE WILL NOT CHANGE IT"
+    warn "  session.timeout_minutes = ${CFG_TIMEOUT} in ${CONFIG_FILE}."
+    warn "  v1.0.6 onward defaults to ${TM_DEFAULT_TIMEOUT} minutes and the documentation says so,"
+    warn "  but an upgrade restores your config file unchanged — by design."
+    warn "  To adopt the new default, edit it yourself after the upgrade:"
+    warn "      sudo sed -i 's/^\(  timeout_minutes:\).*/\1 ${TM_DEFAULT_TIMEOUT}/' ${CONFIG_FILE}"
+    warn "      sudo systemctl restart topic-manager"
+else
+    row PASS "session idle timeout" "${CFG_TIMEOUT} min (at or below the ${TM_DEFAULT_TIMEOUT} min default)"
+fi
+
 # ─── audit verdict ───────────────────────────────────────────────────────────
 # Reported here; ENFORCED after the backup. A blocker must never stand between
 # an operator and a restore point — a broken system is exactly when you most
