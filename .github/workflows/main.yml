@@ -1,0 +1,157 @@
+# ============================================================================
+# Mirror to GitLab on tag push
+#
+# Triggers when a tag matching v*.*.* is pushed to GitHub.
+# Mirrors the tagged commit to the internal GitLab project, which causes the
+# .gitlab-ci.yml pipeline there to fire (build → audit → scan → publish →
+# canary → manual gate → prod).
+#
+# Required GitHub secrets (Settings → Secrets and variables → Actions):
+#   GITLAB_HOST          e.g. git.int.crypticlight.com
+#   GITLAB_PROJECT_PATH  e.g. claude_admin/Cortex-Prod
+#   GITLAB_PUSH_TOKEN    A GitLab PROJECT ACCESS TOKEN (Project -> Settings ->
+#                        Access tokens), role Developer, scope write_repository.
+#                        NOT a deploy token: deploy tokens are read-only for
+#                        the repository (their scopes are read_repository and
+#                        the package registry) and can never push - the first
+#                        two runs under this route failed on exactly that,
+#                        2026-09-05. The username in the push URL below is
+#                        ignored for a project access token.
+#   CF_ACCESS_CLIENT_ID      Cloudflare Access service token (Zero Trust ->
+#   CF_ACCESS_CLIENT_SECRET  Access -> Service Auth). GITLAB_HOST is the PUBLIC
+#                        name behind Cloudflare Access, which this hosted
+#                        runner can reach only by presenting these two headers
+#                        on every request. The Access policy on that
+#                        application must carry a "Service Auth" rule that
+#                        includes this token, or Access answers 302 to its
+#                        login page and the push fails. Added 2026-09-05
+#                        (James chose the hosted-runner route over a
+#                        self-hosted runner on the internal name).
+# ============================================================================
+
+name: Mirror to GitLab
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  # A re-run of a failed run reuses the workflow file from the commit that
+  # started it, so a fix to THIS file cannot be exercised by re-running an old
+  # tag's job. Manual dispatch runs the current file against a named tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to mirror (e.g. v3.213.0)'
+        required: true
+        type: string
+
+# Mirror jobs are serialized — never run two at once for the same tag
+concurrency:
+  group: mirror-gitlab-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read   # only need to read the repo + tag
+
+jobs:
+  mirror:
+    name: Mirror tag to GitLab
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository (full history)
+        uses: actions/checkout@v5   # Node 24; v4 raised the Node 20 deprecation warning on every run
+        with:
+          fetch-depth: 0   # full history so the mirror push includes everything
+          persist-credentials: false
+
+      - name: Validate required secrets are present
+        env:
+          GITLAB_HOST:         ${{ secrets.GITLAB_HOST }}
+          GITLAB_PROJECT_PATH: ${{ secrets.GITLAB_PROJECT_PATH }}
+          GITLAB_PUSH_TOKEN:   ${{ secrets.GITLAB_PUSH_TOKEN }}
+          CF_ACCESS_CLIENT_ID:     ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          missing=""
+          [ -n "$GITLAB_HOST" ]         || missing="$missing GITLAB_HOST"
+          [ -n "$GITLAB_PROJECT_PATH" ] || missing="$missing GITLAB_PROJECT_PATH"
+          [ -n "$GITLAB_PUSH_TOKEN" ]   || missing="$missing GITLAB_PUSH_TOKEN"
+          [ -n "$CF_ACCESS_CLIENT_ID" ]     || missing="$missing CF_ACCESS_CLIENT_ID"
+          [ -n "$CF_ACCESS_CLIENT_SECRET" ] || missing="$missing CF_ACCESS_CLIENT_SECRET"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secret(s):$missing"
+            exit 1
+          fi
+          # Shape checks - each of these has cost a failed run that said only
+          # "exit code 6". The values are masked in the log, so the message
+          # names the rule, never the value.
+          case "$GITLAB_HOST" in
+            *://*|*/*|*:*) echo "::error::GITLAB_HOST must be the bare host name only (no https://, no path, no port, no trailing slash) - e.g. git.crypticlight.com"; exit 1;;
+          esac
+          case "$GITLAB_PROJECT_PATH" in
+            /*|*.git|*://*) echo "::error::GITLAB_PROJECT_PATH must be group/project with no leading slash and no .git"; exit 1;;
+          esac
+          if ! getent hosts "$GITLAB_HOST" >/dev/null 2>&1; then
+            echo "::error::GITLAB_HOST does not resolve in public DNS from this GitHub-hosted runner. It must be the PUBLIC name behind Cloudflare Access (git.crypticlight.com), not the internal git.int.crypticlight.com."
+            exit 1
+          fi
+          echo "All required secrets present; GITLAB_HOST resolves."
+
+      - name: Configure git for the mirror push
+        run: |
+          git config --global user.email "github-actions@cortex-prod"
+          git config --global user.name  "GitHub Actions (mirror)"
+
+      - name: Add GitLab as a remote and push
+        env:
+          GITLAB_HOST:         ${{ secrets.GITLAB_HOST }}
+          GITLAB_PROJECT_PATH: ${{ secrets.GITLAB_PROJECT_PATH }}
+          GITLAB_PUSH_TOKEN:   ${{ secrets.GITLAB_PUSH_TOKEN }}
+          CF_ACCESS_CLIENT_ID:     ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          TAG:                 ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -e
+          # HTTPS basic auth with a project access token; GitLab ignores the username for token auth
+          REMOTE_URL="https://gitlab-ci-token:${GITLAB_PUSH_TOKEN}@${GITLAB_HOST}/${GITLAB_PROJECT_PATH}.git"
+          git remote add gitlab "$REMOTE_URL"
+          # Cloudflare Access sits in front of GITLAB_HOST: every request to it
+          # must carry the service-token headers or Access answers a 302 to
+          # its login page before GitLab ever sees the push. Scoped to this
+          # remote's URL so the headers never go anywhere else.
+          git config --global "http.https://${GITLAB_HOST}/.extraHeader" "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}"
+          git config --global --add "http.https://${GITLAB_HOST}/.extraHeader" "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}"
+          # Prove Access lets the token through before pushing, so a policy
+          # mistake reads as one clear line and not a git auth error.
+          code=$(curl -s -o /dev/null -w "%{http_code}" -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" "https://${GITLAB_HOST}/api/v4/version") || { rc=$?; echo "::error::curl to https://${GITLAB_HOST}/api/v4/version failed with exit code ${rc} (6 = host not resolvable, 7 = connection refused, 28 = timeout)"; exit 1; }
+          if [ "$code" = "302" ]; then
+            echo "::error::Cloudflare Access still redirects to its login page (302): the Access policy on ${GITLAB_HOST} has no Service Auth rule for this token."
+            exit 1
+          fi
+          echo "Access check on ${GITLAB_HOST}: HTTP ${code}"
+
+          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { echo "::error::Tag $TAG does not exist in this checkout"; exit 1; }
+          echo "Pushing main branch to GitLab…"
+          # GitHub is the source of truth and the GitLab copy is a MIRROR: its
+          # main is overwritten, never merged. The first run met a GitLab
+          # project initialised with a README commit, which a plain push
+          # rejects as non-fast-forward. --force is the mirror semantics.
+          git push --force gitlab refs/heads/main:refs/heads/main
+
+          echo "Pushing tag $TAG to GitLab…"
+          git push gitlab "refs/tags/$TAG:refs/tags/$TAG"
+
+          echo "::notice::Tag $TAG mirrored. GitLab pipeline should trigger now."
+
+      - name: Summary
+        env:
+          GITLAB_HOST:         ${{ secrets.GITLAB_HOST }}
+          GITLAB_PROJECT_PATH: ${{ secrets.GITLAB_PROJECT_PATH }}
+          TAG:                 ${{ inputs.tag || github.ref_name }}
+        run: |
+          echo "### Mirror complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tag: \`${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GitLab project: https://${GITLAB_HOST}/${GITLAB_PROJECT_PATH}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Pipeline: https://${GITLAB_HOST}/${GITLAB_PROJECT_PATH}/-/pipelines" >> "$GITHUB_STEP_SUMMARY"
