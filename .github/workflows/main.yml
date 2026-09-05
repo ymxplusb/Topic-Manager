@@ -8,7 +8,7 @@
 #
 # Required GitHub secrets (Settings → Secrets and variables → Actions):
 #   GITLAB_HOST          e.g. git.int.crypticlight.com
-#   GITLAB_PROJECT_PATH  e.g. claude_admin/Cortex-Prod
+#   GITLAB_PROJECT_PATH  e.g. james.rodman/Topic-Manager
 #   GITLAB_PUSH_TOKEN    A GitLab PROJECT ACCESS TOKEN (Project -> Settings ->
 #                        Access tokens), role Developer, scope write_repository.
 #                        NOT a deploy token: deploy tokens are read-only for
@@ -100,7 +100,7 @@ jobs:
 
       - name: Configure git for the mirror push
         run: |
-          git config --global user.email "github-actions@cortex-prod"
+          git config --global user.email "github-actions@topic-manager"
           git config --global user.name  "GitHub Actions (mirror)"
 
       - name: Add GitLab as a remote and push
