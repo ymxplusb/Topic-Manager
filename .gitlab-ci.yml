@@ -17,23 +17,20 @@ include:
     file: /templates/build-test-publish.yml
 
 variables:
-  # THE TEST LANE IS OFF, AND THAT IS A GAP RATHER THAN A DECISION.
-  # v1.1.0 of the template has one: set TEST_COMMAND and a `test` job appears,
-  # whose exit code is the job's verdict; leave it empty and the job is ABSENT
-  # rather than present and skipping.
+  # THE TEST LANE IS ON, AND THE COMMANDS BELOW WERE MEASURED, NOT GUESSED.
+  # MEASURED in the job image on 2026-09-08, pipeline 71: 128 passed, 0 failed,
+  # 0 SKIPPED, exit 0. --strict is deliberate and the harness's own header asks
+  # for it on CI: a SKIP becomes a failure. Without the three setup pieces the
+  # same run skipped 21 cases and exited 2 - sudo for the permission-model and
+  # baseline cases, nodejs for the settings-banner frontend probes, and the
+  # python deps so tm.app imports for the proxy-header and throttle cases.
+  # A suite that skips a fifth of itself and reports green is not a test lane.
   #
-  # It is empty here because this suite has never been run in the job image. tests/run.sh is
-  # written for CI and has the right exit codes (0 pass, 1 fail, 2 the
-  # harness could not run), but --strict makes a SKIP a failure and several
-  # of its cases need root, systemd or a real target host. Which of those
-  # a bare python:3.12-bookworm container can satisfy is unmeasured.
-  # Turning it on without that is how a repository gets a red pipeline on its
-  # own release, so the honest state is off and said out loud.
-  #
-  #   TEST_SETUP:   "apt-get update && apt-get install -y --no-install-recommends sudo"
-  #   TEST_COMMAND: "bash tests/run.sh --strict"
-  TEST_SETUP: ""
-  TEST_COMMAND: ""
+  # An empty TEST_COMMAND would mean the job is ABSENT from the pipeline
+  # rather than present and skipping. Its exit code is the job verdict; the
+  # publish job waits on it.
+  TEST_SETUP: "apt-get update -qq && apt-get install -y -qq --no-install-recommends sudo nodejs jq curl && pip install --quiet -r requirements.txt"
+  TEST_COMMAND: "bash tests/run.sh --strict"
 
   # No SonarQube here yet: this project has no SONAR_TOKEN or SONAR_HOST_URL CI
   # variable, and the template's scan job exits 2 - could not run, which is not
