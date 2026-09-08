@@ -1,0 +1,41 @@
+# The release pipeline for this project lives in james.rodman/ci-templates and
+# is shared across this estate. This file names the version of it that runs
+# here.
+#
+# On a vX.Y.Z tag: check that VERSION agrees with the tag, lint every shell
+# script, refuse a carriage return in one, parse the data files, build a tarball
+# with `git archive` from the tag object, publish it and its checksum to this
+# project's package registry, and cut a release. Nothing is deployed.
+#
+# THE REF IS A TAG ON PURPOSE. With `ref: main` the shared file could change
+# under this repository between two of its own releases, and a pipeline that
+# passed last month would fail with nothing in this repository's diff to explain
+# it. Moving to a newer template is a commit here, reviewable like any other.
+include:
+  - project: james.rodman/ci-templates
+    ref: v1.1.0
+    file: /templates/build-test-publish.yml
+
+variables:
+  # THE TEST LANE IS OFF, AND THAT IS A GAP RATHER THAN A DECISION.
+  # v1.1.0 of the template has one: set TEST_COMMAND and a `test` job appears,
+  # whose exit code is the job's verdict; leave it empty and the job is ABSENT
+  # rather than present and skipping.
+  #
+  # It is empty here because this suite has never been run in the job image. tests/run.sh is
+  # written for CI and has the right exit codes (0 pass, 1 fail, 2 the
+  # harness could not run), but --strict makes a SKIP a failure and several
+  # of its cases need root, systemd or a real target host. Which of those
+  # a bare python:3.12-bookworm container can satisfy is unmeasured.
+  # Turning it on without that is how a repository gets a red pipeline on its
+  # own release, so the honest state is off and said out loud.
+  #
+  #   TEST_SETUP:   "apt-get update && apt-get install -y --no-install-recommends sudo"
+  #   TEST_COMMAND: "bash tests/run.sh --strict"
+  TEST_SETUP: ""
+  TEST_COMMAND: ""
+
+  # No SonarQube here yet: this project has no SONAR_TOKEN or SONAR_HOST_URL CI
+  # variable, and the template's scan job exits 2 - could not run, which is not
+  # a pass - rather than pretending. An empty key means the job is absent.
+  SONAR_PROJECT_KEY: ""
