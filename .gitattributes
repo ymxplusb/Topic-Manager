@@ -1,0 +1,27 @@
+# This project is deployed to Ubuntu and its shell scripts are executed there.
+# A carriage return at the end of a `set -o pipefail` line becomes
+# `set: pipefail: invalid option name` AT RUN TIME on the target host, and
+# `bash -n` does not catch it - it is a valid script containing an option name
+# that happens to end in a control character.
+#
+# Every tracked file here is stored with LF today, measured with
+# `git ls-files --eol` against the INDEX rather than by reading a working tree
+# (a Windows clone with core.autocrlf=true shows CRLF for everything and says
+# nothing about what is committed). This file keeps it that way after the next
+# edit on a Windows box, and the release pipeline refuses a committed CR on
+# every tag either way.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.bash text eol=lf
+*.py   text eol=lf
+*.csv  text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.docx binary
+*.pdf  binary
