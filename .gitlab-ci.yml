@@ -35,4 +35,12 @@ variables:
   # No SonarQube here yet: this project has no SONAR_TOKEN or SONAR_HOST_URL CI
   # variable, and the template's scan job exits 2 - could not run, which is not
   # a pass - rather than pretending. An empty key means the job is absent.
-  SONAR_PROJECT_KEY: ""
+  # Turned on 2026-09-09. This was "" and an empty value does not skip the scan
+  # job - it stops GitLab CREATING it, so the tag pipeline went green having
+  # scanned nothing. There was no exit code to read.
+  #
+  # Vue 3 + Flask. Full language analysis; last scanned 2026-05-29 by hand.
+  #
+  # SONAR_TOKEN and SONAR_HOST_URL are project CI variables. The project key is
+  # not a secret and belongs where a reviewer can see it.
+  SONAR_PROJECT_KEY: "topic-manager"
