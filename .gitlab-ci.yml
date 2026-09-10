@@ -13,7 +13,7 @@
 # it. Moving to a newer template is a commit here, reviewable like any other.
 include:
   - project: james.rodman/ci-templates
-    ref: v1.1.2
+    ref: v1.2.0
     file: /templates/build-test-publish.yml
 
 variables:
