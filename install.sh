@@ -253,6 +253,34 @@ tls_keypair_matches() {
     [[ "$c" == "$k" ]]
 }
 
+# apt_fips_packages — print, one per line, every INSTALLED package that the
+# offline bundle must never replace because it is a FIPS module (round 3):
+#   * its installed version string contains "fips" in any case (Ubuntu Pro
+#     FIPS builds: libssl3t64, openssl, openssh-*, libgcrypt20, gnutls,
+#     strongswan, the kernel, ... carry "+Fips1" or "fips" in the version);
+#   * or `apt-cache policy` (the HOST's own apt configuration, not the bundle's)
+#     shows the installed version coming from a FIPS archive
+#     (esm.ubuntu.com/fips, /fips-updates, /fips-preview).
+# Fails closed: if either query cannot run, the caller stops rather than
+# install without knowing which packages are FIPS modules.
+apt_fips_packages() {
+    local installed names=() by_version by_origin
+    installed="$(dpkg-query -W -f='${Package}\t${Version}\t${Status}\n' 2>/dev/null)" || return 1
+    installed="$(printf '%s\n' "$installed" | awk -F'\t' '$3 ~ / installed$/')"
+    [[ -n "$installed" ]] || return 1
+    by_version="$(printf '%s\n' "$installed" | awk -F'\t' 'tolower($2) ~ /fips/ { print $1 }')"
+    mapfile -t names < <(printf '%s\n' "$installed" | cut -f1 | sort -u)
+    # The installed version is the "***" line; the origin lines under it are
+    # indented deeper than a version line. A package header starts in column 1.
+    by_origin="$(LC_ALL=C apt-cache policy "${names[@]}" 2>/dev/null)" || return 1
+    by_origin="$(printf '%s\n' "$by_origin" | awk '
+        /^[^ ]/            { pkg = $0; sub(/:$/, "", pkg); sub(/:.*/, "", pkg); inst = 0; next }
+        /^ \*\*\* /        { inst = 1; next }
+        /^     [^ ]/       { inst = 0; next }
+        inst && /esm\.ubuntu\.com\/fips/ { print pkg }')"
+    printf '%s\n%s\n' "$by_version" "$by_origin" | awk 'NF' | sort -u
+}
+
 # apt_install_from_bundle <bundle-apt-dir> <top-level package>... — offline.
 #
 # MEASURED 2026-09-26 on a STIG (USG stig) + FIPS Ubuntu 24.04.4 host: handing
@@ -262,25 +290,52 @@ tls_keypair_matches() {
 # systemd-standalone-sysusers, ...), and a host whose package set differs from
 # the build host — a FIPS host always does — cannot take them all.
 #
+# MEASURED AGAIN on the same host (round 3): pinning the bundle to priority 1
+# so it could never upgrade anything made apt refuse
+#   python3.12-venv : Depends: python3.12 (= 3.12.3-1ubuntu0.17)
+#                     but 3.12.3-1ubuntu0.13 is to be installed
+# An air-gapped host lags on patches, so a newly installed package routinely
+# needs a newer build of a library that is already installed. The policy is
+# now: NEVER DOWNGRADE, NEVER REPLACE A FIPS PACKAGE, but UPGRADE what a
+# dependency requires.
+#
 # So the bundle is used as a REPOSITORY, and apt's own resolver chooses:
 #   * a temporary, ISOLATED apt configuration under mktemp -d: its source list
 #     names ONLY the bundle ([trusted=yes] for that one file: path — the
 #     .debs were verified when the bundle's sha256 was checked out of band),
-#     its own lists and archive cache; nothing is written under /etc/apt;
+#     its own preferences (the host's preferences.d is NOT read, so no host
+#     pin can lift the bundle's priority), lists and archive cache; nothing is
+#     written under /etc/apt;
 #   * ONLY the missing TOP-LEVEL packages are named; never a .deb path;
-#   * the bundle is pinned to priority 1, so it can supply what is NOT
-#     installed but never upgrades or replaces an installed package — a FIPS
-#     libssl or openssh stays exactly as it is; if a bundled package needs a
-#     newer one, the install FAILS rather than swap a validated library;
+#   * the bundle is at priority 500, so apt may UPGRADE an installed package to
+#     the bundled build when resolution needs it. Below 1000 apt never selects
+#     a version older than the installed one, so a DOWNGRADE is impossible —
+#     never give the bundle a priority of 1000 or more;
+#   * every installed FIPS package (apt_fips_packages) gets a pin of -1 for the
+#     bundle's copy, so a FIPS module can never be swapped for a non-FIPS build.
+#     If a bundled package needs a newer FIPS library, resolution FAILS;
+#   * --no-remove: apt aborts rather than remove anything;
+#   * the plan is simulated first (apt-get -s) and printed — what is NEWLY
+#     INSTALLED and what is UPGRADED, as package=version — and refused if it
+#     would downgrade or touch a FIPS package. On a terminal the operator
+#     confirms it; --non-interactive (or no terminal) proceeds;
 #   * --no-download: the .debs are placed in the private archive cache, so
 #     apt uses them and fetches nothing;
 #   * the temporary configuration is removed on every exit path (trap).
 apt_install_from_bundle() {
     local dir="$1"; shift
-    local tmp rc=0
+    local tmp rc=0 fips_list="" p ans=""
+    local plan="" line name old ver re_upg re_new
+    local -a fips=() plan_new=() plan_upg=() plan_bad=()
+    local -A is_fips=()
     [[ -f "${dir}/Packages" || -f "${dir}/Packages.gz" ]] || die "Offline, and ${dir} has no Packages index.
      Rebuild the bundle with this release's prepare-offline.sh (it indexes the
      .debs), or install $* from the host's own package mirror."
+    fips_list="$(apt_fips_packages)" || die "Could not read the installed package set and its origins
+     (dpkg-query / apt-cache policy failed), so it cannot be established which
+     installed packages are FIPS modules. Nothing has been changed."
+    [[ -z "$fips_list" ]] || mapfile -t fips <<<"$fips_list"
+    for p in "${fips[@]}"; do is_fips["$p"]=1; done
     tmp="$(mktemp -d)" || die "could not create a temporary apt configuration"
     # Removed on EVERY exit path: explicitly below, and by the EXIT trap if
     # die() (or set -e) ends the run anywhere in between.
@@ -288,24 +343,77 @@ apt_install_from_bundle() {
     trap 'rm -rf -- "${APT_BUNDLE_TMP:-/nonexistent}"' EXIT
     mkdir -p "${tmp}/lists/partial" "${tmp}/archives/partial" "${tmp}/parts" "${tmp}/prefparts"
     printf 'deb [trusted=yes] file:%s ./\n' "$dir" > "${tmp}/sources.list"
-    printf 'Package: *\nPin: origin ""\nPin-Priority: 1\n' > "${tmp}/preferences"
+    # Specific (per-package) pins take precedence over the Package: * entry.
+    {
+        for p in "${fips[@]}"; do
+            printf 'Package: %s\nPin: origin ""\nPin-Priority: -1\n\n' "$p"
+        done
+        printf 'Package: *\nPin: origin ""\nPin-Priority: 500\n'
+    } > "${tmp}/preferences"
     cp -- "$dir"/*.deb "${tmp}/archives/" 2>/dev/null \
         || { rm -rf "$tmp"; die "${dir} holds no .deb files."; }
     local opts=(-o "Dir::Etc::SourceList=${tmp}/sources.list" -o "Dir::Etc::SourceParts=${tmp}/parts"
                 -o "Dir::State::Lists=${tmp}/lists" -o "Dir::Cache=${tmp}" -o "Dir::Cache::Archives=${tmp}/archives"
-                -o "Dir::Etc::Preferences=${tmp}/preferences" -o "Acquire::Languages=none"
-                -o "APT::Get::List-Cleanup=false" -o "APT::Sandbox::User=root")
-    info "Installing from the offline bundle (apt resolves; bundle pinned so nothing installed is replaced): $*"
+                -o "Dir::Etc::Preferences=${tmp}/preferences" -o "Dir::Etc::PreferencesParts=${tmp}/prefparts"
+                -o "Acquire::Languages=none" -o "APT::Get::List-Cleanup=false" -o "APT::Sandbox::User=root")
+    local inst_opts=(--no-install-recommends --no-download --no-remove)
+    info "Resolving from the offline bundle (never downgrades, never replaces FIPS packages; ${#fips[@]} FIPS package(s) held): $*"
     DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" update -qq || rc=$?
     if [[ $rc -eq 0 ]]; then
-        DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" install -y --no-install-recommends \
-            --no-download --no-upgrade "$@" || rc=$?
+        plan="$(LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" -s install "${inst_opts[@]}" "$@" 2>&1)" || rc=$?
     fi
+    if [[ $rc -ne 0 ]]; then
+        rm -rf -- "$tmp"; APT_BUNDLE_TMP=""; trap - EXIT
+        [[ -z "$plan" ]] || printf '%s\n' "$plan" >&2
+        die "The offline bundle could not supply $* (apt exit ${rc}); nothing was
+     installed or changed. The bundle never downgrades a package and never
+     replaces a FIPS package${fips_list:+ (held here: ${fips[*]})}. If apt says a
+     package needs a NEWER version of a FIPS library, or of something the bundle
+     does not carry, install $* from the host's own mirror (for a FIPS library,
+     the Ubuntu Pro FIPS archive) instead. See TROUBLESHOOTING.md -> Fresh install."
+    fi
+    # "Inst pkg [installed] (candidate origin [arch])" is an upgrade (or a
+    # downgrade); "Inst pkg (candidate ...)" is a new install.
+    re_upg='^Inst ([^ ]+) \[([^]]+)\] \(([^ ]+)'
+    re_new='^Inst ([^ ]+) \(([^ ]+)'
+    while IFS= read -r line; do
+        if [[ "$line" =~ $re_upg ]]; then
+            name="${BASH_REMATCH[1]}"; old="${BASH_REMATCH[2]}"; ver="${BASH_REMATCH[3]}"
+            if [[ -n "${is_fips[${name%%:*}]:-}" ]]; then
+                plan_bad+=("${name}: FIPS package ${old} would be replaced by ${ver}")
+            elif ! dpkg --compare-versions "$ver" gt "$old"; then
+                plan_bad+=("${name}: ${old} would be DOWNGRADED to ${ver}")
+            fi
+            plan_upg+=("${name}=${ver} (from ${old})")
+        elif [[ "$line" =~ $re_new ]]; then
+            name="${BASH_REMATCH[1]}"; ver="${BASH_REMATCH[2]}"
+            [[ -z "${is_fips[${name%%:*}]:-}" ]] || plan_bad+=("${name}: FIPS package would be replaced by ${ver}")
+            plan_new+=("${name}=${ver}")
+        elif [[ "$line" == Remv\ * ]]; then
+            plan_bad+=("${line#Remv }: would be REMOVED")
+        fi
+    done <<<"$plan"
+    info "Offline package plan — NEW (${#plan_new[@]}): ${plan_new[*]:-none}; UPGRADE (${#plan_upg[@]}): ${plan_upg[*]:-none}"
+    if [[ ${#plan_bad[@]} -gt 0 ]]; then
+        rm -rf -- "$tmp"; APT_BUNDLE_TMP=""; trap - EXIT
+        die "Refusing the offline package plan; nothing was installed or changed:
+     $(printf '%s; ' "${plan_bad[@]}")
+     The bundle never downgrades a package, never removes one and never
+     replaces a FIPS package. See TROUBLESHOOTING.md -> Fresh install."
+    fi
+    if [[ ${NON_INTERACTIVE:-false} != true && -t 0 ]]; then
+        read -r -p "  Apply this package plan? [y/N]: " ans || true
+        if [[ "${ans,,}" != y && "${ans,,}" != yes ]]; then
+            rm -rf -- "$tmp"; APT_BUNDLE_TMP=""; trap - EXIT
+            die "Package plan declined. Nothing has been changed."
+        fi
+    fi
+    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" install -y "${inst_opts[@]}" "$@" || rc=$?
     rm -rf -- "$tmp"; APT_BUNDLE_TMP=""; trap - EXIT
-    [[ $rc -eq 0 ]] || die "Offline package install failed (apt exit ${rc}). Nothing installed on the
-     host was replaced: the bundle is pinned below every installed package. If apt
-     says a package needs a NEWER version of something already installed (for
-     example a FIPS library), install $* from the host's own mirror instead.
+    [[ $rc -eq 0 ]] || die "Offline package install failed (apt exit ${rc}) while applying the plan
+     printed above. The bundle never downgrades a package and never replaces a
+     FIPS package, but dpkg may have applied PART of that plan: check
+     'dpkg --audit' before running this script again.
      See TROUBLESHOOTING.md -> Fresh install."
 }
 

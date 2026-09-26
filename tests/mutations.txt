@@ -831,23 +831,25 @@ DESC|install: the offline apt install downloads again (no --no-download)
 TESTS|t23-offline-apt.sh
 TARGET|install
 EQUIV|no
-ANCHOR|            --no-download --no-upgrade "$@" || rc=$?
-REPLACE|            --no-upgrade "$@" || rc=$?
+ANCHOR|    local inst_opts=(--no-install-recommends --no-download --no-remove)
+REPLACE|    local inst_opts=(--no-install-recommends --no-remove)
 
 --- M102
-DESC|install: THE FIPS MUTATION — the bundle is no longer pinned below installed packages, so it may replace a FIPS library
+DESC|install: THE DOWNGRADE MUTATION (round 3) — the bundle priority is raised to >= 1000, so apt may select an OLDER bundled copy over an installed package
 TESTS|t23-offline-apt.sh
 TARGET|install
 EQUIV|no
-ANCHOR|    printf 'Package: *\nPin: origin ""\nPin-Priority: 1\n' > "${tmp}/preferences"
-REPLACE|    printf 'Package: *\nPin: origin ""\nPin-Priority: 1001\n' > "${tmp}/preferences"
+ANCHOR|        printf 'Package: *\nPin: origin ""\nPin-Priority: 500\n'
+REPLACE|        printf 'Package: *\nPin: origin ""\nPin-Priority: 1001\n'
 
 --- M103
-DESC|install: the explicit cleanup of the temporary apt config is gone. DOCUMENTED EQUIVALENT: the EXIT trap removes it on the same path (belt and braces)
+DESC|install: the explicit cleanup of the temporary apt config after the install is gone. DOCUMENTED EQUIVALENT: the EXIT trap removes it on the same path (belt and braces)
 TESTS|t23-offline-apt.sh
 TARGET|install
 EQUIV|yes
+ANCHOR|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" install -y "${inst_opts[@]}" "$@" || rc=$?
 ANCHOR|    rm -rf -- "$tmp"; APT_BUNDLE_TMP=""; trap - EXIT
+REPLACE|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" install -y "${inst_opts[@]}" "$@" || rc=$?
 REPLACE|    true
 
 --- M104
@@ -879,3 +881,288 @@ TARGET|install
 EQUIV|no
 ANCHOR|            ok = parts.scheme.lower() == "ldaps" and bool(parts.hostname)
 REPLACE|            ok = True
+
+# ─── round 3: offline apt — upgrades allowed, no downgrade, FIPS held (t23) ──
+# Operators applied mechanically over apt_fips_packages and the rewritten
+# apt_install_from_bundle: every guard neutralised, every returned failure
+# discarded, every comparison flipped, every constant (priority) moved.
+
+--- M108
+DESC|install: THE FIPS MUTATION (round 3) — the -1 pin for installed FIPS packages is dropped
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        for p in "${fips[@]}"; do
+ANCHOR|            printf 'Package: %s\nPin: origin ""\nPin-Priority: -1\n\n' "$p"
+ANCHOR|        done
+
+--- M109
+DESC|install: the FIPS pin is 1 instead of -1 (the bundle copy stays selectable)
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            printf 'Package: %s\nPin: origin ""\nPin-Priority: -1\n\n' "$p"
+REPLACE|            printf 'Package: %s\nPin: origin ""\nPin-Priority: 1\n\n' "$p"
+
+--- M110
+DESC|install: THE ROUND-3 DEFECT — the bundle is pinned to 1 again, so no installed package can be upgraded for a dependency
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        printf 'Package: *\nPin: origin ""\nPin-Priority: 500\n'
+REPLACE|        printf 'Package: *\nPin: origin ""\nPin-Priority: 1\n'
+
+--- M111
+DESC|install: apt may remove packages (no --no-remove)
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    local inst_opts=(--no-install-recommends --no-download --no-remove)
+REPLACE|    local inst_opts=(--no-install-recommends --no-download)
+
+--- M112
+DESC|install: the host's preferences.d is read again, so a host pin can lift the bundle to >= 1000
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|                -o "Dir::Etc::Preferences=${tmp}/preferences" -o "Dir::Etc::PreferencesParts=${tmp}/prefparts"
+REPLACE|                -o "Dir::Etc::Preferences=${tmp}/preferences"
+
+--- M113
+DESC|install: a failed dpkg-query is ignored when reading the FIPS set
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    installed="$(dpkg-query -W -f='${Package}\t${Version}\t${Status}\n' 2>/dev/null)" || return 1
+REPLACE|    installed="$(dpkg-query -W -f='${Package}\t${Version}\t${Status}\n' 2>/dev/null)" || true
+
+--- M114
+DESC|install: packages that are not installed (config-files only) count as installed
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    installed="$(printf '%s\n' "$installed" | awk -F'\t' '$3 ~ / installed$/')"
+REPLACE|    installed="$(printf '%s\n' "$installed" | awk -F'\t' '1')"
+
+--- M115
+DESC|install: an empty installed set is taken as "no FIPS packages"
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ -n "$installed" ]] || return 1
+REPLACE|    true
+
+--- M116
+DESC|install: the version-string FIPS rule is dropped
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    by_version="$(printf '%s\n' "$installed" | awk -F'\t' 'tolower($2) ~ /fips/ { print $1 }')"
+REPLACE|    by_version=""
+
+--- M117
+DESC|install: the version-string FIPS rule is case-sensitive, so +Fips1 is missed
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    by_version="$(printf '%s\n' "$installed" | awk -F'\t' 'tolower($2) ~ /fips/ { print $1 }')"
+REPLACE|    by_version="$(printf '%s\n' "$installed" | awk -F'\t' '$2 ~ /fips/ { print $1 }')"
+
+--- M118
+DESC|install: a failed apt-cache policy is ignored when reading the FIPS origins
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    by_origin="$(LC_ALL=C apt-cache policy "${names[@]}" 2>/dev/null)" || return 1
+REPLACE|    by_origin="$(LC_ALL=C apt-cache policy "${names[@]}" 2>/dev/null)" || true
+
+--- M119
+DESC|install: the architecture qualifier stays on the policy header, so the pin names "pkg:amd64"
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        /^[^ ]/            { pkg = $0; sub(/:$/, "", pkg); sub(/:.*/, "", pkg); inst = 0; next }
+REPLACE|        /^[^ ]/            { pkg = $0; sub(/:$/, "", pkg); inst = 0; next }
+
+--- M120
+DESC|install: the installed-version marker is never recognised, so the origin rule sees nothing
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        /^ \*\*\* /        { inst = 1; next }
+REPLACE|        /^ \*\*\* /        { inst = 0; next }
+
+--- M121
+DESC|install: the origin of a NON-installed version below the installed one is read as the installed origin
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        /^     [^ ]/       { inst = 0; next }
+REPLACE|        /^     [^ ]/       { next }
+
+--- M122
+DESC|install: the origin rule only knows the /fips/ archive, not /fips-updates/
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        inst && /esm\.ubuntu\.com\/fips/ { print pkg }')"
+REPLACE|        inst && /esm\.ubuntu\.com\/fips\// { print pkg }')"
+
+--- M123
+DESC|install: the origin rule's result is discarded
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    printf '%s\n%s\n' "$by_version" "$by_origin" | awk 'NF' | sort -u
+REPLACE|    printf '%s\n%s\n' "$by_version" "" | awk 'NF' | sort -u
+
+--- M124
+DESC|install: an unreadable FIPS set no longer stops the install
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    fips_list="$(apt_fips_packages)" || die "Could not read the installed package set and its origins
+REPLACE|    fips_list="$(apt_fips_packages)" || true "Could not read the installed package set and its origins
+
+--- M125
+DESC|install: a failed update of the private lists is ignored
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" update -qq || rc=$?
+REPLACE|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" update -qq || true
+
+--- M126
+DESC|install: a failed resolution (simulation) is ignored
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        plan="$(LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" -s install "${inst_opts[@]}" "$@" 2>&1)" || rc=$?
+REPLACE|        plan="$(LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" -s install "${inst_opts[@]}" "$@" 2>&1)" || true
+
+--- M127
+DESC|install: the resolution-failure branch is never taken
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if [[ $rc -ne 0 ]]; then
+REPLACE|    if false; then
+
+--- M128
+DESC|install: an upgrade that replaces a FIPS package is not refused
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            if [[ -n "${is_fips[${name%%:*}]:-}" ]]; then
+REPLACE|            if false; then
+
+--- M129
+DESC|install: a downgrade in the plan is not refused
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            elif ! dpkg --compare-versions "$ver" gt "$old"; then
+REPLACE|            elif false; then
+
+--- M130
+DESC|install: the downgrade test is inverted (every upgrade is refused)
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            elif ! dpkg --compare-versions "$ver" gt "$old"; then
+REPLACE|            elif dpkg --compare-versions "$ver" gt "$old"; then
+
+--- M131
+DESC|install: an upgrade is not listed in the plan summary
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            plan_upg+=("${name}=${ver} (from ${old})")
+
+--- M132
+DESC|install: a NEW install of another architecture of a FIPS package is not refused
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            [[ -z "${is_fips[${name%%:*}]:-}" ]] || plan_bad+=("${name}: FIPS package would be replaced by ${ver}")
+REPLACE|            true || plan_bad+=("${name}: FIPS package would be replaced by ${ver}")
+
+--- M133
+DESC|install: the architecture qualifier is not stripped before the FIPS lookup
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            [[ -z "${is_fips[${name%%:*}]:-}" ]] || plan_bad+=("${name}: FIPS package would be replaced by ${ver}")
+REPLACE|            [[ -z "${is_fips[${name}]:-}" ]] || plan_bad+=("${name}: FIPS package would be replaced by ${ver}")
+
+--- M134
+DESC|install: a new install is not listed in the plan summary
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            plan_new+=("${name}=${ver}")
+
+--- M135
+DESC|install: a removal in the plan is not refused
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        elif [[ "$line" == Remv\ * ]]; then
+REPLACE|        elif false; then
+
+--- M136
+DESC|install: the plan summary is not printed
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    info "Offline package plan — NEW (${#plan_new[@]}): ${plan_new[*]:-none}; UPGRADE (${#plan_upg[@]}): ${plan_upg[*]:-none}"
+
+--- M137
+DESC|install: a refused plan is installed anyway
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if [[ ${#plan_bad[@]} -gt 0 ]]; then
+REPLACE|    if false; then
+
+--- M138
+DESC|install: the prompt condition is inverted (prompts under --non-interactive, never on a terminal)
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if [[ ${NON_INTERACTIVE:-false} != true && -t 0 ]]; then
+REPLACE|    if [[ ${NON_INTERACTIVE:-false} == true && -t 0 ]]; then
+
+--- M139
+DESC|install: a declined plan is installed anyway
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if [[ "${ans,,}" != y && "${ans,,}" != yes ]]; then
+REPLACE|        if false; then
+
+--- M140
+DESC|install: a failed install is reported as success
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ $rc -eq 0 ]] || die "Offline package install failed (apt exit ${rc}) while applying the plan
+REPLACE|    true || die "Offline package install failed (apt exit ${rc}) while applying the plan
+
+--- M141
+DESC|install: the explicit cleanup before the resolution-failure message is gone. DOCUMENTED EQUIVALENT: die() exits and the EXIT trap removes it
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|yes
+ANCHOR|        rm -rf -- "$tmp"; APT_BUNDLE_TMP=""; trap - EXIT
+ANCHOR|        [[ -z "$plan" ]] || printf '%s\n' "$plan" >&2
+REPLACE|        true
+REPLACE|        [[ -z "$plan" ]] || printf '%s\n' "$plan" >&2
+
+--- M142
+DESC|install: the EXIT trap is not set. The explicit cleanups cover every die() path, so this is killed only if some path relies on the trap — DOCUMENTED EQUIVALENT
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|yes
+ANCHOR|    trap 'rm -rf -- "${APT_BUNDLE_TMP:-/nonexistent}"' EXIT
+REPLACE|    true

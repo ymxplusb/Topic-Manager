@@ -283,6 +283,13 @@ tm_unmet() {
             # loudly there rather than turning the whole file into a harness
             # error, which is what they did on the first remote run.
             node)  command -v node >/dev/null 2>&1 || out="${out}${out:+, }node" ;;
+            # The REAL apt resolver, run against a fixture dpkg status and a
+            # private file: repository (t23). Absent on the workstation.
+            apt)   { command -v apt-get && command -v dpkg && command -v sha256sum; } >/dev/null 2>&1 \
+                       || out="${out}${out:+, }apt-get and dpkg (a Debian/Ubuntu host)" ;;
+            # A pseudo-terminal, so a case can answer an interactive prompt.
+            pty)   script -qec true /dev/null >/dev/null 2>&1 \
+                       || out="${out}${out:+, }util-linux script (a pseudo-terminal)" ;;
             weirdnames) tm_probe_weirdnames \
                 || out="${out}${out:+, }a filesystem that allows a newline in a filename" ;;
             symlinks) tm_probe_symlinks \
