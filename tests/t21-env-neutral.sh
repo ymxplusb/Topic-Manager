@@ -43,6 +43,19 @@ n_gate_can_fail() {
     printf 'ssh 192.168''.1.5\n' > "${TM_TMP}/d/docs/guide.md"
     bash "$GATE" --dir "${TM_TMP}/d" > "${TM_TMP}/out" 2>&1 \
         && _tm_afail "the gate passed a private address"
+    # Round 2 (adversary F6): every RFC 1918 range, internal DNS suffixes,
+    # secret-store paths and the personal namespace — each alone must go red.
+    local t
+    for t in 'ssh 10.''20.30.40' 'gw 172.''16.5.1' 'gw 172.''31.255.1' 'host broker1.int''.example.org' \
+             'host kafka.ops.int''ernal' 'path cre''ds/apps/kafka' 'see james''.rodman/topic-manager'; do
+        printf '%s\n' "$t" > "${TM_TMP}/d/docs/guide.md"
+        bash "$GATE" --dir "${TM_TMP}/d" > "${TM_TMP}/out" 2>&1 \
+            && _tm_afail "the gate passed: ${t}"
+    done
+    # And nothing that merely LOOKS similar: a public range, a code property.
+    printf 'gw 172.''32.0.1; return t.internal; 10.0 GB\n' > "${TM_TMP}/d/docs/guide.md"
+    bash "$GATE" --dir "${TM_TMP}/d" > "${TM_TMP}/out" 2>&1 \
+        || _tm_afail "a false positive: $(cat "${TM_TMP}/out")"
     return 0
 }
 tm_case "the-gate-goes-red-on-a-tie" none n_gate_can_fail
@@ -132,6 +145,26 @@ p_bundle_is_the_committed_tree() {
     return 0
 }
 tm_case "the-bundle-is-the-committed-tree-without-internal-files" none p_bundle_is_the_committed_tree
+
+# Round 2 (adversary F4): there is no non-git fallback. A directory that is
+# not a git work tree — with an untracked secret sitting in it — is refused,
+# and no bundle is written.
+p_non_git_tree_is_refused() {
+    _prep_block
+    local r="${TM_TMP}/p/src"
+    rm -rf "${TM_TMP}/p"; mkdir -p "$r/tm" "$r/tools" "$r/lib" "$r/install/packages/python" "$r/install/packages/apt"
+    cp "$GATE" "$r/tools/check-env-neutral.sh"
+    printf 'print(1)\n' > "$r/tm/app.py"; printf 'vue\n' > "$r/lib/vue.global.prod.js"
+    printf 'untracked secret\n' > "$r/NOTES.txt"
+    local rc=0
+    TMPDIR="${TM_TMP}" GIT_CEILING_DIRECTORIES="${TM_TMP}" bash "${TM_TMP}/prep.sh" "$r" > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_ne 0 "$rc" "a bundle was built from a directory that is not a git work tree"
+    tm_assert_grep "git work tree" "${TM_TMP}/out" "the refusal does not say a git work tree is required"
+    tm_assert_nofile "${TM_TMP}/p/topic-manager-offline-9.9.9.tar.gz" "a bundle file was written anyway"
+    grep -q 'for p in VERSION requirements.txt' "$PREP" \
+        && _tm_afail "the directory-copy fallback is still in prepare-offline.sh" || true
+}
+tm_case "a-non-git-tree-is-refused-no-fallback" none p_non_git_tree_is_refused
 
 p_leaky_bundle_is_deleted() {
     command -v git >/dev/null 2>&1 || tm_die "git is required"

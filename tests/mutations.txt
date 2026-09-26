@@ -527,22 +527,22 @@ REPLACE|    WORK_DIR_OWNED=true          # this run created it, so this run may 
 DESC|upgrade: enforce_audit_db_modes leaves tm.db world-readable (0644)
 TESTS|t17-audit-db-modes.sh
 EQUIV|no
-ANCHOR|        chmod 600 -- "$f" || fail "chmod failed on ${f}"
-REPLACE|        chmod 644 -- "$f" || fail "chmod failed on ${f}"
+ANCHOR|            os.fchmod(fd, 0o600)
+REPLACE|            os.fchmod(fd, 0o644)
 
 --- M61
 DESC|upgrade: enforce_audit_db_modes gives data/ 0755 again
 TESTS|t17-audit-db-modes.sh
 EQUIV|no
-ANCHOR|    safe_install_dir 700 "$APP_USER" "$APP_USER" "$d"
-REPLACE|    safe_install_dir 755 "$APP_USER" "$APP_USER" "$d"
+ANCHOR|    os.fchmod(dfd, 0o700)
+REPLACE|    os.fchmod(dfd, 0o755)
 
 --- M62
 DESC|upgrade: THE SECURITY MUTATION — the symlink refusal is gone, so root chmods whatever the app linked tm.db to
 TESTS|t17-audit-db-modes.sh
 EQUIV|no
-ANCHOR|        [[ -L "$f" ]] && fail "${f} is a symlink; refusing to chown or chmod through it.
-REPLACE|        [[ -L "$f" ]] && true "${f} is a symlink; refusing to chown or chmod through it.
+ANCHOR|            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+REPLACE|            fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK, dir_fd=dfd)
 
 --- M63
 DESC|upgrade: Phase 10 stops enforcing, so the replayed v1.0.x baseline puts tm.db back to 0644
@@ -565,8 +565,8 @@ DESC|install: enforce_audit_db_modes leaves tm.db world-readable (0644)
 TESTS|t17-audit-db-modes.sh
 TARGET|install
 EQUIV|no
-ANCHOR|        chmod 600 -- "$f" || fail "chmod failed on ${f}"
-REPLACE|        chmod 644 -- "$f" || fail "chmod failed on ${f}"
+ANCHOR|            os.fchmod(fd, 0o600)
+REPLACE|            os.fchmod(fd, 0o644)
 
 --- M66
 DESC|install: data/ is created 0750 again
@@ -590,7 +590,7 @@ REPLACE|# A reinstall over a v1.0.x host finds tm.db at 0644 and data/ at 0750.
 DESC|nginx.conf: the rewrite keeps the old ssl_protocols line, TLSv1/TLSv1.1 and all
 TESTS|t18-tls-fips.sh
 EQUIV|no
-ANCHOR|                print substr($0, 1, RLENGTH) want " # managed by Topic Manager: TLS 1.2/1.3 only"
+ANCHOR|                print ind "ssl_protocols " keep "; # managed by Topic Manager: TLS 1.2/1.3 only"
 REPLACE|                print $0
 
 --- M69
@@ -732,3 +732,150 @@ TARGET|install
 EQUIV|yes
 ANCHOR|    if parsed["auth"].get(key) != value:
 REPLACE|    if False:
+
+# ─── round 2 (2026-09-26): assure-lane findings ──────────────────────────────
+--- M88
+DESC|nginx.conf: the rewrite WIDENS again — every line becomes TLSv1.2 TLSv1.3, so a TLSv1.3-only policy is loosened
+TESTS|t18-tls-fips.sh
+EQUIV|no
+ANCHOR|                print ind "ssl_protocols " keep "; # managed by Topic Manager: TLS 1.2/1.3 only"
+REPLACE|                print ind "ssl_protocols TLSv1.2 TLSv1.3; # managed by Topic Manager: TLS 1.2/1.3 only"
+
+--- M89
+DESC|nginx.conf: a directive AFTER ssl_protocols on the same line is no longer refused, and is deleted by the rewrite
+TESTS|t18-tls-fips.sh
+EQUIV|no
+ANCHOR|    if grep -Eq '^[[:space:]]*ssl_protocols[[:space:]][^;]*;[[:space:]]*[^[:space:]#]' "$conf" \
+REPLACE|    if false \
+
+--- M90
+DESC|upgrade: the data DIRECTORY is opened without O_NOFOLLOW, so a symlinked data/ has its target re-owned
+TESTS|t17-audit-db-modes.sh
+EQUIV|no
+ANCHOR|flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+REPLACE|flags = os.O_RDONLY | os.O_DIRECTORY
+
+--- M91
+DESC|upgrade: THE ROLLBACK DEFECT — restore_from_backup stops restoring the cluster store
+TESTS|t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|    restore_cluster_store "$BD"
+REPLACE|    true
+
+--- M92
+DESC|upgrade: certs added after the backup survive a restore
+TESTS|t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|        find "$CERT_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+REPLACE|        true
+
+--- M93
+DESC|upgrade: restored cert files keep a readable-by-all mode
+TESTS|t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|        find "$CERT_DIR" -mindepth 1 -type f -exec chown -h "${APP_USER}:${APP_USER}" -- {} + -exec chmod 600 -- {} +
+REPLACE|        find "$CERT_DIR" -mindepth 1 -type f -exec chown -h "${APP_USER}:${APP_USER}" -- {} +
+
+--- M94
+DESC|upgrade: the frontend group is forced to root, breaking a group-scoped STIG tree
+TESTS|t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|    if (( 8#$(stat -c '%a' "$d") & 8#005 )); then grp=root; else grp="$(stat -c '%G' "$d")"; fi
+REPLACE|    grp=root
+
+--- M95
+DESC|upgrade: group/other write is left on the served tree
+TESTS|t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|    chmod -R go-w -- "$d"
+REPLACE|    true
+
+--- M96
+DESC|install: the frontend is owned by the web user again
+TESTS|t24-restore-and-frontend.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    chown -R -h root:root "$d"
+REPLACE|    chown -R -h www-data:www-data "$d"
+
+--- M97
+DESC|upgrade: THE PINNING MUTATION — the cloned HEAD is no longer compared with --repo-commit
+TESTS|t20-directory-config.sh
+EQUIV|no
+ANCHOR|    [[ "$want" =~ ^[0-9a-f]{40}$ && "$got" =~ ^[0-9a-f]{40}$ && "$got" == "$want" ]] \
+REPLACE|    [[ "$want" =~ ^[0-9a-f]{40}$ ]] \
+
+--- M98
+DESC|upgrade: --repo-url is accepted without --repo-commit
+TESTS|t20-directory-config.sh
+EQUIV|no
+ANCHOR|        [[ "$REPO_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+REPLACE|        true \
+
+--- M99
+DESC|upgrade: the Vue backup fallback serves a file that does not match the pin
+TESTS|t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|    if [[ "$GOT" == "$VUE_SHA256" ]]; then
+REPLACE|    if true; then
+
+--- M100
+DESC|upgrade: a failed SQLite snapshot only warns again
+TESTS|t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|        fail "SQLite consistent snapshot failed — the restore point is NOT ready and
+REPLACE|        warn "SQLite consistent snapshot failed — the restore point is NOT ready and
+
+--- M101
+DESC|install: the offline apt install downloads again (no --no-download)
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            --no-download --no-upgrade "$@" || rc=$?
+REPLACE|            --no-upgrade "$@" || rc=$?
+
+--- M102
+DESC|install: THE FIPS MUTATION — the bundle is no longer pinned below installed packages, so it may replace a FIPS library
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    printf 'Package: *\nPin: origin ""\nPin-Priority: 1\n' > "${tmp}/preferences"
+REPLACE|    printf 'Package: *\nPin: origin ""\nPin-Priority: 1001\n' > "${tmp}/preferences"
+
+--- M103
+DESC|install: the explicit cleanup of the temporary apt config is gone. DOCUMENTED EQUIVALENT: the EXIT trap removes it on the same path (belt and braces)
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|yes
+ANCHOR|    rm -rf -- "$tmp"; APT_BUNDLE_TMP=""; trap - EXIT
+REPLACE|    true
+
+--- M104
+DESC|install: the bundle index is no longer required
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ -f "${dir}/Packages" || -f "${dir}/Packages.gz" ]] || die "Offline, and ${dir} has no Packages index.
+REPLACE|    true || die "Offline, and ${dir} has no Packages index.
+
+--- M105
+DESC|upgrade: the lock is no longer held to requirements.txt before install
+TESTS|t25-requirements-lock.sh
+EQUIV|no
+ANCHOR|        || fail "requirements.lock does not pin ${_pin}==${PINS[$_pin]} as requirements.txt does."
+REPLACE|        || true
+
+--- M106
+DESC|upgrade: pip installs without --require-hashes
+TESTS|t25-requirements-lock.sh
+EQUIV|no
+ANCHOR|PIP_ARGS=(--require-hashes --only-binary :all:)
+REPLACE|PIP_ARGS=(--only-binary :all:)
+
+--- M107
+DESC|install: the ldaps scheme test is dropped from the installer copy, so ldap:// passes
+TESTS|t20-directory-config.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            ok = parts.scheme.lower() == "ldaps" and bool(parts.hostname)
+REPLACE|            ok = True

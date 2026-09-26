@@ -154,6 +154,50 @@ m_rewrites_stock() {
 }
 tm_case "stock-nginx-conf-loses-tls1.0-and-1.1-and-is-backed-up" none m_rewrites_stock
 
+# Round 2 (sec-review #17): NEVER WIDEN an operator's stricter policy.
+m_never_widens() {
+    local s
+    for s in "$UP" "$INSTALL_SH"; do
+        printf 'http {\n\tssl_protocols TLSv1.3;\n}\n' > "${TM_TMP}/nginx.conf"
+        _run "$s" pass
+        tm_assert_rc 0 "$RC" "$(basename "$s"): $(cat "${TM_TMP}/out")"
+        grep -Eq '^[[:space:]]*ssl_protocols TLSv1\.3; # managed' "${TM_TMP}/nginx.conf" \
+            || _tm_afail "$(basename "$s"): a TLSv1.3-only policy was WIDENED: $(grep ssl_protocols "${TM_TMP}/nginx.conf")"
+        printf 'http {\n\tssl_protocols TLSv1 TLSv1.3;\n}\n' > "${TM_TMP}/nginx.conf"
+        _run "$s" pass
+        grep -Eq '^[[:space:]]*ssl_protocols TLSv1\.3; # managed' "${TM_TMP}/nginx.conf" \
+            || _tm_afail "$(basename "$s"): 'TLSv1 TLSv1.3' should become 'TLSv1.3', got: $(grep ssl_protocols "${TM_TMP}/nginx.conf")"
+        printf 'http {\n\tssl_protocols TLSv1 TLSv1.1;\n}\n' > "${TM_TMP}/nginx.conf"
+        _run "$s" pass
+        grep -Eq '^[[:space:]]*ssl_protocols TLSv1\.2 TLSv1\.3; # managed' "${TM_TMP}/nginx.conf" \
+            || _tm_afail "$(basename "$s"): a line with nothing approved did not become TLSv1.2 TLSv1.3"
+    done
+}
+tm_case "a-stricter-operator-policy-is-never-widened" none m_never_widens
+
+# Round 2 (adversary F2): a directive sharing the ssl_protocols line would be
+# deleted by a whole-line rewrite, so such a line is refused, untouched.
+m_refuses_shared_line() {
+    local s c
+    for s in "$UP" "$INSTALL_SH"; do
+        for c in 'ssl_protocols TLSv1 TLSv1.2; ssl_prefer_server_ciphers on;' \
+                 'ssl_session_timeout 5m; ssl_protocols TLSv1 TLSv1.2;'; do
+            printf 'http {\n\t%s\n}\n' "$c" > "${TM_TMP}/nginx.conf"
+            cp "${TM_TMP}/nginx.conf" "${TM_TMP}/orig.conf"
+            _run "$s" pass
+            tm_assert_ne 0 "$RC" "$(basename "$s"): rewrote a line holding two directives: ${c}"
+            cmp -s "${TM_TMP}/orig.conf" "${TM_TMP}/nginx.conf" \
+                || _tm_afail "$(basename "$s"): the shared line was changed; the other directive may be gone"
+            tm_assert_grep "sharing its line" "${TM_TMP}/out" "$(basename "$s"): the refusal did not say why"
+        done
+        # A trailing COMMENT is not a directive and is still accepted.
+        printf 'http {\n\tssl_protocols TLSv1 TLSv1.2; # old note\n}\n' > "${TM_TMP}/nginx.conf"
+        _run "$s" pass
+        tm_assert_rc 0 "$RC" "$(basename "$s"): a trailing comment was treated as a second directive"
+    done
+}
+tm_case "a-line-with-two-directives-is-refused-untouched" none m_refuses_shared_line
+
 m_inserts_when_absent() {
     local s
     for s in "$UP" "$INSTALL_SH"; do

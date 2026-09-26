@@ -135,6 +135,25 @@ if [[ $PINS -eq 0 ]]; then
     exit 3
 fi
 
+# Round 2: the TRANSITIVE dependencies too. requirements.lock carries every
+# package the installers actually install (Jinja2, MarkupSafe, cffi, ...);
+# a vulnerable dependency of a dependency was invisible while only the seven
+# direct pins were queried.
+LOCK="${REPO_ROOT}/requirements.lock"
+if [[ -f "$LOCK" ]]; then
+    echo
+    echo "── Transitive pins (requirements.lock) ──────────────────────────"
+    LPINS=0
+    while IFS= read -r line; do
+        [[ "$line" =~ ^([A-Za-z0-9._-]+)==([^[:space:]\\]+) ]] || continue
+        n="${BASH_REMATCH[1]}"; v="${BASH_REMATCH[2]}"
+        grep -qiE "^${n}==" "$REQ" && continue      # already queried above
+        query_osv PyPI "$n" "$v"
+        LPINS=$((LPINS+1))
+    done < <(tr -d '\r' < "$LOCK")
+    [[ $LPINS -gt 0 ]] || { echo "${RED}sca-check: requirements.lock parsed to no transitive pins — refusing to pass.${NC}" >&2; exit 3; }
+fi
+
 echo
 echo "── Frontend pin (install/upgrade-full.sh) ───────────────────────"
 if [[ -f "$UPGRADE" ]]; then

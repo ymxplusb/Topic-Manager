@@ -103,20 +103,54 @@ safe_install_dir() {   # safe_install_dir <mode> <owner> <group> <path>
 # hold the same rows. Called AFTER anything that copies the database back
 # (cp -a keeps the backup's old 0644) or replays a recorded mode (a baseline
 # taken on a v1.0.x host records 0644), so it is always the last word.
-# NEVER through a symlink: the application owns data/, so a link it put where
-# tm.db was would otherwise have root chown and chmod the link's target.
+#
+# THROUGH FILE DESCRIPTORS (round 2, sec-review TOCTOU). The application owns
+# data/, so a path check followed by chown/chmod BY NAME leaves a window in
+# which it can swap a file for a symlink and have root re-own the target. The
+# directory is opened O_DIRECTORY|O_NOFOLLOW, each file O_NOFOLLOW relative to
+# that descriptor, and fchown/fchmod act on what was opened — a symlink cannot
+# be followed at any step, it is refused.
 enforce_audit_db_modes() {
-    local d="${APP_HOME}/data" f
-    safe_install_dir 700 "$APP_USER" "$APP_USER" "$d"
-    for f in "${d}/tm.db" "${d}/tm.db-wal" "${d}/tm.db-shm" "${d}/tm.db-journal"; do
-        [[ -L "$f" ]] && fail "${f} is a symlink; refusing to chown or chmod through it.
-     The application owns ${d}, so a link here lets it choose what root
-     changes. Remove it (the real database is a regular file) and run again."
-        [[ -e "$f" ]] || continue
-        [[ -f "$f" ]] || fail "${f} exists and is not a regular file."
-        chown -h "${APP_USER}:${APP_USER}" -- "$f" || fail "chown failed on ${f}"
-        chmod 600 -- "$f" || fail "chmod failed on ${f}"
-    done
+    if ! python3 - "${APP_HOME}/data" "$APP_USER" <<'PYFD'
+import errno, os, pwd, stat, sys
+d, user = sys.argv[1], sys.argv[2]
+pw = pwd.getpwnam(user)
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+try:
+    dfd = os.open(d, flags)
+except FileNotFoundError:
+    os.mkdir(d, 0o700)
+    dfd = os.open(d, flags)
+except OSError as exc:
+    if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+        sys.exit("%s is a symlink or not a directory; refusing to chown or chmod through it." % d)
+    raise
+try:
+    os.fchown(dfd, pw.pw_uid, pw.pw_gid)
+    os.fchmod(dfd, 0o700)
+    for name in ("tm.db", "tm.db-wal", "tm.db-shm", "tm.db-journal"):
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                sys.exit("%s/%s is a symlink; refusing to chown or chmod through it. The application "
+                         "owns %s, so a link here lets it choose what root changes." % (d, name, d))
+            raise
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                sys.exit("%s/%s exists and is not a regular file." % (d, name))
+            os.fchown(fd, pw.pw_uid, pw.pw_gid)
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+finally:
+    os.close(dfd)
+PYFD
+    then
+        fail "Could not make the audit database private (see the line above). Nothing was chowned or chmodded through a link."
+    fi
 }
 
 # manage_nginx_ssl_protocols <nginx.conf> <backup-path> — v1.1.0.
@@ -142,14 +176,36 @@ manage_nginx_ssl_protocols() {
      line. Refusing to rewrite what cannot be parsed safely. Put it on one line
      (ssl_protocols TLSv1.2 TLSv1.3;) and run again."
     fi
+    # ONE DIRECTIVE PER LINE, or refuse (round 2, adversary F2). The rewrite
+    # replaces a whole line, so another directive sharing it — before or after
+    # the ssl_protocols one — would be silently deleted.
+    if grep -Eq '^[[:space:]]*ssl_protocols[[:space:]][^;]*;[[:space:]]*[^[:space:]#]' "$conf" \
+       || grep -Eq '^[[:space:]]*[^#[:space:]][^#]*[;{}][[:space:]]*ssl_protocols[[:space:]]' "$conf"; then
+        fail "${conf} has an ssl_protocols directive sharing its line with another
+     directive. Refusing to rewrite it, because the rewrite would delete the
+     other one. Put ssl_protocols on a line of its own and run again."
+    fi
     cp -a -- "$conf" "$bak" || fail "could not back up ${conf} to ${bak}"
     tmp="$(mktemp "${conf}.tm-XXXXXX")" || fail "could not create a temp file beside ${conf}"
     n="$(grep -Ec '^[[:space:]]*ssl_protocols[[:space:]]' "$conf" || true)"
     if [[ "${n:-0}" -gt 0 ]]; then
-        awk -v want="$want" '
+        # NEVER WIDEN (round 2, sec-review #17): what is kept is the
+        # operator's own list MINUS anything below TLS 1.2. A TLSv1.3-only
+        # line stays TLSv1.3-only; only a line left with nothing approved
+        # becomes TLSv1.2 TLSv1.3.
+        awk '
             /^[[:space:]]*ssl_protocols[[:space:]][^;]*;/ {
                 match($0, /^[[:space:]]*/)
-                print substr($0, 1, RLENGTH) want " # managed by Topic Manager: TLS 1.2/1.3 only"
+                ind = substr($0, 1, RLENGTH)
+                body = substr($0, RLENGTH + 1)
+                body = substr(body, 1, index(body, ";") - 1)
+                n = split(body, tok, /[[:space:]]+/)
+                keep = ""
+                for (i = 2; i <= n; i++)
+                    if (tok[i] == "TLSv1.2" || tok[i] == "TLSv1.3")
+                        keep = keep (keep == "" ? "" : " ") tok[i]
+                if (keep == "") keep = "TLSv1.2 TLSv1.3"
+                print ind "ssl_protocols " keep "; # managed by Topic Manager: TLS 1.2/1.3 only"
                 next
             }
             { print }' "$conf" > "$tmp"
@@ -167,7 +223,7 @@ manage_nginx_ssl_protocols() {
         || { rm -f "$tmp"; fail "could not give the edited nginx.conf its original owner and mode"; }
     mv -f -- "$tmp" "$conf" || { rm -f "$tmp"; fail "could not move the edited nginx.conf into place"; }
     if out="$(nginx -t 2>&1)"; then
-        info "nginx.conf: ssl_protocols is TLSv1.2 TLSv1.3 (backup: ${bak}); nginx -t passed"
+        info "nginx.conf: ssl_protocols holds TLS 1.2/1.3 only (backup: ${bak}); nginx -t passed"
         return 0
     fi
     cp -a -- "$bak" "$conf" || fail "nginx -t FAILED after the TLS edit AND the backup
@@ -197,6 +253,78 @@ tls_keypair_matches() {
     [[ "$c" == "$k" ]]
 }
 
+# apt_install_from_bundle <bundle-apt-dir> <top-level package>... — offline.
+#
+# MEASURED 2026-09-26 on a STIG (USG stig) + FIPS Ubuntu 24.04.4 host: handing
+# apt every bundled .deb that was not installed failed with "pkgProblemResolver
+# ::Resolve generated breaks". The bundle holds a dependency CLOSURE, which
+# includes every ALTERNATIVE provider (systemd-sysv, dbus-broker,
+# systemd-standalone-sysusers, ...), and a host whose package set differs from
+# the build host — a FIPS host always does — cannot take them all.
+#
+# So the bundle is used as a REPOSITORY, and apt's own resolver chooses:
+#   * a temporary, ISOLATED apt configuration under mktemp -d: its source list
+#     names ONLY the bundle ([trusted=yes] for that one file: path — the
+#     .debs were verified when the bundle's sha256 was checked out of band),
+#     its own lists and archive cache; nothing is written under /etc/apt;
+#   * ONLY the missing TOP-LEVEL packages are named; never a .deb path;
+#   * the bundle is pinned to priority 1, so it can supply what is NOT
+#     installed but never upgrades or replaces an installed package — a FIPS
+#     libssl or openssh stays exactly as it is; if a bundled package needs a
+#     newer one, the install FAILS rather than swap a validated library;
+#   * --no-download: the .debs are placed in the private archive cache, so
+#     apt uses them and fetches nothing;
+#   * the temporary configuration is removed on every exit path (trap).
+apt_install_from_bundle() {
+    local dir="$1"; shift
+    local tmp rc=0
+    [[ -f "${dir}/Packages" || -f "${dir}/Packages.gz" ]] || die "Offline, and ${dir} has no Packages index.
+     Rebuild the bundle with this release's prepare-offline.sh (it indexes the
+     .debs), or install $* from the host's own package mirror."
+    tmp="$(mktemp -d)" || die "could not create a temporary apt configuration"
+    # Removed on EVERY exit path: explicitly below, and by the EXIT trap if
+    # die() (or set -e) ends the run anywhere in between.
+    APT_BUNDLE_TMP="$tmp"
+    trap 'rm -rf -- "${APT_BUNDLE_TMP:-/nonexistent}"' EXIT
+    mkdir -p "${tmp}/lists/partial" "${tmp}/archives/partial" "${tmp}/parts" "${tmp}/prefparts"
+    printf 'deb [trusted=yes] file:%s ./\n' "$dir" > "${tmp}/sources.list"
+    printf 'Package: *\nPin: origin ""\nPin-Priority: 1\n' > "${tmp}/preferences"
+    cp -- "$dir"/*.deb "${tmp}/archives/" 2>/dev/null \
+        || { rm -rf "$tmp"; die "${dir} holds no .deb files."; }
+    local opts=(-o "Dir::Etc::SourceList=${tmp}/sources.list" -o "Dir::Etc::SourceParts=${tmp}/parts"
+                -o "Dir::State::Lists=${tmp}/lists" -o "Dir::Cache=${tmp}" -o "Dir::Cache::Archives=${tmp}/archives"
+                -o "Dir::Etc::Preferences=${tmp}/preferences" -o "Acquire::Languages=none"
+                -o "APT::Get::List-Cleanup=false" -o "APT::Sandbox::User=root")
+    info "Installing from the offline bundle (apt resolves; bundle pinned so nothing installed is replaced): $*"
+    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" update -qq || rc=$?
+    if [[ $rc -eq 0 ]]; then
+        DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" install -y --no-install-recommends \
+            --no-download --no-upgrade "$@" || rc=$?
+    fi
+    rm -rf -- "$tmp"; APT_BUNDLE_TMP=""; trap - EXIT
+    [[ $rc -eq 0 ]] || die "Offline package install failed (apt exit ${rc}). Nothing installed on the
+     host was replaced: the bundle is pinned below every installed package. If apt
+     says a package needs a NEWER version of something already installed (for
+     example a FIPS library), install $* from the host's own mirror instead.
+     See TROUBLESHOOTING.md -> Fresh install."
+}
+
+# normalise_frontend_install <dir> — a FRESH or re-installed frontend is
+# root:root, directories 0755 and files 0644 (round 2, sec-review). It used to
+# be chowned to www-data, so the web server could rewrite the JavaScript every
+# administrator runs. The tree is public static content, so world-read is
+# correct; nobody but root may write it. Symlinks are refused: nothing in the
+# shipped tree is one, and a link here would be served.
+normalise_frontend_install() {
+    local d="$1" l
+    [[ -L "$d" ]] && die "${d} is a symlink; refusing to install the frontend through it."
+    l="$(find "$d" -type l -print -quit)"
+    [[ -z "$l" ]] || die "${l} is a symlink inside the frontend tree; refusing. Remove it and run again."
+    chown -R -h root:root "$d"
+    find "$d" -type d -exec chmod 0755 {} +
+    find "$d" -type f -exec chmod 0644 {} +
+}
+
 # can_access <user> <test-flag> <path> — the honest check. Mode bits can look
 # right while an ACL, a parent directory or a MAC policy still says no, so ask
 # the kernel as the actual principal.
@@ -212,6 +340,7 @@ can_access() { sudo -u "$1" test "$2" "$3" 2>/dev/null; }
 ldap_config_missing() {
     "$1" - "$2" <<'PYKEYS'
 import sys
+from urllib.parse import urlsplit
 try:
     import yaml
     with open(sys.argv[1], encoding="utf-8") as fh:
@@ -226,6 +355,15 @@ for key in ("ldap_server", "ldap_base_dn", "ldap_domain"):
     value = str(auth.get(key) or "").strip()
     if not value or ("<" in value and ">" in value):
         missing.append(key)
+    elif key == "ldap_server":
+        # PARSED, exact scheme (tm/auth.py is_ldaps_url): only ldaps:// with a host.
+        try:
+            parts = urlsplit(value)
+            ok = parts.scheme.lower() == "ldaps" and bool(parts.hostname)
+        except ValueError:
+            ok = False
+        if not ok:
+            missing.append(key)
 print(" ".join(missing))
 PYKEYS
 }
@@ -307,7 +445,7 @@ if [[ $NEW_CONFIG == true ]]; then
     [[ -z "$MISSING_OPTS" ]] || die "Cannot write ${CONFIG_FILE}: no value for${MISSING_OPTS}.
      There is no built-in directory. Pass them as flags (see --help) or run
      on a terminal to be asked. Nothing has been installed."
-    [[ "$OPT_LDAP_URL" =~ ^ldaps://[A-Za-z0-9._-]+(:[0-9]{1,5})?/?$ ]] \
+    [[ "${OPT_LDAP_URL,,}" =~ ^ldaps://[A-Za-z0-9._-]+(:[0-9]{1,5})?/?$ ]] \
         || die "--ldap-url must be ldaps://<host>[:<port>] (plain ldap:// is not supported): '${OPT_LDAP_URL}'"
     [[ -z "$OPT_LDAP_CA_CERT" || -f "$OPT_LDAP_CA_CERT" ]] \
         || die "--ldap-ca-cert ${OPT_LDAP_CA_CERT}: no such file."
@@ -322,6 +460,39 @@ if [[ $NEW_CONFIG == true ]]; then
         warn "  placeholder, so sign-in binds as each user until auth.ldap_bind_password is set."
     fi
     success "Directory: ${OPT_LDAP_URL} (base ${OPT_LDAP_BASE_DN}, domain ${OPT_LDAP_DOMAIN})"
+fi
+
+# ─── an existing config.yaml must name its directory ─────────────────────────
+# Checked BEFORE ANYTHING IS CHANGED (round 2, adversary F3: it used to run
+# after apt, the venv and pip had already touched the host, while saying
+# "nothing was changed"). v1.1.0 has no built-in directory defaults, and a
+# reinstall over a host whose config.yaml relied on them would otherwise lock
+# every user out the moment a worker restarted. The interpreter is whichever
+# of the existing venv and the system python3 can import PyYAML; if neither
+# can, the run stops here rather than guess.
+if [[ $NEW_CONFIG != true ]]; then
+    CHECK_PY=""
+    for cand in "${VENV}/bin/python3" python3; do
+        if "$cand" -c "import yaml" >/dev/null 2>&1; then CHECK_PY="$cand"; break; fi
+    done
+    [[ -n "$CHECK_PY" ]] || die "Cannot check ${CONFIG_FILE} before changing anything: neither
+     ${VENV}/bin/python3 nor python3 can import yaml. Install python3-yaml and
+     run again. Nothing has been changed."
+    LDAP_MISSING="$(ldap_config_missing "$CHECK_PY" "$CONFIG_FILE")"
+    case "$LDAP_MISSING" in
+        "") success "config.yaml names its directory (ldap_server, ldap_base_dn, ldap_domain)" ;;
+        ERROR:*) die "Could not read ${CONFIG_FILE} to check its directory settings (${LDAP_MISSING#ERROR:}).
+     Fix the file and run again. Nothing has been changed." ;;
+        *) die "${CONFIG_FILE} has no usable value for: ${LDAP_MISSING}
+     Releases before 1.1.0 filled these in from built-in defaults that belonged
+     to one particular site; 1.1.0 has none (and ldap_server must be ldaps://),
+     so this install would lock every user out. Add the keys under auth: with
+     YOUR directory's values, e.g.
+       ldap_server:  \"ldaps://dc1.example.org:636\"
+       ldap_base_dn: \"DC=example,DC=org\"
+       ldap_domain:  \"example.org\"
+     then run again. Nothing has been changed." ;;
+    esac
 fi
 
 # ─── system dependencies ─────────────────────────────────────────────────────
@@ -340,23 +511,7 @@ elif [[ $ONLINE == true ]]; then
     DEBIAN_FRONTEND=noninteractive apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${MISSING_PKGS[@]}"
 else
-    # Offline: only the bundle's .debs for packages NOT already installed, so a
-    # bundled package can never downgrade something the host already has.
-    PKG_DIR="${SCRIPT_DIR}/install/packages/apt"
-    DEBS=()
-    shopt -s nullglob
-    for deb in "${PKG_DIR}"/*.deb; do
-        pkg_installed "$(dpkg-deb -f "$deb" Package 2>/dev/null)" || DEBS+=("$deb")
-    done
-    shopt -u nullglob
-    [[ ${#DEBS[@]} -gt 0 ]] || die "Offline, and these packages are missing: ${MISSING_PKGS[*]}
-     ${PKG_DIR} holds nothing that provides them. Install them from the host's
-     own package mirror, or rebuild the bundle with prepare-offline.sh on an
-     Ubuntu 24.04 machine of the same architecture."
-    info "Installing ${#DEBS[@]} package(s) from the offline bundle ..."
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${DEBS[@]}" \
-        || die "Offline package install failed. The bundle may be for a different
-     Ubuntu release or architecture; see TROUBLESHOOTING.md."
+    apt_install_from_bundle "${SCRIPT_DIR}/install/packages/apt" "${MISSING_PKGS[@]}"
 fi
 for p in "${REQUIRED_PKGS[@]}"; do
     pkg_installed "$p" || die "Required package ${p} is still not installed."
@@ -404,20 +559,25 @@ info "Setting up Python virtual environment..."
 "$PYTHON" -m venv "$VENV"
 source "${VENV}/bin/activate"
 
-# Binary wheels only (--only-binary :all:): nothing is compiled on the host, so
-# no toolchain is needed and what runs is exactly the wheel that was pinned.
+# HASH-LOCKED, BINARY WHEELS ONLY (round 2): requirements.lock pins every
+# package including transitive ones, with the SHA-256 of every wheel PyPI
+# publishes for it, and pip refuses any file not on that list — from PyPI, a
+# mirror or the bundle alike. Nothing is compiled on the host. pip itself is
+# NOT self-upgraded (online or off): an unhashed download of the installer
+# would sit outside the lock, and offline it was a hard failure.
+LOCK_FILE="${SCRIPT_DIR}/requirements.lock"
+[[ -f "$LOCK_FILE" ]] || die "${LOCK_FILE} not found — it is what the Python packages are verified against."
 if [[ $ONLINE == true ]]; then
-    pip install --upgrade pip --quiet
-    info "Installing Python packages from PyPI..."
-    pip install --only-binary :all: -r "${SCRIPT_DIR}/requirements.txt" --quiet
+    info "Installing Python packages from PyPI (hash-locked)..."
+    pip install --require-hashes --only-binary :all: -r "$LOCK_FILE" --quiet \
+        || die "pip install from requirements.lock failed (a hash mismatch is refused, not retried)."
 else
-    # No pip self-upgrade offline: there is no index to upgrade it from, and
-    # attempting it was a hard failure on an air-gapped host.
     PY_PKG_DIR="${SCRIPT_DIR}/install/packages/python"
     if [[ -d "$PY_PKG_DIR" ]]; then
-        info "Installing Python packages from offline cache..."
-        pip install --no-index --only-binary :all: --find-links="$PY_PKG_DIR" \
-            -r "${SCRIPT_DIR}/requirements.txt" --quiet
+        info "Installing Python packages from offline cache (hash-locked)..."
+        pip install --no-index --require-hashes --only-binary :all: --find-links="$PY_PKG_DIR" \
+            -r "$LOCK_FILE" --quiet \
+            || die "pip install from the bundle failed (a hash mismatch is refused, not retried)."
     else
         die "Offline Python packages not found at ${PY_PKG_DIR}. Run prepare-offline.sh first."
     fi
@@ -425,28 +585,14 @@ fi
 deactivate
 success "Python environment ready"
 
-# ─── an existing config.yaml must name its directory ─────────────────────────
-# Checked BEFORE the new backend is copied in: v1.1.0 has no built-in
-# directory defaults, and a reinstall over a host whose config.yaml relied on
-# them would otherwise lock every user out the moment a worker restarted.
-if [[ $NEW_CONFIG != true ]]; then
-    LDAP_MISSING="$(ldap_config_missing "${VENV}/bin/python3" "$CONFIG_FILE")"
-    case "$LDAP_MISSING" in
-        "") success "config.yaml names its directory (ldap_server, ldap_base_dn, ldap_domain)" ;;
-        ERROR:*) die "Could not read ${CONFIG_FILE} to check its directory settings (${LDAP_MISSING#ERROR:}).
-     Fix the file and run again. Nothing in the running install was changed." ;;
-        *) die "${CONFIG_FILE} has no value for: ${LDAP_MISSING}
-     Releases before 1.1.0 filled these in from built-in defaults that belonged
-     to one particular site; 1.1.0 has none, so this install would lock every
-     user out. Add the keys under auth: with YOUR directory's values, e.g.
-       ldap_server:  \"ldaps://dc1.example.org:636\"
-       ldap_base_dn: \"DC=example,DC=org\"
-       ldap_domain:  \"example.org\"
-     then run again. Nothing in the running install was changed." ;;
-    esac
-fi
-
 # ─── backend ─────────────────────────────────────────────────────────────────
+# A reinstall stops the running service first (round 2, sec-review): the
+# audit database is re-moded below, and a live service could create or swap a
+# -wal file between the check and the change.
+if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+    info "Stopping ${SERVICE_NAME} for the reinstall (it is started again at the end) ..."
+    systemctl stop "${SERVICE_NAME}"
+fi
 info "Installing backend (tm/)..."
 rsync -a --delete "${SCRIPT_DIR}/tm/" "${APP_HOME}/tm/"
 chown -R "$APP_USER:$APP_USER" "${APP_HOME}/tm"
@@ -525,8 +671,8 @@ for asset in jarvis-favicon.ico jarvis-glyph-32.png jarvis-logo.png jarvis-mark.
         warn "asset missing from the source tree: ${asset}"
     fi
 done
-chown -R www-data:www-data "$FRONTEND_DIR"
-success "Frontend installed at ${FRONTEND_DIR}"
+normalise_frontend_install "$FRONTEND_DIR"
+success "Frontend installed at ${FRONTEND_DIR} (root:root, 0755/0644)"
 
 # ─── config ──────────────────────────────────────────────────────────────────
 if [[ $NEW_CONFIG == true ]]; then
@@ -670,6 +816,10 @@ if [[ -n "$OPT_TLS_CERT" || -n "$OPT_TLS_KEY" ]]; then
     install -m 600 -o root -g root "$OPT_TLS_KEY"  "$TLS_KEY"
     success "TLS certificate installed from ${OPT_TLS_CERT} (key pair verified)"
 elif [[ -f "$TLS_CRT" && -f "$TLS_KEY" ]]; then
+    # A KEPT key is held to the same rule as a new one (round 2): 0600
+    # root:root. Never through a symlink.
+    [[ -L "$TLS_KEY" ]] && die "${TLS_KEY} is a symlink; refusing to chown or chmod through it."
+    chown root:root "$TLS_KEY"; chmod 600 "$TLS_KEY"
     tls_keypair_matches "$TLS_CRT" "$TLS_KEY" \
         && success "Existing TLS certificate kept (key pair verified)" \
         || warn "Existing ${TLS_CRT} and ${TLS_KEY} do NOT verify as a pair — nginx -t below will say more."

@@ -38,28 +38,45 @@ sha256_of() {
     fi
 }
 
+# A bundle comes only from `git archive` of a git work tree (round 2): refuse
+# now, before anything is downloaded, rather than after.
+if [[ $CREATE_BUNDLE == true ]] && ! git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    die "--bundle needs a git work tree: the bundle is built only from \`git archive\` of
+     the committed tree. Run it from a clone of the release."
+fi
+
 mkdir -p "$PY_PKG_DIR" "$APT_PKG_DIR" "$LIB_DIR"
 
 # ─── Python wheels ───────────────────────────────────────────────────────────
-# requirements.txt is the single source of truth for the Python pins, and
-# install/upgrade-full.sh installs from that same file on the target host. Do
-# not pin a version anywhere in this script.
+# requirements.txt is the single source of truth for the DIRECT pins;
+# requirements.lock (tools/gen-requirements-lock.py) extends it to every
+# transitive package with the SHA-256 of every published wheel. The bundle is
+# downloaded FROM THE LOCK with --require-hashes, binary wheels only, for the
+# target platform (Ubuntu 24.04 x86_64, CPython 3.12). There is NO fallback
+# any more (round 2): the old unrestricted `pip download` retry took whatever
+# resolved for THIS machine — sdists, other platforms, other versions — and it
+# was silently hiding that cryptography 50 has no manylinux2014 wheel.
 REQ_FILE="${SCRIPT_DIR}/requirements.txt"
-[[ -f "$REQ_FILE" ]] || die "${REQ_FILE} not found — it is the source of every Python pin."
+LOCK_FILE="${SCRIPT_DIR}/requirements.lock"
+[[ -f "$REQ_FILE" ]]  || die "${REQ_FILE} not found — it is the source of every Python pin."
+[[ -f "$LOCK_FILE" ]] || die "${LOCK_FILE} not found — regenerate it with tools/gen-requirements-lock.py."
+bash "${SCRIPT_DIR}/tools/check-requirements-lock.sh" \
+    || die "requirements.lock does not agree with requirements.txt — regenerate it."
 
-info "Downloading Python wheels to ${PY_PKG_DIR}..."
+info "Downloading hash-locked Python wheels to ${PY_PKG_DIR}..."
 pip download \
     --dest "$PY_PKG_DIR" \
-    --platform manylinux2014_x86_64 \
+    --require-hashes \
+    --only-binary :all: \
+    --platform manylinux_2_34_x86_64 --platform manylinux_2_28_x86_64 \
+    --platform manylinux_2_17_x86_64 --platform manylinux2014_x86_64 \
     --python-version 3.12 \
     --implementation cp \
     --abi cp312 \
-    --only-binary :all: \
-    -r "$REQ_FILE" 2>/dev/null || \
-pip download \
-    --dest "$PY_PKG_DIR" \
-    -r "$REQ_FILE"
-ok "Python wheels saved"
+    -r "$LOCK_FILE" \
+    || die "pip download from requirements.lock failed. There is no fallback: a bundle
+     that is not exactly the locked, hash-verified wheel set is not built."
+ok "Python wheels saved (every one hash-verified against requirements.lock)"
 
 # A bundle that is missing a pinned version fails on the air-gapped host, where
 # there is no way to fetch the missing wheel. Find that out here, with a network.
@@ -137,6 +154,22 @@ if command -v apt-get &>/dev/null && command -v apt-cache &>/dev/null; then
         fi
     done
     ok "apt packages: ${GOT} downloaded to ${APT_PKG_DIR} (${MISSED} virtual/unavailable skipped)"
+    # Round 2: the closure holds every ALTERNATIVE provider, so it is not a
+    # list to install — it is a REPOSITORY for apt to resolve from on the
+    # target (install.sh apt_install_from_bundle). Index it here, where the
+    # tools are, or the bundle is refused.
+    if command -v apt-ftparchive >/dev/null 2>&1; then
+        ( cd "$APT_PKG_DIR" && apt-ftparchive packages . > Packages ) || die "apt-ftparchive failed"
+    elif command -v dpkg-scanpackages >/dev/null 2>&1; then
+        ( cd "$APT_PKG_DIR" && dpkg-scanpackages --multiversion . /dev/null > Packages 2>/dev/null ) \
+            || die "dpkg-scanpackages failed"
+    else
+        die "Neither apt-ftparchive (apt-utils) nor dpkg-scanpackages (dpkg-dev) is installed,
+     so the .debs cannot be indexed and the target could not use them. Install
+     apt-utils on this build host and re-run."
+    fi
+    gzip -9 -c "${APT_PKG_DIR}/Packages" > "${APT_PKG_DIR}/Packages.gz"
+    ok "apt repository index written ($(grep -c '^Package:' "${APT_PKG_DIR}/Packages") entries)"
 else
     echo "  Skipping apt download — not running on Debian/Ubuntu."
     echo "  The target must then already have: ${PKGS}"
@@ -159,25 +192,19 @@ if [[ $CREATE_BUNDLE == true ]]; then
     trap 'rm -rf "$STAGE"' EXIT
     mkdir -p "${STAGE}/${TOP}"
     info "Creating bundle: ${BUNDLE_NAME}..."
-    if git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        if [[ -n "$(git -C "$SCRIPT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
-            echo "  NOTE: uncommitted changes to tracked files are NOT in the bundle —"
-            echo "        it is built from HEAD ($(git -C "$SCRIPT_DIR" rev-parse --short HEAD))."
-        fi
-        git -C "$SCRIPT_DIR" archive --format=tar HEAD | tar -x -C "${STAGE}/${TOP}" \
-            || die "git archive of HEAD failed."
-    else
-        for p in VERSION requirements.txt install.sh prepare-offline.sh index.html \
-                 README.md CHANGELOG.md SBOM.md NOTICES.md PPSM.csv TROUBLESHOOTING.md \
-                 jarvis-favicon.ico jarvis-glyph-32.png jarvis-logo.png jarvis-mark.png \
-                 app tm config systemd nginx tools tests docs \
-                 install/upgrade-full.sh install/README.md install/polkit install/logrotate.d; do
-            [[ -e "${SCRIPT_DIR}/${p}" ]] || continue
-            mkdir -p "${STAGE}/${TOP}/$(dirname "$p")"
-            cp -a "${SCRIPT_DIR}/${p}" "${STAGE}/${TOP}/${p}"
-        done
-        find "${STAGE}/${TOP}" -name __pycache__ -type d -prune -exec rm -rf {} +
+    # FROM GIT ONLY (round 2, adversary F4). There is no directory-copy
+    # fallback any more: copying whole directories took whatever sat in them,
+    # untracked files included. Outside a git work tree the bundle is refused
+    # (checked before anything was downloaded, and again here).
+    git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+        || die "Not a git work tree: the bundle is built only from \`git archive\` of the
+     committed tree. Run prepare-offline.sh --bundle from a clone of the release."
+    if [[ -n "$(git -C "$SCRIPT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+        echo "  NOTE: uncommitted changes to tracked files are NOT in the bundle —"
+        echo "        it is built from HEAD ($(git -C "$SCRIPT_DIR" rev-parse --short HEAD))."
     fi
+    git -C "$SCRIPT_DIR" archive --format=tar HEAD | tar -x -C "${STAGE}/${TOP}" \
+        || die "git archive of HEAD failed."
     # The generated, untracked payload an air-gapped host needs.
     mkdir -p "${STAGE}/${TOP}/lib" "${STAGE}/${TOP}/install/packages"
     cp -a "${LIB_DIR}/vue.global.prod.js" "${STAGE}/${TOP}/lib/"

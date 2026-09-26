@@ -40,8 +40,14 @@ _fixtures() {
     printf 'server:\n  host: 127.0.0.1\n' > "$d/no_auth.yaml"
     printf 'auth: "not a mapping"\n' > "$d/auth_scalar.yaml"
     cp "${TM_REPO_ROOT}/config/config.yaml.example" "$d/example.yaml"
+    # Round 2 (sec-review): the scheme is PARSED. Plain ldap:// is refused, an
+    # upper-case LDAPS:// is accepted, and a URL that merely CONTAINS "ldaps"
+    # is refused — the old substring test accepted it.
+    printf 'auth:\n  ldap_server: "ldap://dc1.example.org:389"\n  ldap_base_dn: "DC=example,DC=org"\n  ldap_domain: "example.org"\n' > "$d/plain_ldap.yaml"
+    printf 'auth:\n  ldap_server: "LDAPS://DC1.example.org:636"\n  ldap_base_dn: "DC=example,DC=org"\n  ldap_domain: "example.org"\n' > "$d/upper_ldaps.yaml"
+    printf 'auth:\n  ldap_server: "ldap://dc1.example.org/?ldaps"\n  ldap_base_dn: "DC=example,DC=org"\n  ldap_domain: "example.org"\n' > "$d/ldaps_substring.yaml"
 }
-FIXTURES="complete no_server blank_domain placeholder no_auth auth_scalar example"
+FIXTURES="complete no_server blank_domain placeholder no_auth auth_scalar example plain_ldap upper_ldaps ldaps_substring"
 
 _shell_answer() {   # _shell_answer <script> <config> -> the function's output
     {
@@ -67,7 +73,8 @@ d_shell_answers() {
         for f in $FIXTURES; do
             got="$(_shell_answer "$s" "${TM_TMP}/fx/${f}.yaml")"
             case "$f" in
-                complete)     want="" ;;
+                complete|upper_ldaps) want="" ;;
+                plain_ldap|ldaps_substring) want="ldap_server" ;;
                 no_server)    want="ldap_server" ;;
                 blank_domain) want="ldap_domain" ;;
                 placeholder)  want="ldap_base_dn" ;;
@@ -108,16 +115,27 @@ from tm import auth
 import ldap3
 called = []
 auth.Server = lambda *a, **k: called.append('server') or (_ for _ in ()).throw(AssertionError('reached LDAP'))
+import io, logging
+buf = io.StringIO(); logging.getLogger('tm.auth').addHandler(logging.StreamHandler(buf))
 ok, msg = auth.validate_credentials({'auth': {'ldap_base_dn': 'DC=example,DC=org'}}, 'u', 'p')
 print('ok=%s called=%d msg=%s' % (ok, len(called), msg))
+print('log=%s' % buf.getvalue().replace(chr(10), ' '))
 " 2>&1 | tr -d '\r')"
+    # Round 2: the unauthenticated client gets a generic sentence; which key is
+    # missing is for the administrator, in the server log.
     case "$out" in
-        *"ok=False called=0 msg="*"auth.ldap_server"*"auth.ldap_domain"*) ;;
-        *) _tm_afail "with ldap_server/ldap_domain missing, sign-in did not refuse with a
-        message naming them before touching LDAP: ${out}" ;;
+        *"ok=False called=0 msg=Sign-in is unavailable. Contact the administrator."*) ;;
+        *) _tm_afail "sign-in did not refuse with the generic message before touching LDAP: ${out}" ;;
+    esac
+    case "$(printf '%s\n' "$out" | grep '^ok=')" in
+        *ldap_*) _tm_afail "the response to an unauthenticated client names config keys: ${out}" ;;
+    esac
+    case "$(printf '%s\n' "$out" | grep '^log=')" in
+        *"auth.ldap_server"*"auth.ldap_domain"*) ;;
+        *) _tm_afail "the server log does not name the missing keys for the administrator: ${out}" ;;
     esac
 }
-tm_case "sign-in-refuses-and-names-the-missing-keys" tmapp d_refusal_is_clear
+tm_case "sign-in-refuses-generically-and-logs-the-keys" tmapp d_refusal_is_clear
 
 d_no_defaults_in_source() {
     "$PY" - "${TM_REPO_ROOT}/tm/auth.py" <<'PYEOF' > "${TM_TMP}/ast" 2>&1
@@ -146,16 +164,24 @@ _block_from() {
     tm_require_anchor "$1" "$2" "block start /$2/"
     TM_S="$2" awk 'BEGIN { s = ENVIRON["TM_S"] } !on && $0 ~ s { on = 1 } on { print } on && /^fi$/ { exit }' "$1"
 }
-d_install_checks_before_copying_code() {
-    local check copy
+# Round 2 (adversary F3): BEFORE ANY MUTATION, not merely before the code
+# copy — it used to run after apt, the venv and pip while claiming "nothing
+# was changed". Every mutating step's first line must come after the check.
+d_install_checks_before_any_change() {
+    local check first=999999 n pat
     check="$(grep -n 'LDAP_MISSING="$(ldap_config_missing' "$INSTALL_SH" | head -1 | cut -d: -f1)"
-    copy="$(grep -n 'rsync -a --delete "${SCRIPT_DIR}/tm/" "${APP_HOME}/tm/"' "$INSTALL_SH" | head -1 | cut -d: -f1)"
     tm_assert_nonempty "$check" "install.sh no longer checks an existing config.yaml for the directory keys"
-    tm_assert_nonempty "$copy"  "anchor: install.sh's backend copy was not found"
-    [ "$check" -lt "$copy" ] || _tm_afail "install.sh checks the directory keys AFTER copying in the
-        new backend — by then a worker restart already locks everyone out"
+    for pat in '^    DEBIAN_FRONTEND=noninteractive apt-get update' '^    apt_install_from_bundle ' \
+               '^    useradd ' '^safe_install_dir ' '^"\$PYTHON" -m venv' '^rsync -a --delete' \
+               '^    systemctl stop '; do
+        n="$(grep -nE "$pat" "$INSTALL_SH" | head -1 | cut -d: -f1)"
+        tm_assert_nonempty "$n" "anchor for a mutating step not found: ${pat}"
+        [ "$n" -lt "$first" ] && first="$n"
+    done
+    [ "$check" -lt "$first" ] || _tm_afail "install.sh checks the directory keys at line ${check}, AFTER
+        the first change to the host at line ${first} — its 'Nothing has been changed' would be false"
 }
-tm_case "install-checks-the-config-before-copying-new-code" none d_install_checks_before_copying_code
+tm_case "install-checks-the-config-before-any-change" none d_install_checks_before_any_change
 
 # Behavioural: the REAL install.sh block that guards a reinstall, run against
 # a config that relied on the old defaults and against one that did not.
@@ -231,6 +257,7 @@ _src_block() {
         echo 'fail() { echo "[FAIL] $*" >&2; exit 1; }; info() { echo "[INFO] $*"; }'
         echo 'ONLINE=true; REPO_URL="$1"; REPO_BRANCH="${2:-main}"'
         echo 'AUDIT_ONLY="${3:-false}"; DRY_RUN=false; BACKUP_ONLY=false'
+        echo 'REPO_COMMIT="${4-0123456789abcdef0123456789abcdef01234567}"'
         _block_from "$UP" '^# An online run needs to be told where the release source lives'
         echo 'echo CONTINUED'
     } > "${TM_TMP}/src.sh"
@@ -260,6 +287,56 @@ r_online_needs_a_url() {
     tm_assert_ne 0 "$rc" "an option-shaped branch was accepted"
 }
 tm_case "an-online-upgrade-without-a-source-is-refused" none r_online_needs_a_url
+
+# Round 2 (sec-review HIGH): a URL alone is a movable ref run as root.
+r_url_needs_a_commit() {
+    _src_block
+    local rc=0 u="https://git.example.org/team/topic-manager.git"
+    bash "${TM_TMP}/src.sh" "$u" v1.1.0 false "" > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_ne 0 "$rc" "--repo-url without --repo-commit was accepted"
+    tm_assert_grep "--repo-commit" "${TM_TMP}/out" "the refusal does not name --repo-commit"
+    rc=0; bash "${TM_TMP}/src.sh" "$u" v1.1.0 false "0123abc" > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_ne 0 "$rc" "a short commit id was accepted"
+    rc=0; bash "${TM_TMP}/src.sh" "$u" v1.1.0 false "0123456789ABCDEF0123456789abcdef01234567" > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_ne 0 "$rc" "a non-lower-case-hex commit id was accepted"
+}
+tm_case "a-repo-url-requires-a-40-hex-commit" none r_url_needs_a_commit
+
+r_clone_is_verified_and_hardened() {
+    command -v git >/dev/null 2>&1 || tm_die "git is required"
+    local r="${TM_TMP}/repo" rc head
+    mkdir -p "$r" && git -C "$r" init -q && printf 'x\n' > "$r/f" \
+        && git -C "$r" add f && git -C "$r" -c user.name=t -c user.email=t@example.org commit -qm one \
+        || tm_die "could not build a scratch repository"
+    head="$(git -C "$r" rev-parse HEAD)"
+    {
+        echo '#!/usr/bin/env bash'
+        echo 'set -euo pipefail'
+        echo 'fail() { echo "[FAIL] $*" >&2; exit 1; }; info() { echo "[INFO] $*"; }'
+        tm_extract_func "$UP" verify_clone_commit
+        echo 'verify_clone_commit "$1" "$2"; echo VERIFIED'
+    } > "${TM_TMP}/v.sh"
+    rc=0; bash "${TM_TMP}/v.sh" "$r" "$head" > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_eq 0 "$rc" "the exact commit was not accepted: $(cat "${TM_TMP}/out")"
+    rc=0; bash "${TM_TMP}/v.sh" "$r" "0123456789abcdef0123456789abcdef01234567" > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_ne 0 "$rc" "a clone whose HEAD is NOT the named commit was accepted"
+    rc=0; bash "${TM_TMP}/v.sh" "${TM_TMP}/not-a-repo" "0123456789abcdef0123456789abcdef01234567" > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_ne 0 "$rc" "a failed rev-parse compared equal"
+    # The clone line itself, and its order against the first read of the tree.
+    local clone verify readv
+    clone="$(grep -n 'clone --depth 1 --branch "$REPO_BRANCH" --quiet -- "$REPO_URL" "$WORK_DIR"' "$UP" | cut -d: -f1)"
+    verify="$(grep -n '^    verify_clone_commit "$WORK_DIR" "$REPO_COMMIT"' "$UP" | cut -d: -f1)"
+    readv="$(grep -n '^TARGET_VERSION="$(cat "${WORK_DIR}/tm/VERSION"' "$UP" | cut -d: -f1)"
+    tm_assert_nonempty "$clone" "the hardened clone line is gone"
+    tm_assert_nonempty "$verify" "the clone is no longer verified against --repo-commit"
+    [ "$clone" -lt "$verify" ] && [ "$verify" -lt "$readv" ] \
+        || _tm_afail "the commit check does not sit between the clone and the first read of the tree"
+    local opt
+    for opt in 'http.sslVerify=true' 'protocol.file.allow=never' 'GIT_TERMINAL_PROMPT=0' 'StrictHostKeyChecking=yes'; do
+        grep -q -- "$opt" "$UP" || _tm_afail "the clone is no longer hardened with ${opt}"
+    done
+}
+tm_case "the-clone-is-hardened-and-pinned-before-any-read" none r_clone_is_verified_and_hardened
 
 # ─── install.sh writes a complete, neutral config ────────────────────────────
 c_config_written() {

@@ -117,6 +117,20 @@ def _owner_ids(owner):
     return ent.pw_uid, ent.pw_gid
 
 
+def _set_mode(fd, name, mode):
+    if hasattr(os, 'fchmod'):
+        os.fchmod(fd, mode)
+    else:                                   # pragma: no cover - Windows only
+        os.chmod(name, mode)
+
+
+def _set_owner(fd, name, uid, gid):
+    if hasattr(os, 'fchown'):
+        os.fchown(fd, uid, gid)
+    elif hasattr(os, 'chown'):              # pragma: no cover
+        os.chown(name, uid, gid)
+
+
 def _atomic_write(path, text, template=None, owner=None, mode=None):
     """
     Replace `path` atomically.
@@ -139,17 +153,23 @@ def _atomic_write(path, text, template=None, owner=None, mode=None):
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        if template and os.path.exists(template):
-            st = os.stat(template)
-            os.chmod(tmp, st.st_mode & 0o7777)
-            if hasattr(os, 'chown'):
-                os.chown(tmp, st.st_uid, st.st_gid)
-        else:
-            if mode is not None:
-                os.chmod(tmp, mode)
-            ids = _owner_ids(owner)
-            if ids is not None:
-                os.chown(tmp, ids[0], ids[1])
+            # Owner and mode are set on the OPEN DESCRIPTOR (round 2,
+            # sec-review TOCTOU), never by name: clusters.d is app-writable,
+            # so between mkstemp and a chmod-by-name the app could swap the
+            # temp name for a symlink and have root re-mode its target.
+            # os.fchmod/os.fchown are POSIX-only; the Windows workstation
+            # (tests only) falls back to the name, where nothing is shared.
+            wfd = fh.fileno()
+            if template and os.path.exists(template):
+                st = os.stat(template)
+                _set_mode(wfd, tmp, st.st_mode & 0o7777)
+                _set_owner(wfd, tmp, st.st_uid, st.st_gid)
+            else:
+                if mode is not None:
+                    _set_mode(wfd, tmp, mode)
+                ids = _owner_ids(owner)
+                if ids is not None:
+                    _set_owner(wfd, tmp, ids[0], ids[1])
         os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):

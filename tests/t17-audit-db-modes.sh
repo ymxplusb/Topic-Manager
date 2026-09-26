@@ -134,6 +134,22 @@ e_refuses_symlink() {
 }
 tm_case "enforce-refuses-a-symlink-in-both-scripts" modes,symlinks e_refuses_symlink
 
+# Round 2 (sec-review TOCTOU): the DIRECTORY is opened O_NOFOLLOW too, so a
+# data/ swapped for a link to somewhere else is refused, not re-moded.
+e_refuses_symlinked_dir() {
+    local s rc
+    for s in "$UP" "$INSTALL_SH"; do
+        rm -rf "${TM_TMP}/h" "${TM_TMP}/elsewhere"; mkdir -p "${TM_TMP}/h" "${TM_TMP}/elsewhere"
+        chmod 755 "${TM_TMP}/elsewhere"
+        ln -s "${TM_TMP}/elsewhere" "${TM_TMP}/h/data"
+        _build_enforce "${TM_TMP}/fn" "$s"
+        rc=0; bash "${TM_TMP}/fn.sh" "${TM_TMP}/h" > "${TM_TMP}/out" 2>&1 || rc=$?
+        tm_assert_ne 0 "$rc" "$(basename "$s"): re-moded a data/ that is a symlink"
+        tm_assert_mode 755 "${TM_TMP}/elsewhere" "$(basename "$s"): the symlinked directory's TARGET was re-moded"
+    done
+}
+tm_case "enforce-refuses-a-symlinked-data-directory" modes,symlinks e_refuses_symlinked_dir
+
 # ─── THE CONSEQUENCE: Phase 10 on a v1.0.x host ends with 0600/0700 ─────────
 # Drives the REAL Phase 10 re-application block — the baseline replay, the
 # frontend pass, the runtime chowns and the enforcement that follows them —

@@ -1,6 +1,7 @@
 import logging
 import re
 import ssl
+from urllib.parse import urlsplit
 from ldap3 import Server, Connection, ALL, SIMPLE, Tls
 from ldap3.core.exceptions import LDAPException, LDAPBindError
 
@@ -14,9 +15,27 @@ _BIND_PW_PLACEHOLDER = 'CHANGE_ME'
 REQUIRED_LDAP_KEYS = ('ldap_server', 'ldap_base_dn', 'ldap_domain')
 
 
+#: What sign-in says to an UNAUTHENTICATED client when the server is not
+#: configured. The detail (which key) goes to the server log only.
+SIGN_IN_UNAVAILABLE = 'Sign-in is unavailable. Contact the administrator.'
+
+
+def is_ldaps_url(url):
+    """True only for an ldaps:// URL with a host. The scheme is PARSED and
+    compared exactly (case-insensitively, as URL schemes are); it used to be a
+    substring test, so 'ldap://x/?ldaps' or 'xldaps://' counted as TLS."""
+    try:
+        parts = urlsplit(str(url).strip())
+        return parts.scheme.lower() == 'ldaps' and bool(parts.hostname)
+    except ValueError:
+        return False
+
+
 def missing_ldap_keys(cfg):
-    """The REQUIRED_LDAP_KEYS that are absent, blank or still an unfilled
-    <placeholder> in cfg['auth']. Empty list when sign-in is configured."""
+    """The REQUIRED_LDAP_KEYS that are absent, blank, still an unfilled
+    <placeholder>, or — for ldap_server — not an ldaps:// URL. Empty list when
+    sign-in is configured. install.sh and upgrade-full.sh carry the same rule
+    (ldap_config_missing) and t20 holds all three to the same answers."""
     auth_cfg = (cfg or {}).get('auth') or {}
     if not isinstance(auth_cfg, dict):
         auth_cfg = {}
@@ -25,14 +44,15 @@ def missing_ldap_keys(cfg):
         v = str(auth_cfg.get(k) or '').strip()
         if not v or ('<' in v and '>' in v):
             out.append(k)
+        elif k == 'ldap_server' and not is_ldaps_url(v):
+            out.append(k)
     return out
 
 
 def _build_tls(cfg):
-    auth_cfg = cfg.get('auth', {})
-    if 'ldaps' not in auth_cfg.get('ldap_server', '').lower():
-        return None
-    ca_file = auth_cfg.get('ldap_ca_cert') or None
+    # Only ldaps:// reaches here (missing_ldap_keys refuses anything else), so
+    # certificate validation is always on.
+    ca_file = (cfg.get('auth', {}) or {}).get('ldap_ca_cert') or None
     return Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=ca_file)
 
 
@@ -56,10 +76,11 @@ def validate_credentials(cfg, username, password):
     # upgrade refuse to proceed without them, so this is the last line.
     missing = missing_ldap_keys(cfg)
     if missing:
-        log.error('LDAP is not configured: %s missing from config.yaml', ', '.join(missing))
-        return False, ('Sign-in is not configured on this server: %s missing from '
-                       'config.yaml. An administrator must set it.'
-                       % ', '.join('auth.' + k for k in missing))
+        # The detail is for the administrator, in the server log. The client
+        # is unauthenticated and learns only that sign-in is unavailable.
+        log.error('Sign-in refused: config.yaml auth.%s missing, a <placeholder>, '
+                  'or (ldap_server) not an ldaps:// URL', ', auth.'.join(missing))
+        return False, SIGN_IN_UNAVAILABLE
     ldap_url = auth_cfg['ldap_server']
     base_dn = auth_cfg['ldap_base_dn']
     required_group_dn = auth_cfg.get('required_group', '')
@@ -72,7 +93,7 @@ def validate_credentials(cfg, username, password):
     use_service_bind = bool(bind_dn and bind_pw and _BIND_PW_PLACEHOLDER not in bind_pw)
 
     tls = _build_tls(cfg)
-    server = Server(ldap_url, get_info=ALL, tls=tls, use_ssl='ldaps' in ldap_url.lower())
+    server = Server(ldap_url, get_info=ALL, tls=tls, use_ssl=True)
 
     bind_user = bind_dn if use_service_bind else upn
     bind_pass = bind_pw if use_service_bind else password

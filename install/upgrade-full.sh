@@ -34,15 +34,23 @@
 #   sudo bash upgrade-full.sh --restore TS       # roll back to a restore point
 #   sudo bash upgrade-full.sh --force            # proceed past BLOCK findings
 #   sudo bash upgrade-full.sh --no-bind-probe    # skip the live LDAP bind entirely
-#   sudo bash upgrade-full.sh --repo-url URL [--repo-branch REF]
+#   sudo bash upgrade-full.sh --repo-url URL --repo-commit SHA [--repo-branch REF]
 #                                                # online source (or TM_REPO_URL /
-#                                                # TM_REPO_BRANCH); there is NO default
+#                                                # TM_REPO_COMMIT / TM_REPO_BRANCH);
+#                                                # there is NO default URL, and the
+#                                                # 40-hex commit is REQUIRED
 #
 # ONLINE vs OFFLINE: online mode clones the release source from the git URL
 # the operator supplies — this script names no repository of its own, because
 # which server is authoritative is a property of the site, not of the product.
 # Without --repo-url (or TM_REPO_URL) an online run stops before Phase 4 and
 # says so; the offline bundle (--offline) needs no network at all.
+#
+# The clone is PINNED (round 2, sec-review HIGH): a branch or tag is movable,
+# and root executes what it fetches. --repo-commit names the exact 40-hex
+# commit the operator reviewed; after the clone `git rev-parse HEAD` must equal
+# it before a single byte of the tree is read, or the run stops. Get the value
+# from the release notes or the CI pipeline of the tag, out of band.
 #
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 # =============================================================================
@@ -54,6 +62,7 @@ set -euo pipefail
 # where the operator says the release lives, or not fetch at all.
 REPO_URL="${TM_REPO_URL:-}"
 REPO_BRANCH="${TM_REPO_BRANCH:-main}"
+REPO_COMMIT="${TM_REPO_COMMIT:-}"
 
 APP_USER="topic-manager"
 WEB_USER="www-data"
@@ -152,9 +161,11 @@ while [[ $# -gt 0 ]]; do
                          [[ -n "$REPO_URL" ]] || { echo "--repo-url needs a git URL" >&2; exit 2; } ;;
         --repo-branch)   shift; REPO_BRANCH="${1:-}"
                          [[ -n "$REPO_BRANCH" ]] || { echo "--repo-branch needs a branch or tag" >&2; exit 2; } ;;
+        --repo-commit)   shift; REPO_COMMIT="${1:-}"
+                         [[ -n "$REPO_COMMIT" ]] || { echo "--repo-commit needs a 40-hex commit id" >&2; exit 2; } ;;
         --restore)       shift; RESTORE_TS="${1:-}"
                          [[ -n "$RESTORE_TS" ]] || { echo "--restore needs a timestamp (see --list-backups)" >&2; exit 2; } ;;
-        -h|--help)       sed -n '2,52p' "$0"; exit 0 ;;
+        -h|--help)       sed -n '2,62p' "$0"; exit 0 ;;
         *)               echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
     esac
     shift
@@ -404,20 +415,54 @@ safe_install_dir() {   # safe_install_dir <mode> <owner> <group> <path>
 # hold the same rows. Called AFTER anything that copies the database back
 # (cp -a keeps the backup's old 0644) or replays a recorded mode (a baseline
 # taken on a v1.0.x host records 0644), so it is always the last word.
-# NEVER through a symlink: the application owns data/, so a link it put where
-# tm.db was would otherwise have root chown and chmod the link's target.
+#
+# THROUGH FILE DESCRIPTORS (round 2, sec-review TOCTOU). The application owns
+# data/, so a path check followed by chown/chmod BY NAME leaves a window in
+# which it can swap a file for a symlink and have root re-own the target. The
+# directory is opened O_DIRECTORY|O_NOFOLLOW, each file O_NOFOLLOW relative to
+# that descriptor, and fchown/fchmod act on what was opened — a symlink cannot
+# be followed at any step, it is refused.
 enforce_audit_db_modes() {
-    local d="${APP_HOME}/data" f
-    safe_install_dir 700 "$APP_USER" "$APP_USER" "$d"
-    for f in "${d}/tm.db" "${d}/tm.db-wal" "${d}/tm.db-shm" "${d}/tm.db-journal"; do
-        [[ -L "$f" ]] && fail "${f} is a symlink; refusing to chown or chmod through it.
-     The application owns ${d}, so a link here lets it choose what root
-     changes. Remove it (the real database is a regular file) and run again."
-        [[ -e "$f" ]] || continue
-        [[ -f "$f" ]] || fail "${f} exists and is not a regular file."
-        chown -h "${APP_USER}:${APP_USER}" -- "$f" || fail "chown failed on ${f}"
-        chmod 600 -- "$f" || fail "chmod failed on ${f}"
-    done
+    if ! python3 - "${APP_HOME}/data" "$APP_USER" <<'PYFD'
+import errno, os, pwd, stat, sys
+d, user = sys.argv[1], sys.argv[2]
+pw = pwd.getpwnam(user)
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+try:
+    dfd = os.open(d, flags)
+except FileNotFoundError:
+    os.mkdir(d, 0o700)
+    dfd = os.open(d, flags)
+except OSError as exc:
+    if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+        sys.exit("%s is a symlink or not a directory; refusing to chown or chmod through it." % d)
+    raise
+try:
+    os.fchown(dfd, pw.pw_uid, pw.pw_gid)
+    os.fchmod(dfd, 0o700)
+    for name in ("tm.db", "tm.db-wal", "tm.db-shm", "tm.db-journal"):
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                sys.exit("%s/%s is a symlink; refusing to chown or chmod through it. The application "
+                         "owns %s, so a link here lets it choose what root changes." % (d, name, d))
+            raise
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                sys.exit("%s/%s exists and is not a regular file." % (d, name))
+            os.fchown(fd, pw.pw_uid, pw.pw_gid)
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+finally:
+    os.close(dfd)
+PYFD
+    then
+        fail "Could not make the audit database private (see the line above). Nothing was chowned or chmodded through a link."
+    fi
 }
 
 # manage_nginx_ssl_protocols <nginx.conf> <backup-path> — v1.1.0.
@@ -443,14 +488,36 @@ manage_nginx_ssl_protocols() {
      line. Refusing to rewrite what cannot be parsed safely. Put it on one line
      (ssl_protocols TLSv1.2 TLSv1.3;) and run again."
     fi
+    # ONE DIRECTIVE PER LINE, or refuse (round 2, adversary F2). The rewrite
+    # replaces a whole line, so another directive sharing it — before or after
+    # the ssl_protocols one — would be silently deleted.
+    if grep -Eq '^[[:space:]]*ssl_protocols[[:space:]][^;]*;[[:space:]]*[^[:space:]#]' "$conf" \
+       || grep -Eq '^[[:space:]]*[^#[:space:]][^#]*[;{}][[:space:]]*ssl_protocols[[:space:]]' "$conf"; then
+        fail "${conf} has an ssl_protocols directive sharing its line with another
+     directive. Refusing to rewrite it, because the rewrite would delete the
+     other one. Put ssl_protocols on a line of its own and run again."
+    fi
     cp -a -- "$conf" "$bak" || fail "could not back up ${conf} to ${bak}"
     tmp="$(mktemp "${conf}.tm-XXXXXX")" || fail "could not create a temp file beside ${conf}"
     n="$(grep -Ec '^[[:space:]]*ssl_protocols[[:space:]]' "$conf" || true)"
     if [[ "${n:-0}" -gt 0 ]]; then
-        awk -v want="$want" '
+        # NEVER WIDEN (round 2, sec-review #17): what is kept is the
+        # operator's own list MINUS anything below TLS 1.2. A TLSv1.3-only
+        # line stays TLSv1.3-only; only a line left with nothing approved
+        # becomes TLSv1.2 TLSv1.3.
+        awk '
             /^[[:space:]]*ssl_protocols[[:space:]][^;]*;/ {
                 match($0, /^[[:space:]]*/)
-                print substr($0, 1, RLENGTH) want " # managed by Topic Manager: TLS 1.2/1.3 only"
+                ind = substr($0, 1, RLENGTH)
+                body = substr($0, RLENGTH + 1)
+                body = substr(body, 1, index(body, ";") - 1)
+                n = split(body, tok, /[[:space:]]+/)
+                keep = ""
+                for (i = 2; i <= n; i++)
+                    if (tok[i] == "TLSv1.2" || tok[i] == "TLSv1.3")
+                        keep = keep (keep == "" ? "" : " ") tok[i]
+                if (keep == "") keep = "TLSv1.2 TLSv1.3"
+                print ind "ssl_protocols " keep "; # managed by Topic Manager: TLS 1.2/1.3 only"
                 next
             }
             { print }' "$conf" > "$tmp"
@@ -468,7 +535,7 @@ manage_nginx_ssl_protocols() {
         || { rm -f "$tmp"; fail "could not give the edited nginx.conf its original owner and mode"; }
     mv -f -- "$tmp" "$conf" || { rm -f "$tmp"; fail "could not move the edited nginx.conf into place"; }
     if out="$(nginx -t 2>&1)"; then
-        info "nginx.conf: ssl_protocols is TLSv1.2 TLSv1.3 (backup: ${bak}); nginx -t passed"
+        info "nginx.conf: ssl_protocols holds TLS 1.2/1.3 only (backup: ${bak}); nginx -t passed"
         return 0
     fi
     cp -a -- "$bak" "$conf" || fail "nginx -t FAILED after the TLS edit AND the backup
@@ -508,6 +575,7 @@ tls_keypair_matches() {
 ldap_config_missing() {
     "$1" - "$2" <<'PYKEYS'
 import sys
+from urllib.parse import urlsplit
 try:
     import yaml
     with open(sys.argv[1], encoding="utf-8") as fh:
@@ -522,6 +590,15 @@ for key in ("ldap_server", "ldap_base_dn", "ldap_domain"):
     value = str(auth.get(key) or "").strip()
     if not value or ("<" in value and ">" in value):
         missing.append(key)
+    elif key == "ldap_server":
+        # PARSED, exact scheme (tm/auth.py is_ldaps_url): only ldaps:// with a host.
+        try:
+            parts = urlsplit(value)
+            ok = parts.scheme.lower() == "ldaps" and bool(parts.hostname)
+        except ValueError:
+            ok = False
+        if not ok:
+            missing.append(key)
 print(" ".join(missing))
 PYKEYS
 }
@@ -530,6 +607,41 @@ PYKEYS
 # right while an ACL, a parent directory or a MAC policy still says no, so ask
 # the kernel as the actual principal.
 can_access() { sudo -u "$1" test "$2" "$3" 2>/dev/null; }
+
+# normalise_frontend_ownership <dir> — round 2 (sec-review): the served tree
+# is OWNED BY ROOT and writable by nobody else. Older installs chowned it to
+# www-data, so the web server could rewrite the JavaScript every administrator
+# runs. Modes are otherwise KEPT, never widened (the rule of this script):
+#   * owner -> root; group/other write bits removed;
+#   * group -> root when the tree is world-readable (the stock layout, which
+#     then becomes root:root 0755/0644); a group-scoped tree (no other-access
+#     on the directory, e.g. a STIG's 0750 root:www-data) keeps its group,
+#     because that group is how nginx reads it.
+# Symlinks are refused. The Phase 12 re-audit then asks the kernel, as
+# www-data, whether the files are still readable.
+normalise_frontend_ownership() {
+    local d="$1" l grp
+    [[ -L "$d" ]] && fail "${d} is a symlink; refusing to re-own the frontend through it."
+    l="$(find "$d" -type l -print -quit)"
+    [[ -z "$l" ]] || fail "${l} is a symlink inside the served tree; refusing. Remove it and re-run."
+    if (( 8#$(stat -c '%a' "$d") & 8#005 )); then grp=root; else grp="$(stat -c '%G' "$d")"; fi
+    chown -R -h "root:${grp}" -- "$d"
+    chmod -R go-w -- "$d"
+    info "Frontend owned by root:${grp}, no group/other write (modes otherwise kept)"
+}
+
+# verify_clone_commit <dir> <40-hex> — the cloned HEAD must be exactly the
+# commit the operator named. Raw comparison of two well-formed 40-hex values;
+# an empty or failed rev-parse can never compare equal.
+verify_clone_commit() {
+    local d="$1" want="$2" got
+    got="$(git -C "$d" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
+    [[ "$want" =~ ^[0-9a-f]{40}$ && "$got" =~ ^[0-9a-f]{40}$ && "$got" == "$want" ]] \
+        || fail "The cloned tree is commit '${got:-<none>}', not the reviewed ${want}.
+     The branch or tag moved, or the wrong one was named. Nothing from it was
+     read or run; nothing on this host has been changed by the fetch."
+    info "Cloned tree verified: HEAD is ${got}"
+}
 
 # ─── systemd unit drop-in ────────────────────────────────────────────────────
 # ${DROPIN_DIR} is not a system file this script re-creates from the source
@@ -561,6 +673,40 @@ verify_dropin_backed_up() {   # verify_dropin_backed_up <backup-dir>
 It may carry TM_SECRET_KEY or TM_LDAP_BIND_PASSWORD, and a restore without it
 returns a service that refuses to start. Refusing to proceed."
     done < <(find "$DROPIN_DIR" -mindepth 1 -type f)
+}
+
+# restore_cluster_store <backup-dir> — round 2 (adversary F5, treated as HIGH).
+# The backup has always taken clusters.d/ and data/cluster-certs/, and
+# restore_from_backup never put them back: --restore and the automatic
+# rollback returned a host whose cluster list and uploaded Kafka TLS material
+# were whatever the FAILED upgrade left. Both are now replaced by the backup's
+# copy (files added after the backup are removed, as a restore means), then
+# given the store's invariants: clusters.d 0750 and cluster-certs 0700, both
+# topic-manager-owned; clusters.yaml 0640 and every cert file 0600, owned by
+# topic-manager. Never through a symlink: both directories are app-writable.
+restore_cluster_store() {   # restore_cluster_store <backup-dir>
+    local BD="$1" src l
+    for src in "${BD}/etc/clusters.d" "${BD}/data/cluster-certs"; do
+        [[ -d "$src" ]] || continue
+        l="$(find "$src" -type l -print -quit)"
+        [[ -z "$l" ]] || fail "Backup contains a symlink (${l}); refusing to restore through it."
+    done
+    if [[ -d "${BD}/etc/clusters.d" ]]; then
+        safe_install_dir 750 "$APP_USER" "$APP_USER" "$CLUSTERS_DIR"
+        find "$CLUSTERS_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+        cp -a "${BD}/etc/clusters.d/." "${CLUSTERS_DIR}/"
+        find "$CLUSTERS_DIR" -mindepth 1 \( -type f -o -type d \) -exec chown -h "${APP_USER}:${APP_USER}" -- {} +
+        [[ -f "$CLUSTERS_FILE" ]] && chmod 640 -- "$CLUSTERS_FILE"
+        info "Restored cluster profiles to ${CLUSTERS_DIR}"
+    fi
+    if [[ -d "${BD}/data/cluster-certs" ]]; then
+        safe_install_dir 700 "$APP_USER" "$APP_USER" "$CERT_DIR"
+        find "$CERT_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+        cp -a "${BD}/data/cluster-certs/." "${CERT_DIR}/"
+        find "$CERT_DIR" -mindepth 1 -type f -exec chown -h "${APP_USER}:${APP_USER}" -- {} + -exec chmod 600 -- {} +
+        info "Restored Kafka TLS material to ${CERT_DIR} ($(find "$CERT_DIR" -type f | wc -l) file(s))"
+    fi
+    return 0
 }
 
 restore_dropin() {   # restore_dropin <backup-dir>
@@ -711,6 +857,7 @@ restore_from_backup() {
     [[ -f "${BD}/system/topic-manager.service" ]] && \
         cp -a "${BD}/system/topic-manager.service" /etc/systemd/system/
     restore_dropin "$BD"
+    restore_cluster_store "$BD"
     [[ -f "${BD}/system/logrotate-topic-manager" ]] && \
         cp -a "${BD}/system/logrotate-topic-manager" /etc/logrotate.d/topic-manager
     [[ -f "${BD}/venv.tar.gz" ]] && { rm -rf "$VENV"; tar -xzf "${BD}/venv.tar.gz" -C "$APP_HOME"; }
@@ -882,7 +1029,13 @@ if [[ $ONLINE == true ]]; then
             || fail "--repo-url '${REPO_URL}' is not an https://, ssh:// or git@ URL."
         [[ "$REPO_BRANCH" =~ ^[A-Za-z0-9._/-]+$ && "$REPO_BRANCH" != -* ]] \
             || fail "--repo-branch '${REPO_BRANCH}' is not a branch or tag name."
-        info "Online source: ${REPO_URL} (${REPO_BRANCH})"
+        # A movable ref is not an identity. Root runs what this fetches.
+        [[ "$REPO_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
+            || fail "--repo-url needs --repo-commit <40-hex commit id> (or TM_REPO_COMMIT).
+     A branch or tag can be moved on the server after you reviewed it, and this
+     script runs what it clones as root. Take the full commit id of the release
+     from its release notes or CI pipeline, out of band. Nothing has been changed."
+        info "Online source: ${REPO_URL} (${REPO_BRANCH} @ ${REPO_COMMIT})"
     elif [[ $AUDIT_ONLY != true && $DRY_RUN != true && $BACKUP_ONLY != true ]]; then
         fail "Online upgrade, but no source repository was given.
      This script has no built-in source. Either:
@@ -1533,7 +1686,14 @@ with d:
 d.close(); s.close()
 PYBACKUP
     then success "SQLite consistent snapshot taken"
-    else warn "SQLite consistent snapshot failed — raw file copy retained"; fi
+    else
+        # Round 2: a restore point without a consistent copy of the audit
+        # database is not a restore point. The raw copy of a live WAL database
+        # can be torn, and the audit trail is what a rollback must not lose.
+        fail "SQLite consistent snapshot failed — the restore point is NOT ready and
+     nothing has been changed. Check the database and the free space under
+     ${BACKUP_ROOT}, then re-run."
+    fi
 fi
 
 [[ -d "${APP_HOME}/tm" ]]      && cp -a "${APP_HOME}/tm"   "${BACKUP_DIR}/app/tm"
@@ -1649,7 +1809,16 @@ if [[ $ONLINE == true ]]; then
     WORK_DIR_OWNED=true          # this run created it, so this run may delete it
     assert_root_owned_path "$WORK_DIR"
     info "Cloning ${REPO_URL} (${REPO_BRANCH}) into ${WORK_DIR} ..."
-    git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$WORK_DIR" --quiet || fail "git clone failed."
+    # Hardened (round 2): TLS verification forced on whatever the host's git
+    # config says; no file:// or other local transport; never prompt; SSH only
+    # to an ALREADY-KNOWN host key; `--` so the URL can never be an option.
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=yes -o BatchMode=yes" \
+        git -c http.sslVerify=true -c protocol.file.allow=never -c protocol.ext.allow=never \
+            clone --depth 1 --branch "$REPO_BRANCH" --quiet -- "$REPO_URL" "$WORK_DIR" \
+        || fail "git clone failed."
+    # BEFORE ANY CONTENT IS READ: the tree must be exactly the reviewed commit.
+    verify_clone_commit "$WORK_DIR" "$REPO_COMMIT"
 else
     # The operator transferred this by hand onto an air-gapped host. It is not
     # ours to delete — see the cleanup at the end of the script.
@@ -1726,45 +1895,41 @@ rm -f /etc/nginx/sites-enabled/topic-manager
 success "Previous application removed"
 
 # =============================================================================
-phase "Phase 8 — Install third-party components (pinned by requirements.txt)"
+phase "Phase 8 — Install third-party components (hash-locked by requirements.lock)"
 # =============================================================================
 
 info "Creating virtual environment ..."
 python3 -m venv "$VENV"
 ls "${VENV}/lib/python"*"/site-packages/" >/dev/null 2>&1 || fail "venv creation failed."
-"${VENV}/bin/pip" install --upgrade pip --quiet
 
-PIP_ARGS=()
+# ROUND 2: ONE hash-locked install of requirements.lock — every package,
+# transitive ones included, verified by SHA-256; binary wheels only; no pip
+# self-upgrade (an unhashed download of the installer itself, and a hard
+# failure offline). The three separately-staged installs, with the Kafka
+# client allowed to soft-fail, are gone: with --require-hashes a stage must
+# carry its own dependencies, and a hash failure is never something to carry
+# on past. require_pins (Phase 5) still holds requirements.txt to its
+# consumers, and the lock is held to requirements.txt here.
+LOCK_FILE="${WORK_DIR}/requirements.lock"
+[[ -f "$LOCK_FILE" ]] || fail "${LOCK_FILE} not found — the source tree has no hash lock."
+for _pin in flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka; do
+    grep -qiE "^${_pin//-/[-_.]}==${PINS[$_pin]//./[.]}[[:space:]]" "$LOCK_FILE" \
+        || fail "requirements.lock does not pin ${_pin}==${PINS[$_pin]} as requirements.txt does."
+done
+PIP_ARGS=(--require-hashes --only-binary :all:)
 if [[ $ONLINE != true ]]; then
     PY_PKG_DIR="${WORK_DIR}/install/packages/python"
     [[ -d "$PY_PKG_DIR" ]] || fail "Offline install needs ${PY_PKG_DIR} (run prepare-offline.sh)."
-    PIP_ARGS=(--no-index --find-links="$PY_PKG_DIR")
+    PIP_ARGS+=(--no-index --find-links="$PY_PKG_DIR")
 fi
+info "Installing the hash-locked dependency set ..."
+"${VENV}/bin/pip" install "${PIP_ARGS[@]}" --quiet -r "$LOCK_FILE" \
+    || fail "pip install from requirements.lock failed (a hash mismatch is refused, not retried)."
+success "Flask ${PIN_FLASK} / Werkzeug ${PIN_WERKZEUG} / gunicorn ${PIN_GUNICORN} / ldap3 ${PIN_LDAP3}"
+success "PyYAML ${PIN_PYYAML} / cryptography ${PIN_CRYPTOGRAPHY} / confluent-kafka ${PIN_CONFLUENT_KAFKA} (all hash-verified)"
 
-# Staged deliberately — web stack, then auth/crypto, then the Kafka client which
-# soft-fails because the app runs without it. Every version below came out of
-# requirements.txt in Phase 5; there is no second list to drift from it, and
-# require_pins has already refused any pin no stage here installs.
-info "Installing web stack ..."
-"${VENV}/bin/pip" install "${PIP_ARGS[@]}" --quiet \
-    "Flask==${PIN_FLASK}" "Werkzeug==${PIN_WERKZEUG}" "gunicorn==${PIN_GUNICORN}" \
-    || fail "pip install of the web stack failed."
-success "Flask ${PIN_FLASK} / Werkzeug ${PIN_WERKZEUG} / gunicorn ${PIN_GUNICORN}"
-
-info "Installing auth and crypto stack ..."
-"${VENV}/bin/pip" install "${PIP_ARGS[@]}" --quiet \
-    "ldap3==${PIN_LDAP3}" "PyYAML==${PIN_PYYAML}" "cryptography==${PIN_CRYPTOGRAPHY}" \
-    || fail "pip install of ldap3/PyYAML/cryptography failed."
-success "ldap3 ${PIN_LDAP3} / PyYAML ${PIN_PYYAML} / cryptography ${PIN_CRYPTOGRAPHY}"
-
-info "Installing Kafka client ..."
-"${VENV}/bin/pip" install "${PIP_ARGS[@]}" --quiet "confluent-kafka==${PIN_CONFLUENT_KAFKA}" \
-    || warn "confluent-kafka install failed — Kafka operations will not work until resolved."
-
-"${VENV}/bin/python3" -c "import flask, werkzeug, gunicorn, ldap3, yaml, cryptography" \
+"${VENV}/bin/python3" -c "import flask, werkzeug, gunicorn, ldap3, yaml, cryptography, confluent_kafka" \
     || fail "Package import check failed."
-"${VENV}/bin/python3" -c "import confluent_kafka" 2>/dev/null \
-    && success "confluent-kafka importable" || warn "confluent_kafka NOT importable."
 success "Dependency imports verified"
 
 # =============================================================================
@@ -1803,8 +1968,16 @@ if [[ $VUE_OK != true ]] && [[ -f "${WORK_DIR}/lib/vue.global.prod.js" ]]; then
     success "Vue ${VUE_VERSION} installed from offline bundle (hash verified)"
 fi
 if [[ $VUE_OK != true ]] && [[ -f "${BACKUP_DIR}/frontend/lib/vue.global.prod.js" ]]; then
-    cp "${BACKUP_DIR}/frontend/lib/vue.global.prod.js" "$VUE_DEST"; VUE_OK=true
-    warn "Vue restored from BACKUP (previous version) — frontend lib NOT upgraded."
+    # Round 2: held to the SAME pin. Only a backed-up copy that is
+    # byte-identical to the pinned release may serve; a previous version, or a
+    # file changed since, is refused like any other unverified script.
+    GOT="$(sha256sum "${BACKUP_DIR}/frontend/lib/vue.global.prod.js" | cut -d' ' -f1)"
+    if [[ "$GOT" == "$VUE_SHA256" ]]; then
+        cp "${BACKUP_DIR}/frontend/lib/vue.global.prod.js" "$VUE_DEST"; VUE_OK=true
+        success "Vue ${VUE_VERSION} taken from the backup (hash verified)"
+    else
+        warn "The backed-up Vue does not match the pinned SHA-256 (${GOT:0:16}...) — not used."
+    fi
 fi
 rm -f "$VUE_TMP" 2>/dev/null || true
 [[ $VUE_OK == true ]] || fail "No verified Vue bundle available — the UI would not load."
@@ -2001,6 +2174,7 @@ while IFS= read -r f; do
 done < <(find "$FRONTEND_DIR" -mindepth 1)
 [[ $WIDENED  -gt 0 ]] && info "Applied the frontend directory's own mode (${FE_FILE_MODE}) to ${WIDENED} newly deployed file(s)"
 [[ $DEVIATED -gt 0 ]] && warn "${DEVIATED} file(s) needed read access beyond the host's model — review the lines above"
+normalise_frontend_ownership "$FRONTEND_DIR"
 
 chown -R "${APP_USER}:${APP_USER}" "${APP_HOME}/tm" "${APP_HOME}/wsgi.py" "$VENV"
 apply_baseline "${APP_HOME}/tm"     "$APP_USER" "$APP_USER" 755
