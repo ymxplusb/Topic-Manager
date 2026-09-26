@@ -126,4 +126,84 @@ c_template_gates_the_form() {
 }
 tm_case "template-does-not-render-the-form-before-the-load" none c_template_gates_the_form
 
+# ─── v1.1.0: the section rail ────────────────────────────────────────────────
+# The rail is DERIVED from the template (deriveSettingsRail), so these cases
+# assert the CONSEQUENCE — which groups the operator is offered and which cards
+# each one opens — rather than the shape of a list that no longer exists.
+c_rail_offers_the_three_groups() {
+    _probe rail > "${TM_TMP}/out"
+    tm_assert_eq "general,system,support" "$(_field "${TM_TMP}/out" railIds)" \
+        "the rail does not offer exactly General, System, Support in that order.
+        A pane the reader cannot see is a card the operator cannot reach, and
+        an extra entry (a commented-out example pane, say) is a dead link"
+    tm_assert_eq "General,System,Support" "$(_field "${TM_TMP}/out" railNames)" \
+        "the rail names do not come from the settings-group-label headings"
+    tm_assert_eq "general" "$(_field "${TM_TMP}/out" activeGroup)" \
+        "with nothing saved, Settings did not open on the first group"
+}
+tm_case "the-rail-offers-general-system-support" node c_rail_offers_the_three_groups
+
+c_rail_puts_each_card_in_its_group() {
+    _probe rail > "${TM_TMP}/out"
+    local g s y
+    g="$(_field "${TM_TMP}/out" sections.general)"
+    s="$(_field "${TM_TMP}/out" sections.system)"
+    y="$(_field "${TM_TMP}/out" sections.support)"
+    case "$g" in *'"Cluster Profiles"'*'"DoW Consent Banner"'*'"Branding & Classification Banner"'*) ;;
+        *) _tm_afail "General does not hold Cluster Profiles, the consent banner
+        and the classification banner panel (the owner kept the custom selection
+        panel). Got: ${g}" ;; esac
+    tm_assert_eq '["Service Control"]' "$s" "System does not hold exactly Service Control"
+    case "$y" in *'"Support & Compliance Downloads"'*'"About"'*) ;;
+        *) _tm_afail "Support does not hold the PPSM download and About. Got: ${y}" ;; esac
+}
+tm_case "every-card-sits-in-the-group-the-owner-chose" node c_rail_puts_each_card_in_its_group
+
+c_rail_search_finds_the_card() {
+    _probe rail-search > "${TM_TMP}/out"
+    tm_assert_eq "support" "$(_field "${TM_TMP}/out" match.ppsm)" "searching 'ppsm' did not land on Support"
+    tm_assert_eq "general" "$(_field "${TM_TMP}/out" match.classification)" "searching 'classification' did not land on General"
+    tm_assert_eq "system"  "$(_field "${TM_TMP}/out" match.restart)" "searching 'restart' did not land on System"
+    tm_assert_eq "general" "$(_field "${TM_TMP}/out" match.cluster_profiles)" "searching 'cluster profiles' did not land on General"
+    tm_assert_eq "" "$(_field "${TM_TMP}/out" match.zzz-nothing)" "a query matching nothing still matched a group"
+}
+tm_case "rail-search-matches-card-titles" node c_rail_search_finds_the_card
+
+c_saved_group_is_restored() {
+    _probe group-saved-valid > "${TM_TMP}/out"
+    tm_assert_eq "support" "$(_field "${TM_TMP}/out" activeGroup)" \
+        "the group saved under tmSettingsGroup was not restored"
+}
+tm_case "saved-group-is-restored-from-tmSettingsGroup" node c_saved_group_is_restored
+
+c_unknown_saved_group_falls_back() {
+    _probe group-saved-invalid > "${TM_TMP}/out"
+    tm_assert_eq "general" "$(_field "${TM_TMP}/out" activeGroup)" \
+        "a saved group that names no pane was honoured — every pane is v-show
+        hidden, so the operator would open Settings onto an empty page"
+}
+tm_case "unknown-saved-group-falls-back-to-the-first" node c_unknown_saved_group_falls_back
+
+c_storage_failure_does_not_break_settings() {
+    _probe group-storage-throws > "${TM_TMP}/out"
+    tm_assert_eq "general" "$(_field "${TM_TMP}/out" activeGroup)" \
+        "localStorage throwing took data() down, or picked a group from nowhere:
+        $(cat "${TM_TMP}/out")"
+    tm_assert_eq "support" "$(_field "${TM_TMP}/out" afterSelect)" \
+        "with storage unavailable, choosing a group no longer worked for the visit"
+}
+tm_case "storage-that-throws-does-not-break-settings" node c_storage_failure_does_not_break_settings
+
+c_select_persists_and_refuses_unknown() {
+    _probe group-select > "${TM_TMP}/out"
+    tm_assert_eq "system" "$(_field "${TM_TMP}/out" afterSelect)" "selectGroup did not switch the pane"
+    tm_assert_eq "system" "$(_field "${TM_TMP}/out" stored)" \
+        "selectGroup did not persist the choice under tmSettingsGroup"
+    tm_assert_eq "system" "$(_field "${TM_TMP}/out" afterBogus)" \
+        "selectGroup accepted a group that does not exist"
+    tm_assert_eq "system" "$(_field "${TM_TMP}/out" storedAfterBogus)" \
+        "selectGroup persisted a group that does not exist"
+}
+tm_case "select-persists-and-refuses-an-unknown-group" node c_select_persists_and_refuses_unknown
+
 tm_finish

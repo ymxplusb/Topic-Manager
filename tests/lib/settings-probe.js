@@ -10,6 +10,8 @@
 //
 // Usage: node tests/lib/settings-probe.js <repo-root> <scenario>
 //   scenarios:  load-401  load-network  load-ok  save-before-load
+//               rail  rail-search  group-default  group-saved-valid
+//               group-saved-invalid  group-storage-throws  group-select
 //
 // Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 // =============================================================================
@@ -135,6 +137,51 @@ async function main() {
         await inst.saveBanner();
         await inst.saveDow();
         report(inst);
+
+    // ─── the v1.1.0 section rail ─────────────────────────────────────────
+    } else if (scenario === 'rail') {
+        // The rail is DERIVED from the template. Print what it derived, so the
+        // case can assert the groups and where each card landed.
+        emit('railIds', inst.railGroups.map(function (g) { return g.id; }).join(','));
+        emit('railNames', inst.railGroups.map(function (g) { return g.name; }).join(','));
+        inst.railGroups.forEach(function (g) {
+            emit('sections.' + g.id, JSON.stringify(g.sections));
+        });
+        emit('activeGroup', inst.activeGroup);
+
+    } else if (scenario === 'rail-search') {
+        ['ppsm', 'classification', 'restart', 'cluster profiles', 'zzz-nothing'].forEach(function (q) {
+            inst.railQuery = q;
+            emit('match.' + q.replace(/ /g, '_'), inst.railGroups.filter(function (g) {
+                return inst.railMatch(g); }).map(function (g) { return g.id; }).join(','));
+        });
+
+    } else if (scenario.indexOf('group-') === 0) {
+        // localStorage is installed AFTER the component source has run and
+        // BEFORE the instance is built, which is when data() reads it.
+        const store = {};
+        const mode = scenario.slice('group-'.length);
+        if (mode === 'saved-valid')   store.tmSettingsGroup = 'support';
+        if (mode === 'saved-invalid') store.tmSettingsGroup = 'no-such-pane';
+        sandbox.localStorage = mode === 'storage-throws'
+            ? { getItem: function () { throw new Error('SecurityError'); },
+                setItem: function () { throw new Error('SecurityError'); } }
+            : { getItem: function (k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+                setItem: function (k, v) { store[k] = String(v); } };
+        const fresh = instance();
+        emit('activeGroup', fresh.activeGroup);
+        if (mode === 'select') {
+            fresh.selectGroup('system');
+            emit('afterSelect', fresh.activeGroup);
+            emit('stored', store.tmSettingsGroup);
+            fresh.selectGroup('no-such-pane');
+            emit('afterBogus', fresh.activeGroup);
+            emit('storedAfterBogus', store.tmSettingsGroup);
+        }
+        if (mode === 'storage-throws') {
+            fresh.selectGroup('support');
+            emit('afterSelect', fresh.activeGroup);
+        }
 
     } else {
         console.error('unknown scenario: ' + scenario);

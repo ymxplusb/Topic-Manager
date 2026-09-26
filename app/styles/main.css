@@ -578,6 +578,60 @@ select.fc option { background:var(--bg-card) }
 .empty-state .et { font-size:.82rem; font-weight:600; color:var(--text-secondary); margin-bottom:4px }
 
 /* ══════════════════════════════════════════════════
+   SETTINGS — section rail + panes (v1.1.0)
+   Mirrors the CORTEX Settings pattern (.settings-shell / .settings-rail /
+   .settings-pane / .settings-group-label), adapted to this product's tokens:
+   CORTEX's --fill-cyan does not exist here, so the active marker and focus
+   ring use --accent. Text-only rail, sticky so the groups stay in reach; only
+   the active pane is visible, so opening one group can never shift another.
+   Under 860px the rail wraps into a row above the panes.
+   ══════════════════════════════════════════════════ */
+.settings-shell {
+  display:grid; grid-template-columns:232px minmax(0,1fr);
+  gap:14px; align-items:start;
+}
+.settings-rail {
+  position:sticky; top:10px;
+  max-height:calc(100vh - 110px); overflow-y:auto;
+  display:flex; flex-direction:column; gap:2px;
+  background:var(--surface-glass); border:1px solid var(--border-color);
+  border-radius:12px; padding:10px;
+}
+.settings-rail-search {
+  width:100%; margin-bottom:8px;
+  padding:7px 10px; font-size:.75rem; font-family:var(--ui);
+  background:var(--bg-primary); border:1px solid var(--border-color);
+  border-radius:8px; color:var(--text-primary); outline:none;
+}
+.settings-rail-search:focus { border-color:var(--accent) }
+.settings-rail-search::placeholder { color:var(--text-muted) }
+.settings-rail-item {
+  display:block; width:100%; text-align:left;
+  background:none; border:0; cursor:pointer;
+  font:inherit; font-size:.78rem; color:var(--text-muted);
+  padding:8px 11px; border-radius:8px;
+}
+.settings-rail-item:hover { background:var(--bg-card-hover); color:var(--text-primary) }
+.settings-rail-item.active {
+  background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--text-primary);
+  font-weight:600; box-shadow:inset 2px 0 0 var(--accent);
+}
+.settings-rail-item.dimmed { opacity:.35 }
+.settings-rail-item:focus-visible { outline:2px solid var(--accent); outline-offset:1px }
+.settings-content { min-width:0 }
+.settings-pane { display:flex; flex-direction:column; gap:0 }
+.settings-group-label {
+  font-size:.65rem; font-weight:700; color:var(--accent);
+  text-transform:uppercase; letter-spacing:.12em;
+  padding:0 0 8px;
+}
+@media (max-width:860px) {
+  .settings-shell { grid-template-columns:1fr }
+  .settings-rail { position:static; max-height:none; flex-direction:row; flex-wrap:wrap }
+  .settings-rail-search { width:auto; flex:1 1 100% }
+}
+
+/* ══════════════════════════════════════════════════
    FOCUS + MOTION (Aurora)
    An outline never takes layout space, so a visible focus ring moves nothing.
    ══════════════════════════════════════════════════ */

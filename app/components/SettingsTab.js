@@ -6,7 +6,14 @@ const SettingsTab = {
     props: ['clusters', 'activeClusterId', 'version', 'protocols', 'mechanisms'],
     emits: ['open-about', 'cluster-changed', 'clusters-changed'],
     data() {
+        const railGroups = settingsRailGroups();
         return {
+            // Section rail (v1.1.0). railGroups is derived from the template;
+            // activeGroup is restored from localStorage only if it still names
+            // a real pane.
+            railGroups,
+            activeGroup: settingsInitialGroup(railGroups),
+            railQuery: '',
             // Settings load state. NOTHING below is rendered or saved until
             // settingsLoaded is true. Seeding real-looking values into the same
             // fields the save path reads is what made a failed load overwrite
@@ -57,7 +64,30 @@ const SettingsTab = {
             return { white: '#ffffff', black: '#000000', grey: '#d1d5db' }[this.bannerFg] || '#ffffff';
         },
     },
+    watch: {
+        // Rail search auto-jump, as in CORTEX: if the open group no longer
+        // matches the query, move to the first group that does, through
+        // selectGroup() so the jump is persisted like any other choice.
+        railQuery(q) {
+            if (!q.trim()) return;
+            const cur = this.railGroups.find(g => g.id === this.activeGroup);
+            if (cur && this.railMatch(cur)) return;
+            const first = this.railGroups.find(g => this.railMatch(g));
+            if (first) this.selectGroup(first.id);
+        },
+    },
     methods: {
+        // ── Section rail ───────────────────────────────────────────
+        selectGroup(id) {
+            if (!this.railGroups.some(g => g.id === id)) return;
+            this.activeGroup = id;
+            try { localStorage.setItem(SETTINGS_GROUP_KEY, id); } catch (e) { /* storage unavailable: the choice holds for this visit */ }
+        },
+        railMatch(g) {
+            const q = settingsSearchNorm(this.railQuery);
+            if (!q) return true;
+            return settingsSearchNorm(g.name + ' ' + g.sections.join(' ') + ' ' + g.terms.join(' ')).includes(q);
+        },
         // F4. This used to `return` on a non-ok response, leaving the seeded
         // 'UNCLASSIFIED'/'green' defaults sitting in the very fields
         // saveBanner() reads. An expired session on load followed by one
@@ -271,11 +301,35 @@ const SettingsTab = {
     template: `
 <div>
 
+  <!-- v1.1.0 — section rail + panes, the CORTEX Settings pattern. The rail is
+       DERIVED from this template by deriveSettingsRail() below: pane ids from
+       the v-show conditions, group names from each settings-group-label, and
+       section names from the ssec-title of every card between them. A card
+       that moves pane moves in the rail in the same edit, because it IS the
+       same edit. -->
+  <div class="settings-shell">
+  <nav class="settings-rail" aria-label="Settings sections">
+    <input v-model="railQuery" type="text" class="settings-rail-search" placeholder="Search settings&hellip;"
+           aria-label="Search settings" @keydown.escape="railQuery = ''">
+    <button v-for="g in railGroups" :key="g.id" type="button" class="settings-rail-item"
+            :class="{ active: activeGroup === g.id, dimmed: railQuery && !railMatch(g) }"
+            :aria-current="activeGroup === g.id ? 'true' : null"
+            @click="selectGroup(g.id)">{{ g.name }}</button>
+  </nav>
+  <div class="settings-content">
+
+  <!-- ═══ General ═══ -->
+  <div v-show="activeGroup==='general'" class="settings-pane">
+  <div class="settings-group-label">General</div>
+
   <!-- Cluster Profiles -->
   <div class="ssec">
     <div class="ssec-title" style="display:flex;align-items:center;justify-content:space-between">
       <span>Cluster Profiles</span>
       <button class="btn btn-sm btn-primary" @click="addCluster">+ Add Cluster</button>
+    </div>
+    <div v-if="!clusters.length" style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px">
+      No cluster profile is configured yet. Add one with + Add Cluster.
     </div>
     <div class="cp-row" v-for="c in clusters" :key="c.id">
       <div class="cp-dot" :style="{ background: c.id === activeClusterId ? 'var(--accent-green)' : 'var(--text-muted)' }"></div>
@@ -312,35 +366,8 @@ const SettingsTab = {
     </div>
   </div>
 
-  <!-- Service Control -->
-  <div class="ssec">
-    <div class="ssec-title">Service Control</div>
-    <div class="srow">
-      <div class="srow-lbl">
-        Restart Topic Manager
-        <span class="hint">Restarts topic-manager.service and reloads nginx. The nginx configuration is tested first; if the test fails nothing is touched.</span>
-      </div>
-      <button class="btn btn-sm" @click="restartService" :disabled="restartState === 'working'">
-        <span v-if="restartState === 'working'" class="spinner" style="width:10px;height:10px"></span>
-        <span v-else>↻ Restart Services</span>
-      </button>
-    </div>
-    <div class="srow">
-      <div class="srow-lbl">
-        Hard-restart nginx
-        <span class="hint">Off: nginx is reloaded (graceful). On: nginx is fully restarted, which drops every in-flight request for all users.</span>
-      </div>
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.72rem">
-        <input type="checkbox" v-model="restartNginxHard" :disabled="restartState === 'working'" style="accent-color:var(--accent-cyan)"> Hard restart
-      </label>
-    </div>
-    <div v-if="restartMessage" :style="{ marginTop:'8px', fontSize:'.72rem', color: restartColour }">
-      {{ restartMessage }}
-    </div>
-  </div>
-
   <!-- Branding / Banner -->
-  <!-- These two sections are NOT rendered until /api/settings has actually
+  <!-- These sections are NOT rendered until /api/settings has actually
        answered. Rendering seeded defaults and letting the operator toggle one
        is how a failed load became a global overwrite of the real banner. -->
   <div class="ssec" v-if="!settingsLoaded">
@@ -363,18 +390,20 @@ const SettingsTab = {
         <span class="hint">Shows a U.S. Government consent-to-monitor notice after Sign In is clicked. User must click I Agree to proceed.</span>
       </div>
       <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.72rem">
-        <input type="checkbox" v-model="dowEnabled" @change="saveDow" style="accent-color:var(--accent-cyan)"> Enabled
+        <input type="checkbox" v-model="dowEnabled" @change="saveDow" style="accent-color:var(--accent)"> Enabled
       </label>
     </div>
   </div>
 
+  <!-- The custom selection panel. KEPT AS IT IS on the owner's direction, so
+       the banner can be set by hand if a DoD-issued one has to come down. -->
   <div class="ssec" v-if="settingsLoaded">
     <div class="ssec-title">Branding &amp; Classification Banner</div>
     <div v-if="settingsSaveError" style="margin-bottom:8px;color:var(--accent-red);font-size:.72rem">{{ settingsSaveError }}</div>
     <div class="srow">
       <div class="srow-lbl">Enable Banner<span class="hint">Shows at top and bottom of every page</span></div>
       <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.72rem">
-        <input type="checkbox" v-model="bannerEnabled" @change="saveBanner" style="accent-color:var(--accent-cyan)"> Enabled
+        <input type="checkbox" v-model="bannerEnabled" @change="saveBanner" style="accent-color:var(--accent)"> Enabled
       </label>
     </div>
     <div class="srow">
@@ -403,6 +432,43 @@ const SettingsTab = {
       </div>
     </div>
   </div>
+  </div>
+
+  <!-- ═══ System ═══ -->
+  <div v-show="activeGroup==='system'" class="settings-pane">
+  <div class="settings-group-label">System</div>
+
+  <!-- Service Control -->
+  <div class="ssec">
+    <div class="ssec-title">Service Control</div>
+    <div class="srow">
+      <div class="srow-lbl">
+        Restart Topic Manager
+        <span class="hint">Restarts topic-manager.service and reloads nginx. The nginx configuration is tested first; if the test fails nothing is touched.</span>
+      </div>
+      <button class="btn btn-sm" @click="restartService" :disabled="restartState === 'working'">
+        <span v-if="restartState === 'working'" class="spinner" style="width:10px;height:10px"></span>
+        <span v-else>↻ Restart Services</span>
+      </button>
+    </div>
+    <div class="srow">
+      <div class="srow-lbl">
+        Hard-restart nginx
+        <span class="hint">Off: nginx is reloaded (graceful). On: nginx is fully restarted, which drops every in-flight request for all users.</span>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.72rem">
+        <input type="checkbox" v-model="restartNginxHard" :disabled="restartState === 'working'" style="accent-color:var(--accent)"> Hard restart
+      </label>
+    </div>
+    <div v-if="restartMessage" :style="{ marginTop:'8px', fontSize:'.72rem', color: restartColour }">
+      {{ restartMessage }}
+    </div>
+  </div>
+  </div>
+
+  <!-- ═══ Support ═══ -->
+  <div v-show="activeGroup==='support'" class="settings-pane">
+  <div class="settings-group-label">Support</div>
 
   <!-- Support / PPSM -->
   <div class="ssec">
@@ -424,6 +490,17 @@ const SettingsTab = {
       <button class="btn btn-sm" @click="$emit('open-about')">View Licenses</button>
     </div>
   </div>
+  </div>
+
+  <!-- v1.2.0 adds its groups HERE (Security, Logging, Time source), one pane
+       each, in the same shape as the three above: a settings-pane div shown
+       on activeGroup, opening with a settings-group-label, holding ssec cards.
+       The rail needs no edit, because it is read out of this template. Do NOT
+       write an example pane in literal markup inside a comment: the rail
+       reader does not know what a comment is, and would list it. -->
+
+  </div>
+  </div>
 
   <ClusterModal
     v-if="showClusterModal"
@@ -437,3 +514,90 @@ const SettingsTab = {
 </div>
 `,
 };
+
+// ── Settings rail, DERIVED FROM THE MARKUP ────────────────────────────────────
+// The CORTEX lesson (its v3.169.1): a rail that carries its own hand-written
+// list of which sections sit in which pane drifts from the markup, and a search
+// then jumps the operator to a pane that does not hold the card they asked for.
+// So there is no second list. Pane ids come from the v-show conditions, group
+// names from each settings-group-label, and section names from each ssec-title.
+//
+// These are function DECLARATIONS on purpose: SettingsTab.data() calls them,
+// and declarations are hoisted, so the order in this file cannot break that.
+const SETTINGS_ENTITIES = {
+    // The apostrophe is written as a unicode escape: a literal one inside a
+    // single-quoted string in this file blanks the whole Settings tab
+    // (hazards[csv-single-quoted-literals]).
+    amp: '&', lt: '<', gt: '>', quot: '"', apos: '\u0027', nbsp: ' ',
+    mdash: '—', ndash: '–', middot: '·', hellip: '…',
+};
+
+function settingsDecodeEntities(text) {
+    return String(text).replace(/&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z][a-zA-Z0-9]*);/g, (whole, ref) => {
+        if (ref.charAt(0) === '#') {
+            const hex = ref.charAt(1) === 'x' || ref.charAt(1) === 'X';
+            const cp = Number.parseInt(hex ? ref.slice(2) : ref.slice(1), hex ? 16 : 10);
+            return Number.isFinite(cp) ? String.fromCodePoint(cp) : whole;
+        }
+        return Object.prototype.hasOwnProperty.call(SETTINGS_ENTITIES, ref)
+            ? SETTINGS_ENTITIES[ref] : whole;
+    });
+}
+
+// Punctuation-insensitive, so "ppsm", "support compliance" and "classification"
+// all find their card.
+function settingsSearchNorm(text) {
+    return String(text).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function deriveSettingsRail(template) {
+    const paneRe = /<div\s+v-show="activeGroup===['"]([^'"]+)['"]/g;
+    const labelRe = /<div class="settings-group-label">([\s\S]*?)<\/div>/;
+    // Both title shapes in use: <div class="ssec-title">Name</div> and the
+    // Cluster Profiles one, which wraps the name in a <span> beside a button.
+    const titleRe = /<div class="ssec-title"[^>]*>\s*(?:<span>)?([^<]+)/g;
+    // Row labels are search terms too: "PPSM" names a row, not a card, and an
+    // operator looking for the PPSM export types "ppsm".
+    const termRe = /<div class="srow-lbl">\s*([^<]+)/g;
+    const starts = [];
+    let m;
+    while ((m = paneRe.exec(template)) !== null) starts.push({ id: m[1], at: m.index });
+    return starts.map((pane, i) => {
+        const slice = template.slice(pane.at, i + 1 < starts.length ? starts[i + 1].at : template.length);
+        const label = labelRe.exec(slice);
+        const sections = [];
+        titleRe.lastIndex = 0;
+        let t;
+        while ((t = titleRe.exec(slice)) !== null) sections.push(settingsDecodeEntities(t[1]).trim());
+        const terms = [];
+        termRe.lastIndex = 0;
+        while ((t = termRe.exec(slice)) !== null) terms.push(settingsDecodeEntities(t[1]).trim());
+        return {
+            id: pane.id,
+            name: label ? settingsDecodeEntities(label[1]).trim() : pane.id,
+            sections,
+            terms,
+        };
+    });
+}
+
+let SETTINGS_RAIL_CACHE = null;
+function settingsRailGroups() {
+    if (!SETTINGS_RAIL_CACHE) SETTINGS_RAIL_CACHE = deriveSettingsRail(SettingsTab.template);
+    // A fresh copy per instance: two instances sharing one array is how
+    // read-only state stops being read-only.
+    return SETTINGS_RAIL_CACHE.map(g => ({ id: g.id, name: g.name, sections: g.sections.slice(), terms: g.terms.slice() }));
+}
+
+const SETTINGS_GROUP_KEY = 'tmSettingsGroup';
+
+// The saved group is honoured only if it names a pane that exists NOW — a
+// value saved by a later release, or typed into devtools, falls back to the
+// first pane rather than showing an empty page. Storage that throws (a
+// locked-down profile) falls back the same way instead of taking the tab down.
+function settingsInitialGroup(groups) {
+    let saved = null;
+    try { saved = localStorage.getItem(SETTINGS_GROUP_KEY); } catch (e) { saved = null; }
+    if (groups.some(g => g.id === saved)) return saved;
+    return groups.length ? groups[0].id : '';
+}
