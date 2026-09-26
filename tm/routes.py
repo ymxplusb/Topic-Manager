@@ -696,11 +696,28 @@ def update_settings():
     data, err = _parse_json_body()
     if err:
         return err
-    db = get_db(_cfg())
-    for key, value in data.items():
-        if key in _ALL_KEYS:
-            db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?,?)',
-                       (key, str(value)))
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Expected a JSON object of setting: value pairs'}), 400
+    cfg = _cfg()
+    db = get_db(cfg)
+    accepted = {k: str(v) for k, v in data.items() if k in _ALL_KEYS}
+    before = _read_settings(db, accepted.keys()) if accepted else {}
+    for key, value in accepted.items():
+        db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?,?)',
+                   (key, value))
     db.commit()
     db.close()
-    return jsonify({'ok': True})
+    # v1.1.0: this route changes what EVERY user sees (the classification
+    # banner, the consent notice) and it wrote no audit record at all. The
+    # record names the keys that actually changed and never their values:
+    # every key today is display-only, but the rule has to hold for the first
+    # secret-bearing setting someone adds to _ALL_KEYS, not be remembered then.
+    changed = sorted(k for k, v in accepted.items() if before.get(k) != v)
+    ignored = sorted(k for k in data if k not in _ALL_KEYS)
+    detail = ('changed: %s' % ', '.join(changed)) if changed else 'no change'
+    if ignored:
+        detail += '; ignored unknown key(s): %s' % ', '.join(k[:40] for k in ignored[:10])
+    audit.log_action(cfg, session['user']['username'], 'SETTINGS_UPDATE',
+                     'app_settings', detail[:500], '')
+    log.info('SETTINGS_UPDATE user=%s %s', session['user']['username'], detail[:200])
+    return jsonify({'ok': True, 'changed': changed})
