@@ -404,6 +404,84 @@ enforce_audit_db_modes() {
     done
 }
 
+# manage_nginx_ssl_protocols <nginx.conf> <backup-path> — v1.1.0.
+# The site config sets TLS 1.2/1.3, but the http-level ssl_protocols line in
+# nginx.conf is what a scanner (and any other server block) sees, and stock
+# Ubuntu ships "TLSv1 TLSv1.1 TLSv1.2 TLSv1.3" there. Every ACTIVE
+# ssl_protocols line in nginx.conf is rewritten to TLSv1.2 TLSv1.3; if there
+# is none, one is added at the top of the http block.
+#   1. back up nginx.conf (cp -a, so owner and mode go with it);
+#   2. write the edit to a temp file beside it and move it into place with
+#      the original's owner and mode;
+#   3. nginx -t; on failure put the backup back, test again, and stop,
+#      saying whether the failure was this edit or was already there.
+# Never through a symlink, and never on a line it cannot parse: an
+# ssl_protocols directive that does not end on its own line is refused.
+manage_nginx_ssl_protocols() {
+    local conf="$1" bak="$2" tmp want n out
+    want='ssl_protocols TLSv1.2 TLSv1.3;'
+    [[ -L "$conf" ]] && fail "${conf} is a symlink; refusing to edit through it."
+    [[ -f "$conf" ]] || fail "${conf} not found — is nginx installed?"
+    if grep -Eq '^[[:space:]]*ssl_protocols[[:space:]]+[^;]*$' "$conf"; then
+        fail "${conf} has an ssl_protocols directive that does not end on its own
+     line. Refusing to rewrite what cannot be parsed safely. Put it on one line
+     (ssl_protocols TLSv1.2 TLSv1.3;) and run again."
+    fi
+    cp -a -- "$conf" "$bak" || fail "could not back up ${conf} to ${bak}"
+    tmp="$(mktemp "${conf}.tm-XXXXXX")" || fail "could not create a temp file beside ${conf}"
+    n="$(grep -Ec '^[[:space:]]*ssl_protocols[[:space:]]' "$conf" || true)"
+    if [[ "${n:-0}" -gt 0 ]]; then
+        awk -v want="$want" '
+            /^[[:space:]]*ssl_protocols[[:space:]][^;]*;/ {
+                match($0, /^[[:space:]]*/)
+                print substr($0, 1, RLENGTH) want " # managed by Topic Manager: TLS 1.2/1.3 only"
+                next
+            }
+            { print }' "$conf" > "$tmp"
+    else
+        grep -Eq '^[[:space:]]*http[[:space:]]*[{]' "$conf" \
+            || { rm -f "$tmp"; fail "${conf} has no ssl_protocols line and no http { block to add one to."; }
+        awk -v want="$want" '
+            { print }
+            !done && /^[[:space:]]*http[[:space:]]*[{]/ {
+                print "\t" want " # managed by Topic Manager: TLS 1.2/1.3 only"
+                done = 1
+            }' "$conf" > "$tmp"
+    fi
+    chown --reference="$conf" -- "$tmp" && chmod --reference="$conf" -- "$tmp" \
+        || { rm -f "$tmp"; fail "could not give the edited nginx.conf its original owner and mode"; }
+    mv -f -- "$tmp" "$conf" || { rm -f "$tmp"; fail "could not move the edited nginx.conf into place"; }
+    if out="$(nginx -t 2>&1)"; then
+        info "nginx.conf: ssl_protocols is TLSv1.2 TLSv1.3 (backup: ${bak}); nginx -t passed"
+        return 0
+    fi
+    cp -a -- "$bak" "$conf" || fail "nginx -t FAILED after the TLS edit AND the backup
+     could not be put back. Restore it by hand: sudo cp -a ${bak} ${conf}
+     nginx -t said: ${out}"
+    if nginx -t >/dev/null 2>&1; then
+        fail "nginx -t failed after setting ssl_protocols in ${conf}, so the original
+     was put back (nginx -t passes with it). Nothing else was changed.
+     nginx -t said: ${out}"
+    fi
+    fail "nginx -t fails with OR without the TLS edit, so the problem is elsewhere
+     in the nginx configuration (often a missing certificate). ${conf} was put
+     back as it was. nginx -t said: ${out}"
+}
+
+# tls_keypair_matches <cert.pem> <key.pem> — exit 0 only when the certificate's
+# public key and the private key's public half are the SAME, compared raw.
+# Key-type agnostic (RSA, EC, Ed25519): `openssl rsa -modulus` is RSA-only and
+# reported every EC pair as a mismatch. Never hashes first: two failed commands
+# produce two empty strings, and sha256 of nothing equals sha256 of nothing.
+tls_keypair_matches() {
+    local c k
+    c="$(openssl x509 -noout -pubkey -in "$1" 2>/dev/null || true)"
+    k="$(openssl pkey -pubout -in "$2" 2>/dev/null || true)"
+    [[ "$c" == *"-----BEGIN PUBLIC KEY-----"*"-----END PUBLIC KEY-----"* ]] || return 1
+    [[ "$k" == *"-----BEGIN PUBLIC KEY-----"*"-----END PUBLIC KEY-----"* ]] || return 1
+    [[ "$c" == "$k" ]]
+}
+
 # can_access <user> <test-flag> <path> — the honest check. Mode bits can look
 # right while an ACL, a parent directory or a MAC policy still says no, so ask
 # the kernel as the actual principal.
@@ -584,6 +662,8 @@ restore_from_backup() {
         rm -f /etc/nginx/snippets/tm-security-headers.conf
     fi
     ln -sf /etc/nginx/sites-available/topic-manager /etc/nginx/sites-enabled/topic-manager
+    # Present only in restore points taken by v1.1.0+, which edits it.
+    [[ -f "${BD}/system/nginx.conf" ]] && cp -a "${BD}/system/nginx.conf" /etc/nginx/nginx.conf
     [[ -f "${BD}/system/topic-manager.service" ]] && \
         cp -a "${BD}/system/topic-manager.service" /etc/systemd/system/
     restore_dropin "$BD"
@@ -1219,6 +1299,19 @@ if [[ -f "${FRONTEND_DIR}/index.html" ]] && grep -q '<script>' "${FRONTEND_DIR}/
     row PASS "v1.0.0 inline script in index.html" "replaced by app/main.js during deploy"
 fi
 
+# --- 5b. nginx.conf offers TLS 1.0/1.1 at the http level (stock Ubuntu does).
+# Reported, not blocked: Phase 11 rewrites it, backs it up and tests it.
+if [[ -f /etc/nginx/nginx.conf ]]; then
+    NGX_PROTO="$(grep -E '^[[:space:]]*ssl_protocols[[:space:]]' /etc/nginx/nginx.conf 2>/dev/null | head -1 | sed -E 's/^[[:space:]]+//; s/[[:space:]]*#.*$//' || true)"
+    if [[ -z "$NGX_PROTO" ]]; then
+        row WARN "nginx.conf ssl_protocols" "not set at http level — this upgrade adds TLSv1.2 TLSv1.3"
+    elif grep -Eq 'TLSv1([^.]|$)|TLSv1\.1' <<<"$NGX_PROTO"; then
+        row WARN "nginx.conf ssl_protocols" "${NGX_PROTO} — this upgrade removes TLSv1/TLSv1.1"
+    else
+        row PASS "nginx.conf ssl_protocols" "$NGX_PROTO"
+    fi
+fi
+
 # --- 6. A NEW DEFAULT DOES NOT REACH AN INSTALL THAT SETS THE VALUE.
 #
 # Phase 10 restores config.yaml verbatim, which is correct: the operator's
@@ -1292,6 +1385,7 @@ if [[ $DRY_RUN == true ]]; then
     echo "                 the source, and this script no longer keeps a second copy"
     echo "                 of the versions to recite from."
     echo "  frontend    -> Vue ${VUE_VERSION} (sha256 pinned)"
+    echo "  nginx.conf  -> ssl_protocols TLSv1.2 TLSv1.3 (backed up, nginx -t, put back on failure)"
     echo "  restore     -> config.yaml, tm.db, tls/{server.crt,server.key}, extra CA certs,"
     echo "                 and ${DROPIN_DIR} if this host has one"
     umask "$ORIG_UMASK"; exit 0
@@ -1359,6 +1453,8 @@ fi
     cp -a /etc/nginx/sites-available/topic-manager "${BACKUP_DIR}/system/topic-manager.nginx"
 [[ -f /etc/nginx/snippets/tm-security-headers.conf ]] && \
     cp -a /etc/nginx/snippets/tm-security-headers.conf "${BACKUP_DIR}/system/"
+# v1.1.0 edits nginx.conf (ssl_protocols), so the restore point must hold it.
+[[ -f /etc/nginx/nginx.conf ]] && cp -a /etc/nginx/nginx.conf "${BACKUP_DIR}/system/nginx.conf"
 [[ -f /etc/systemd/system/topic-manager.service ]] && \
     cp -a /etc/systemd/system/topic-manager.service "${BACKUP_DIR}/system/"
 backup_dropin "$BACKUP_DIR"
@@ -1703,21 +1799,17 @@ if [[ -d "${BACKUP_DIR}/etc/tls" ]]; then
     mkdir -p "${CONFIG_DIR}/tls"
     cp -a "${BACKUP_DIR}/etc/tls/." "${CONFIG_DIR}/tls/"
     openssl x509 -in "${CONFIG_DIR}/tls/server.crt" -noout >/dev/null || fail "Restored certificate does not parse."
-    # Compare the RAW moduli, never their hashes. sha256sum emits a digest even
-    # for empty input, so hashing first makes the check unfalsifiable: if both
-    # openssl calls fail and produce nothing, both digests are the sha256 of
-    # nothing (e3b0c442...), they compare EQUAL, and the script reports a
-    # key-pair match it never verified. Require a real modulus from each side.
-    C_MOD="$(openssl x509 -noout -modulus -in "${CONFIG_DIR}/tls/server.crt" 2>/dev/null || true)"
-    K_MOD="$(openssl rsa  -noout -modulus -in "${CONFIG_DIR}/tls/server.key" 2>/dev/null || true)"
-    if [[ "$C_MOD" != Modulus=* ]] || [[ "$K_MOD" != Modulus=* ]]; then
-        C_MOD=""; K_MOD="x"   # force the mismatch branch; never silently agree
-    fi
-    if [[ -n "$C_MOD" && "$C_MOD" == "$K_MOD" ]]; then
+    # Compare the RAW public keys, never their hashes — see tls_keypair_matches.
+    # v1.1.0: this used `openssl rsa -modulus`, which is RSA-only, so every EC
+    # certificate (the FIPS-friendly choice, and what install.sh now generates)
+    # was reported as "match NOT confirmed". The public-key comparison works for
+    # RSA, EC and Ed25519 alike, and under FIPS mode.
+    if tls_keypair_matches "${CONFIG_DIR}/tls/server.crt" "${CONFIG_DIR}/tls/server.key"; then
         success "TLS cert/key restored and key-pair match verified"
         TLS_RESULT="restored, key-pair match verified"
     else
-        warn "Could not confirm cert/key modulus match (non-RSA key?). nginx -t is the backstop."
+        warn "The restored certificate and private key do NOT verify as a pair (or one"
+        warn "  could not be read). nginx -t in Phase 11 is the backstop."
         TLS_RESULT="restored, key-pair match NOT confirmed"
     fi
     info "Certificate expires: $(openssl x509 -in "${CONFIG_DIR}/tls/server.crt" -noout -enddate | cut -d= -f2)"
@@ -1884,6 +1976,10 @@ fi
 "${VENV}/bin/python3" -c "import yaml; yaml.safe_load(open('${CONFIG_FILE}'))" \
     || fail "config.yaml failed YAML validation after migration."
 success "config.yaml valid"
+# v1.1.0: the http-level ssl_protocols line. Backed up, edited, nginx -t'd and
+# put back on failure inside the function; the whole-file copy taken in Phase 4
+# is what restore_from_backup puts back if a LATER phase fails.
+manage_nginx_ssl_protocols /etc/nginx/nginx.conf "${BACKUP_DIR}/system/nginx.conf.before-tls-edit"
 nginx -t >/dev/null 2>&1 || fail "nginx config test failed."
 success "nginx config test passed"
 

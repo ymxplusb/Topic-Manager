@@ -584,3 +584,91 @@ EQUIV|no
 ANCHOR|# A reinstall over a v1.0.x host finds tm.db at 0644 and data/ at 0750.
 ANCHOR|enforce_audit_db_modes
 REPLACE|# A reinstall over a v1.0.x host finds tm.db at 0644 and data/ at 0750.
+
+# ─── v1.1.0: nginx.conf TLS management and the key-pair check (t18) ──────────
+--- M68
+DESC|nginx.conf: the rewrite keeps the old ssl_protocols line, TLSv1/TLSv1.1 and all
+TESTS|t18-tls-fips.sh
+EQUIV|no
+ANCHOR|                print substr($0, 1, RLENGTH) want " # managed by Topic Manager: TLS 1.2/1.3 only"
+REPLACE|                print $0
+
+--- M69
+DESC|nginx.conf: a failed nginx -t no longer puts the original back
+TESTS|t18-tls-fips.sh
+EQUIV|no
+ANCHOR|    cp -a -- "$bak" "$conf" || fail "nginx -t FAILED after the TLS edit AND the backup
+REPLACE|    true || fail "nginx -t FAILED after the TLS edit AND the backup
+
+--- M70
+DESC|nginx.conf: THE SECURITY MUTATION — edited through a symlink
+TESTS|t18-tls-fips.sh
+EQUIV|no
+ANCHOR|    [[ -L "$conf" ]] && fail "${conf} is a symlink; refusing to edit through it."
+REPLACE|    [[ -L "$conf" ]] && true "${conf} is a symlink; refusing to edit through it."
+
+--- M71
+DESC|nginx.conf: no backup is taken before the edit
+TESTS|t18-tls-fips.sh
+EQUIV|no
+ANCHOR|    cp -a -- "$conf" "$bak" || fail "could not back up ${conf} to ${bak}"
+REPLACE|    true || fail "could not back up ${conf} to ${bak}"
+
+--- M72
+DESC|key pair: the well-formedness guards go, so two unreadable inputs compare equal (the empty-output trap)
+TESTS|t18-tls-fips.sh
+EQUIV|no
+ANCHOR|    [[ "$c" == *"-----BEGIN PUBLIC KEY-----"*"-----END PUBLIC KEY-----"* ]] || return 1
+ANCHOR|    [[ "$k" == *"-----BEGIN PUBLIC KEY-----"*"-----END PUBLIC KEY-----"* ]] || return 1
+REPLACE|    true
+
+--- M73
+DESC|key pair: the comparison is inverted
+TESTS|t18-tls-fips.sh
+EQUIV|no
+ANCHOR|    [[ "$c" == "$k" ]]
+REPLACE|    [[ "$c" != "$k" ]]
+
+--- M74
+DESC|upgrade: Phase 11 no longer manages nginx.conf ssl_protocols
+TESTS|t18-tls-fips.sh
+EQUIV|no
+ANCHOR|manage_nginx_ssl_protocols /etc/nginx/nginx.conf "${BACKUP_DIR}/system/nginx.conf.before-tls-edit"
+REPLACE|true
+
+--- M75
+DESC|upgrade: the restore point no longer holds nginx.conf, which the upgrade now edits
+TESTS|t18-tls-fips.sh
+EQUIV|no
+ANCHOR|[[ -f /etc/nginx/nginx.conf ]] && cp -a /etc/nginx/nginx.conf "${BACKUP_DIR}/system/nginx.conf"
+REPLACE|true
+
+--- M76
+DESC|nginx.conf: with no ssl_protocols line, nothing is added
+TESTS|t18-tls-fips.sh
+EQUIV|no
+ANCHOR|                print "\t" want " # managed by Topic Manager: TLS 1.2/1.3 only"
+REPLACE|                printf ""
+
+--- M77
+DESC|nginx.conf: an unparseable (multi-line) directive is rewritten anyway
+TESTS|t18-tls-fips.sh
+EQUIV|no
+ANCHOR|    if grep -Eq '^[[:space:]]*ssl_protocols[[:space:]]+[^;]*$' "$conf"; then
+REPLACE|    if false; then
+
+--- M78
+DESC|install: nginx.conf ssl_protocols is no longer managed on a fresh install
+TESTS|t18-tls-fips.sh
+TARGET|install
+EQUIV|no
+ANCHOR|manage_nginx_ssl_protocols /etc/nginx/nginx.conf \
+REPLACE|true \
+
+--- M79
+DESC|install: the key-pair guard on the install copy is inverted
+TESTS|t18-tls-fips.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ "$c" == "$k" ]]
+REPLACE|    [[ "$c" != "$k" ]]

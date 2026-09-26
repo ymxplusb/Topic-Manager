@@ -89,10 +89,107 @@ enforce_audit_db_modes() {
     done
 }
 
+# manage_nginx_ssl_protocols <nginx.conf> <backup-path> — v1.1.0.
+# The site config sets TLS 1.2/1.3, but the http-level ssl_protocols line in
+# nginx.conf is what a scanner (and any other server block) sees, and stock
+# Ubuntu ships "TLSv1 TLSv1.1 TLSv1.2 TLSv1.3" there. Every ACTIVE
+# ssl_protocols line in nginx.conf is rewritten to TLSv1.2 TLSv1.3; if there
+# is none, one is added at the top of the http block.
+#   1. back up nginx.conf (cp -a, so owner and mode go with it);
+#   2. write the edit to a temp file beside it and move it into place with
+#      the original's owner and mode;
+#   3. nginx -t; on failure put the backup back, test again, and stop,
+#      saying whether the failure was this edit or was already there.
+# Never through a symlink, and never on a line it cannot parse: an
+# ssl_protocols directive that does not end on its own line is refused.
+manage_nginx_ssl_protocols() {
+    local conf="$1" bak="$2" tmp want n out
+    want='ssl_protocols TLSv1.2 TLSv1.3;'
+    [[ -L "$conf" ]] && fail "${conf} is a symlink; refusing to edit through it."
+    [[ -f "$conf" ]] || fail "${conf} not found — is nginx installed?"
+    if grep -Eq '^[[:space:]]*ssl_protocols[[:space:]]+[^;]*$' "$conf"; then
+        fail "${conf} has an ssl_protocols directive that does not end on its own
+     line. Refusing to rewrite what cannot be parsed safely. Put it on one line
+     (ssl_protocols TLSv1.2 TLSv1.3;) and run again."
+    fi
+    cp -a -- "$conf" "$bak" || fail "could not back up ${conf} to ${bak}"
+    tmp="$(mktemp "${conf}.tm-XXXXXX")" || fail "could not create a temp file beside ${conf}"
+    n="$(grep -Ec '^[[:space:]]*ssl_protocols[[:space:]]' "$conf" || true)"
+    if [[ "${n:-0}" -gt 0 ]]; then
+        awk -v want="$want" '
+            /^[[:space:]]*ssl_protocols[[:space:]][^;]*;/ {
+                match($0, /^[[:space:]]*/)
+                print substr($0, 1, RLENGTH) want " # managed by Topic Manager: TLS 1.2/1.3 only"
+                next
+            }
+            { print }' "$conf" > "$tmp"
+    else
+        grep -Eq '^[[:space:]]*http[[:space:]]*[{]' "$conf" \
+            || { rm -f "$tmp"; fail "${conf} has no ssl_protocols line and no http { block to add one to."; }
+        awk -v want="$want" '
+            { print }
+            !done && /^[[:space:]]*http[[:space:]]*[{]/ {
+                print "\t" want " # managed by Topic Manager: TLS 1.2/1.3 only"
+                done = 1
+            }' "$conf" > "$tmp"
+    fi
+    chown --reference="$conf" -- "$tmp" && chmod --reference="$conf" -- "$tmp" \
+        || { rm -f "$tmp"; fail "could not give the edited nginx.conf its original owner and mode"; }
+    mv -f -- "$tmp" "$conf" || { rm -f "$tmp"; fail "could not move the edited nginx.conf into place"; }
+    if out="$(nginx -t 2>&1)"; then
+        info "nginx.conf: ssl_protocols is TLSv1.2 TLSv1.3 (backup: ${bak}); nginx -t passed"
+        return 0
+    fi
+    cp -a -- "$bak" "$conf" || fail "nginx -t FAILED after the TLS edit AND the backup
+     could not be put back. Restore it by hand: sudo cp -a ${bak} ${conf}
+     nginx -t said: ${out}"
+    if nginx -t >/dev/null 2>&1; then
+        fail "nginx -t failed after setting ssl_protocols in ${conf}, so the original
+     was put back (nginx -t passes with it). Nothing else was changed.
+     nginx -t said: ${out}"
+    fi
+    fail "nginx -t fails with OR without the TLS edit, so the problem is elsewhere
+     in the nginx configuration (often a missing certificate). ${conf} was put
+     back as it was. nginx -t said: ${out}"
+}
+
+# tls_keypair_matches <cert.pem> <key.pem> — exit 0 only when the certificate's
+# public key and the private key's public half are the SAME, compared raw.
+# Key-type agnostic (RSA, EC, Ed25519): `openssl rsa -modulus` is RSA-only and
+# reported every EC pair as a mismatch. Never hashes first: two failed commands
+# produce two empty strings, and sha256 of nothing equals sha256 of nothing.
+tls_keypair_matches() {
+    local c k
+    c="$(openssl x509 -noout -pubkey -in "$1" 2>/dev/null || true)"
+    k="$(openssl pkey -pubout -in "$2" 2>/dev/null || true)"
+    [[ "$c" == *"-----BEGIN PUBLIC KEY-----"*"-----END PUBLIC KEY-----"* ]] || return 1
+    [[ "$k" == *"-----BEGIN PUBLIC KEY-----"*"-----END PUBLIC KEY-----"* ]] || return 1
+    [[ "$c" == "$k" ]]
+}
+
 # can_access <user> <test-flag> <path> — the honest check. Mode bits can look
 # right while an ACL, a parent directory or a MAC policy still says no, so ask
 # the kernel as the actual principal.
 can_access() { sudo -u "$1" test "$2" "$3" 2>/dev/null; }
+
+# ─── options ─────────────────────────────────────────────────────────────────
+OPT_TLS_CERT=""; OPT_TLS_KEY=""; OPT_SERVER_NAME=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --tls-cert)    shift; OPT_TLS_CERT="${1:-}" ;;
+        --tls-key)     shift; OPT_TLS_KEY="${1:-}" ;;
+        --server-name) shift; OPT_SERVER_NAME="${1:-}" ;;
+        -h|--help)     sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        *)             die "Unknown option: $1 (try --help)" ;;
+    esac
+    shift
+done
+
+# The name the site answers to and the self-signed placeholder is issued for.
+# Validated because it is written into the nginx site with sed.
+SERVER_NAME="${OPT_SERVER_NAME:-$(hostname -f 2>/dev/null || hostname)}"
+[[ "$SERVER_NAME" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,252}[A-Za-z0-9])?$ ]] \
+    || die "Server name '${SERVER_NAME}' is not a valid host name. Pass --server-name <fqdn>."
 
 # ─── root check ──────────────────────────────────────────────────────────────
 [[ $EUID -eq 0 ]] || die "Run with sudo: sudo bash install.sh"
@@ -334,21 +431,60 @@ fi
 info "Installing nginx site..."
 mkdir -p /etc/nginx/snippets
 cp "${SCRIPT_DIR}/nginx/tm-security-headers.conf" /etc/nginx/snippets/tm-security-headers.conf
-cp "${SCRIPT_DIR}/nginx/topic-manager.conf" /etc/nginx/sites-available/topic-manager
+install -m 644 -o root -g root "${SCRIPT_DIR}/nginx/topic-manager.conf" /etc/nginx/sites-available/topic-manager
+# The shipped site carries a placeholder name, and only the placeholder is
+# replaced.
+sed -i "s|server_name YOUR-HOSTNAME.YOUR-DOMAIN.com _;|server_name ${SERVER_NAME} _;|" \
+    /etc/nginx/sites-available/topic-manager
 ln -sf /etc/nginx/sites-available/topic-manager /etc/nginx/sites-enabled/topic-manager
 rm -f /etc/nginx/sites-enabled/default
-success "nginx site configured"
+success "nginx site configured for ${SERVER_NAME}"
 
-# ─── TLS cert placeholder ────────────────────────────────────────────────────
-if [[ ! -f "${CONFIG_DIR}/tls/server.crt" ]]; then
-    warn "TLS certificate not found at ${CONFIG_DIR}/tls/server.crt"
-    warn "  Generate a self-signed cert for testing, or place your signed cert:"
-    warn "    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \\"
-    warn "      -keyout ${CONFIG_DIR}/tls/server.key \\"
-    warn "      -out    ${CONFIG_DIR}/tls/server.crt \\"
-    warn "      -subj '/CN=topic-manager.int.crypticlight.com'"
-    warn "  Then: sudo systemctl restart nginx topic-manager"
+# ─── TLS certificate ─────────────────────────────────────────────────────────
+# v1.1.0: nginx cannot start without a certificate, so a fresh install used to
+# end with a failing `nginx -t` and a warning. Now, in order of preference:
+#   1. --tls-cert/--tls-key given: installed, and verified to be a pair;
+#   2. a certificate already present: kept;
+#   3. otherwise a SELF-SIGNED placeholder, ECDSA P-256 / SHA-256 (FIPS-approved),
+#      loudly reported. Replace it with one your CA issued before production use.
+# The private key is 0600 root:root: nginx's master process (root) reads it,
+# and nothing else needs to.
+TLS_CRT="${CONFIG_DIR}/tls/server.crt"
+TLS_KEY="${CONFIG_DIR}/tls/server.key"
+if [[ -n "$OPT_TLS_CERT" || -n "$OPT_TLS_KEY" ]]; then
+    [[ -f "$OPT_TLS_CERT" && -f "$OPT_TLS_KEY" ]] \
+        || die "--tls-cert and --tls-key must both name existing files."
+    tls_keypair_matches "$OPT_TLS_CERT" "$OPT_TLS_KEY" \
+        || die "--tls-cert and --tls-key are not a matching certificate/key pair
+     (or one of them could not be read). Nothing was installed."
+    install -m 644 -o root -g root "$OPT_TLS_CERT" "$TLS_CRT"
+    install -m 600 -o root -g root "$OPT_TLS_KEY"  "$TLS_KEY"
+    success "TLS certificate installed from ${OPT_TLS_CERT} (key pair verified)"
+elif [[ -f "$TLS_CRT" && -f "$TLS_KEY" ]]; then
+    tls_keypair_matches "$TLS_CRT" "$TLS_KEY" \
+        && success "Existing TLS certificate kept (key pair verified)" \
+        || warn "Existing ${TLS_CRT} and ${TLS_KEY} do NOT verify as a pair — nginx -t below will say more."
+else
+    info "No TLS certificate supplied — generating a self-signed placeholder for ${SERVER_NAME} ..."
+    TLS_TMP_KEY="$(mktemp "${CONFIG_DIR}/tls/.key.XXXXXX")"
+    openssl req -x509 -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -sha256 -nodes \
+        -days 397 -subj "/CN=${SERVER_NAME}" \
+        -addext "subjectAltName=DNS:${SERVER_NAME}" \
+        -keyout "$TLS_TMP_KEY" -out "$TLS_CRT" >/dev/null 2>&1 \
+        || { rm -f "$TLS_TMP_KEY"; die "openssl could not generate a self-signed certificate."; }
+    chown root:root "$TLS_TMP_KEY" "$TLS_CRT"
+    chmod 600 "$TLS_TMP_KEY"; chmod 644 "$TLS_CRT"
+    mv -f "$TLS_TMP_KEY" "$TLS_KEY"
+    warn "SELF-SIGNED certificate generated for ${SERVER_NAME} (ECDSA P-256, 397 days)."
+    warn "  Browsers will warn. Replace ${TLS_CRT} and ${TLS_KEY} with a CA-issued"
+    warn "  pair, then: sudo systemctl reload nginx"
 fi
+
+# ─── nginx.conf: TLS 1.2/1.3 only at the http level ──────────────────────────
+# Stock Ubuntu's nginx.conf enables TLSv1 and TLSv1.1 for every server. Backed
+# up to ${BACKUP_ROOT}, edited, nginx -t'd, and put back if the test fails.
+manage_nginx_ssl_protocols /etc/nginx/nginx.conf \
+    "${BACKUP_ROOT}/nginx.conf.before-install-$(date +%Y%m%d-%H%M%S)"
 
 # ─── firewall ────────────────────────────────────────────────────────────────
 if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
@@ -364,7 +500,11 @@ cp "${SCRIPT_DIR}/install/logrotate.d/topic-manager" /etc/logrotate.d/topic-mana
 success "Log rotation configured (daily, 14-day retention)"
 
 # ─── nginx test ──────────────────────────────────────────────────────────────
-nginx -t 2>/dev/null && success "nginx config valid" || warn "nginx config test failed — check cert paths"
+# A fresh install now always has a certificate, so a failing test is a real
+# fault, not an expected gap — stop, and show nginx's own words.
+NGINX_T="$(nginx -t 2>&1)" || die "nginx -t failed:
+${NGINX_T}"
+success "nginx config valid"
 
 # ─── permission boundary ────────────────────────────────────────────────────
 # ASKED OF THE KERNEL as the real principal. Mode bits can look right while an

@@ -1,6 +1,8 @@
+import hashlib
 import logging
 import logging.handlers
 from flask import Flask
+from flask.sessions import SecureCookieSessionInterface
 from werkzeug.middleware.proxy_fix import ProxyFix
 from .config import config_path, load_config, DEFAULT_SESSION_TIMEOUT_MINUTES
 from .models import init_db
@@ -18,6 +20,19 @@ from .models import init_db
 # reason and only because the nginx site sets X-Forwarded-Host itself — a
 # trusted hop that does not set a header is a header the client controls.
 _TRUSTED_PROXY_HOPS = 1
+
+
+class Sha256SessionInterface(SecureCookieSessionInterface):
+    """Flask's signed session cookie, signed with HMAC-SHA-256.
+
+    Flask's default digest is SHA-1 (flask.sessions._lazy_sha1). The cookie
+    carries only the server-side session id, but it IS signed, and on a FIPS
+    host the rule is simple: no SHA-1 for a security purpose. The key
+    derivation (key_derivation='hmac') uses the same digest. Changing it
+    invalidates every cookie signed under SHA-1, so an upgrade signs everyone
+    out once — expected, and harmless.
+    """
+    digest_method = staticmethod(hashlib.sha256)
 
 
 def create_app(config_path_arg=None):
@@ -39,6 +54,7 @@ def create_app(config_path_arg=None):
             'Generate one with: python3 -c "import secrets; print(secrets.token_hex(32))"'
         )
     app.secret_key = _secret
+    app.session_interface = Sha256SessionInterface()
     # CSRF tokens are intentionally omitted: this is a pure JSON REST API
     # (no HTML form submissions). State-mutation routes enforce Content-Type:
     # application/json (force=True is not used) and cross-site fetches are
@@ -74,8 +90,9 @@ def _setup_logging(cfg, app):
     logging.getLogger('tm').setLevel(level)
 
     if log_cfg.get('syslog_enabled', False):
-        # Log via local Unix socket (/dev/log) so rsyslog picks it up and
-        # forwards to Graylog via the existing 60-graylog.conf rule (daemon.*).
+        # Log via the local Unix socket (/dev/log) to the host's syslog
+        # daemon, facility daemon. Forwarding it off the host is the host's
+        # rsyslog configuration, not this application's.
         try:
             handler = logging.handlers.SysLogHandler(
                 address='/dev/log',
