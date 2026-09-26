@@ -8,14 +8,23 @@ only thing that checks the bundle is complete while there is still a network to 
 
 | Path (relative to the repo) | Contents |
 |---|---|
-| `install/packages/python/` | One wheel (or sdist) for **every** `==` pin in `requirements.txt`. `prepare-offline.sh` refuses to declare the bundle good if any pin has no matching artefact |
-| `install/packages/apt/` | Optional `.deb` files for the Ubuntu 24.04 build dependencies. Only downloaded when the bundling machine is Debian/Ubuntu |
+| `install/packages/python/` | One **binary wheel** for **every** `==` pin in `requirements.txt` (and their dependencies), for CPython 3.12 manylinux. `prepare-offline.sh` refuses to declare the bundle good if any pin has no matching artefact; `install.sh` installs with `--only-binary :all:`, so nothing is compiled on the target |
+| `install/packages/apt/` | The runtime packages `install.sh` needs — `python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl` — **with their dependency closure**. Only downloaded when the bundling machine is Ubuntu (it must be 24.04, same architecture as the target). `install.sh` installs only those the host does not already have, so nothing is downgraded. No compiler and no `-dev` headers |
 | `lib/vue.global.prod.js` | Vue, at the version **and SHA-256** pinned in `install/upgrade-full.sh`, verified after download and written byte-for-byte — nothing is prepended to it |
-| everything else | The repo itself: `tm/` (including `tm/migrate_clusters.py`, which both the installer and the upgrade run), `app/`, `index.html`, `nginx/`, `systemd/` (**both** units: `topic-manager.service` and `topic-manager-nginx-test.service`), `install/polkit/50-topic-manager.rules`, `config/` (`config.yaml.example` **and** `clusters.yaml.example`), `requirements.txt` |
+| everything else | The **committed** tree, from `git archive` of HEAD: `tm/` (including `tm/migrate_clusters.py`, which both the installer and the upgrade run), `app/`, `index.html`, `nginx/`, `systemd/` (**both** units: `topic-manager.service` and `topic-manager-nginx-test.service`), `install/polkit/50-topic-manager.rules`, `config/` (`config.yaml.example`, and `clusters.yaml.example` as a format reference only), `requirements.txt`, the docs and the tests |
+
+**What is never in it (v1.1.0).** The bundle used to be a tarball of the whole working
+directory, so it carried the repository's own process records — `.claude/` (the agent
+contract) and `.work/` (work orders naming production hosts) — plus dated scan reports and any
+untracked file. It is now built from `git archive`, `.gitattributes` export-ignores the
+process records, and `tools/check-env-neutral.sh --bundle` scans the finished tarball: any
+`.claude/`, `.work/`, `.git/`, `.github/` or scan report inside it, or any site-specific host
+name, address, account or path in its text, and the bundle is **deleted**, not shipped.
+Outside a git checkout an explicit allowlist of the shipped paths is used instead.
 
 `bash prepare-offline.sh --bundle` additionally writes
-`topic-manager-offline-<VERSION>.tar.gz` one directory **above** the repo. The tarball
-extracts to a directory named after the repo checkout.
+`topic-manager-offline-<VERSION>.tar.gz` and `topic-manager-offline-<VERSION>.tar.gz.sha256`
+one directory **above** the repo. The tarball extracts to `topic-manager-<VERSION>/`.
 
 ## The contract both sides must satisfy
 
@@ -30,8 +39,10 @@ file on the target — and `prepare-offline.sh` reads them from there.
 
 ## Using the bundle
 
-**Fresh install** on an air-gapped host: transfer the repo directory (or the tarball), then
-run `install.sh` from it. It detects offline mode and installs from `install/packages/`.
+**Fresh install** on an air-gapped host: check the `.sha256`, extract the tarball, and run
+`install.sh` from it with the directory flags (`--ldap-url`, `--ldap-base-dn`, `--ldap-group`;
+see `docs/INSTALL.md` section 5). It detects offline mode and installs from
+`install/packages/` and the bundled, hash-verified `lib/vue.global.prod.js`.
 
 **Upgrading an existing host**: do **not** run `install.sh` — it uses `rsync -a --delete`.
 Use the upgrade script, which reads the bundle from one fixed path:

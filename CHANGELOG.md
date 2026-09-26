@@ -320,7 +320,7 @@ backend are byte-identical to 1.0.2.
 - Run `sudo bash install/upgrade-1.0.2.sh` on any host not connected to the repo.
   *(Historical: that script was never committed to this repo. Use
   `sudo bash install/upgrade-full.sh` — see 1.0.3 above.)*
-- After upgrade, verify LDAPS: `openssl s_client -connect dc1.int.crypticlight.com:636 -CAfile /etc/ssl/certs/ca-certificates.crt`
+- After upgrade, verify LDAPS: `openssl s_client -connect <dc-host>:636 -CAfile /etc/ssl/certs/ca-certificates.crt`
 - If DC cert not in system store, set `ldap_ca_cert:` in `/etc/topic-manager/config.yaml` to the CA PEM path.
 
 ---
@@ -354,7 +354,7 @@ backend are byte-identical to 1.0.2.
 - Nested template literal in `TopicsTab.fetch()` extracted to `brokerQs` variable
 - `window.fetch` replaced with `fetch` across all four component files
 - CSRF hotspot documented in `app.py` (intentional: pure JSON REST API + SameSite=Lax)
-- SonarQube project `topic-manager` created on `192.168.202.76:9000` with `Jarvis Standard` quality gate
+- SonarQube project `topic-manager` created on the site SonarQube server with `Jarvis Standard` quality gate
 
 ### Files Changed
 - `app/components/TopicsTab.js` — auto-refresh countdown, broker hover popup, fetch refactor

@@ -55,21 +55,23 @@ Every Python version above is pinned in `requirements.txt`, which is the single 
 
 > **Upgrading an existing installation?** See [Upgrading](#upgrading) — do not re-run `install.sh` on a server that already has Topic Manager deployed.
 
+The complete, environment-neutral procedure — online and air-gapped, including STIG'd and
+FIPS-mode hosts — is **[docs/INSTALL.md](docs/INSTALL.md)**. In brief:
+
 ### Prerequisites
 
-- Ubuntu Server 24.04 LTS
-- 2 vCPU · 4 GB RAM · 20 GB disk (minimum)
-- Static IP, DNS A record pointing to the host
-- Network access: DC on port 636 (LDAPS), Kafka brokers on port 9092 (or 9094 for SSL)
-- **Optionally**, an AD service account for LDAP directory searches (Domain Users rights are sufficient). It is *not* required — the default direct user bind needs no account at all; see [LDAP authentication](#ldap-authentication)
-- `polkit` (`polkitd`), which Ubuntu Server 24.04 installs by default. It is what authorises the Settings restart control; without it that one control reports *Interactive authentication required* and nothing else is affected. See [Privileges the install grants](#privileges-the-install-grants)
-- A TLS certificate for the hostname (internal CA or self-signed)
+- A clean Ubuntu Server 24.04 LTS host (2 vCPU · 4 GB RAM · 20 GB disk minimum) with a DNS name
+- Your directory's LDAPS URL, user search base DN and the DN of the group allowed to sign in (optionally a service account for searches — not required; see [LDAP authentication](#ldap-authentication))
+- Network: LDAPS 636 to the directory, the Kafka brokers at the ports your cluster profiles name, DNS, NTP. An online install also needs HTTPS to the Ubuntu mirror, PyPI and `cdn.jsdelivr.net`; an offline install needs none of them. `PPSM.csv` has the full list
+- Optionally, a TLS certificate and key for the host name from your CA. Without one a self-signed ECDSA P-256 placeholder is generated
 
-### Step 1 — Get the code
+### Step 1 — Get the release
+
+The release tarball from your site's package registry (check its `.sha256`), or a clone of your
+site's copy of the repository at the release tag:
 
 ```bash
-git clone https://github.com/ymxplusb/Topic-Manager.git
-cd Topic-Manager
+git clone --branch v<version> --depth 1 <your-git-url> topic-manager && cd topic-manager
 ```
 
 On an **air-gapped host**, see [Offline Install](#offline-install) below.
@@ -77,129 +79,44 @@ On an **air-gapped host**, see [Offline Install](#offline-install) below.
 ### Step 2 — Run the installer
 
 ```bash
-sudo bash install.sh
+sudo bash install.sh \
+    --ldap-url     ldaps://dc1.example.org:636 \
+    --ldap-base-dn "DC=example,DC=org" \
+    --ldap-group   "CN=Kafka-Admins,OU=Groups,DC=example,DC=org" \
+    --server-name  topics.example.org \
+    [--tls-cert server.crt --tls-key server.key]
 ```
 
-The script:
-- Installs system packages (python3, python3-venv, nginx, libldap, libssl, build-essential)
+Run it without the `--ldap-*` flags on a terminal to be asked for each value instead;
+`--non-interactive` makes a missing value a refusal. There are **no built-in directory
+defaults**: before v1.1.0 the application silently filled in one particular site's domain
+controller, base DN and domain when `config.yaml` omitted them.
+
+The script, in order:
+- Sets `umask 0022` for its own run (a STIG host's 077 would leave the venv and the frontend unreadable) and gives every sensitive file its mode explicitly
+- Installs any missing runtime package — `python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl` — from apt online, or from the bundle's `.deb`s offline (only for packages the host does not already have). No compiler and no `-dev` headers: every Python dependency is a binary wheel (`pip --only-binary :all:`)
 - Installs Vue.js **3.5.43**, verified by SHA-256 before it is served (online: fetched from the CDN; offline: taken from the bundle's `lib/`). The version and hash are read from `install/upgrade-full.sh`, the same pin the upgrade and `prepare-offline.sh` use, and a file that does not match is refused — so a fresh install and an upgraded host serve byte-identical Vue
-- Creates the `topic-manager` system user
-- Creates `/opt/topic-manager/`, `/var/www/topic-manager/`, `/etc/topic-manager/`
+- Creates the `topic-manager` system user and `/opt/topic-manager/` (`data/` **0700**), `/var/www/topic-manager/`, `/etc/topic-manager/`
 - Creates `/etc/topic-manager/clusters.d/` (owned by `topic-manager`) and `/opt/topic-manager/data/cluster-certs/` (mode 0700) — the only two directories the application may write outside its own data and log directories. `/etc/topic-manager` itself stays `root:topic-manager 0750`; see [Cluster profiles](#cluster-profiles) for why that split is not arbitrary
-- Sets up the Python virtual environment and installs all packages
-- Deploys backend and frontend files
-- Writes a default config to `/etc/topic-manager/config.yaml` with an auto-generated secret key
-- Runs `tm/migrate_clusters.py`, which installs the example cluster profiles at `/etc/topic-manager/clusters.d/clusters.yaml` — or, on a reinstall over an older host, moves the existing `clusters:` block out of `config.yaml`. It is idempotent
-- Installs the systemd service (`topic-manager.service`), the on-demand `topic-manager-nginx-test.service`, and the nginx site config
-- Installs `/etc/polkit-1/rules.d/50-topic-manager.rules`, which is what lets the Settings restart control act. If `/etc/polkit-1/rules.d` does not exist the installer **warns and continues** — everything except that one control still works
+- Writes `/etc/topic-manager/config.yaml` (0640 `root:topic-manager`) with your directory settings and a random secret key — or, on a reinstall, keeps the existing one and **refuses to continue** if it lacks `auth.ldap_server`, `ldap_base_dn` or `ldap_domain`
+- Creates an **empty** cluster store at `/etc/topic-manager/clusters.d/clusters.yaml` (or, on a reinstall over an older host, moves the existing `clusters:` block out of `config.yaml`). `config/clusters.yaml.example` is a format reference; it is never installed as live clusters
+- Installs the systemd service (`topic-manager.service`, `UMask=0077`), the on-demand `topic-manager-nginx-test.service`, and `/etc/polkit-1/rules.d/50-topic-manager.rules`, which is what lets the Settings restart control act
+- Installs the nginx site, the certificate (yours, an existing one, or the self-signed placeholder) and sets `ssl_protocols TLSv1.2 TLSv1.3` in `/etc/nginx/nginx.conf` — backed up, `nginx -t`'d, and put back if the test fails
 - Opens ufw ports 80 and 443 if ufw is active
+- Verifies, as the service account, that the app can write `clusters.d` and cannot write `config.yaml`
+- **Starts the service**, waits for `/api/health`, and measures `tm.db` 0600 / `data/` 0700
 
-The installer **does not start services** — complete the configuration steps below first.
-
-### Step 3 — Edit the config
-
-```bash
-sudo nano /etc/topic-manager/config.yaml
-```
-
-Required fields:
-
-```yaml
-auth:
-  ldap_server:       "ldaps://your-dc.yourdomain.com:636"
-  ldap_domain:       "yourdomain.com"
-  ldap_base_dn:      "DC=yourdomain,DC=com"
-  required_group:    "CN=Kafka-Admins,CN=Users,DC=yourdomain,DC=com"
-
-  # OPTIONAL — leave BOTH empty to use the direct user bind (see
-  # "LDAP authentication" below). If you set them they must WORK: from
-  # v1.0.2 onward every login is gated on this bind succeeding.
-  ldap_bind_dn:       ""
-  ldap_bind_password: ""
-```
-
-> **Cluster profiles are not in this file.** Since v1.0.4 they live in
-> `/etc/topic-manager/clusters.d/clusters.yaml` and are normally maintained from the
-> **Cluster Builder** in Settings. The installer puts a starter file there for you; edit
-> the brokers to match your environment either in the UI or in that file. Adding a
-> `clusters:` block back into `config.yaml` has no effect — it is ignored. See
-> [Cluster profiles](#cluster-profiles).
-
-The `required_group` must be the full DN of the AD group whose members are allowed to log in.  
-`ldap_bind_dn` / `ldap_bind_password` are **optional** — see [LDAP authentication](#ldap-authentication).
-
-To find these values from any domain-joined Windows machine:
-```powershell
-Get-ADGroup   -Identity "Kafka-Admins"     | Select-Object DistinguishedName
-# only if you are using a service account:
-Get-ADUser    -Identity "svc-topic-mgr"    | Select-Object DistinguishedName
-```
-
-Validate the YAML syntax before proceeding:
-```bash
-python3 -c "import yaml; yaml.safe_load(open('/etc/topic-manager/config.yaml'))" && echo "OK"
-```
-
-### Step 4 — Place the TLS certificate
-
-nginx requires a certificate and private key at:
-
-```
-/etc/topic-manager/tls/server.crt
-/etc/topic-manager/tls/server.key
-```
-
-**From an internal CA** — generate a CSR and sign it:
-```bash
-sudo openssl req -new -newkey rsa:2048 -nodes \
-  -keyout /etc/topic-manager/tls/server.key \
-  -out    /tmp/topic-manager.csr \
-  -subj   "/CN=your-hostname.yourdomain.com" \
-  -addext "subjectAltName=DNS:your-hostname.yourdomain.com"
-# Submit /tmp/topic-manager.csr to your CA, then place the signed cert:
-sudo cp /path/to/signed.crt /etc/topic-manager/tls/server.crt
-```
-
-**Self-signed** (testing only):
-```bash
-sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-  -keyout /etc/topic-manager/tls/server.key \
-  -out    /etc/topic-manager/tls/server.crt \
-  -subj   "/CN=your-hostname.yourdomain.com"
-```
-
-Set permissions:
-```bash
-sudo chmod 640 /etc/topic-manager/tls/server.crt /etc/topic-manager/tls/server.key
-sudo chown root:topic-manager /etc/topic-manager/tls/server.crt /etc/topic-manager/tls/server.key
-```
-
-Verify nginx accepts the cert:
-```bash
-sudo nginx -t
-```
-
-### Step 5 — Start services
+### Step 3 — Verify, sign in, add clusters
 
 ```bash
-sudo systemctl start topic-manager
-sudo systemctl restart nginx
-```
-
-### Step 6 — Verify
-
-```bash
-# Backend direct
-curl http://127.0.0.1:5001/api/health
-# Through nginx (HTTPS)
 curl -sk https://localhost/api/health
 ```
 
-Both should return: `{"status":"ok","version":"1.0.6"}`
+should return `{"status":"ok","version":"1.0.6"}`. Open `https://<server-name>/`, sign in as a
+member of the required group, and add your Kafka clusters in **Settings → General → Cluster
+Profiles** — a new install starts with none.
 
-Then open `https://your-hostname.yourdomain.com` in a browser and sign in with an AD account that is a member of `Kafka-Admins`.
-
-> **Login credential format:** use your AD `sAMAccountName` (e.g. `firstname.lastname`), your full UPN (`firstname.lastname@yourdomain.com`), or `DOMAIN\firstname.lastname`. Display names and email aliases are not supported.
+> **Login credential format:** use your directory `sAMAccountName` (e.g. `firstname.lastname`), your full UPN (`firstname.lastname@example.org`), or `DOMAIN\firstname.lastname`. Display names and email aliases are not supported.
 
 ---
 
@@ -243,7 +160,7 @@ sudo bash install/upgrade-full.sh --audit-only
 To test the bind by hand:
 
 ```bash
-ldapwhoami -H ldaps://your-dc.yourdomain.com:636 -x -W \
+ldapwhoami -H ldaps://<dc-host>:636 -x -W \
   -D "$(sudo grep ldap_bind_dn /etc/topic-manager/config.yaml | cut -d'"' -f2)"
 # Expected: dn:CN=svc-...
 ```
@@ -305,7 +222,7 @@ From v1.0.2 the LDAPS connection uses `CERT_REQUIRED`, so the domain
 controller's certificate must validate against the system trust store:
 
 ```bash
-openssl s_client -connect your-dc.yourdomain.com:636 \
+openssl s_client -connect <dc-host>:636 \
   -CAfile /etc/ssl/certs/ca-certificates.crt </dev/null 2>&1 | grep 'Verify return code'
 # Expected: Verify return code: 0 (ok)
 ```
@@ -441,8 +358,11 @@ reinstall and an upgrade take the same path. It:
   comment from a file operators are expected to hand-edit;
 - is **idempotent**: on an already-migrated host it prints `already migrated` and changes
   nothing;
+- on a host with neither a store nor a `clusters:` block (a fresh install) creates an
+  **empty** store — `clusters: []` — since v1.1.0. It used to install the example profiles,
+  which made a brand-new host's first cluster list somebody else's brokers;
 - refuses to report success if `config.yaml` still has a `clusters:` key afterwards, or if
-  the new file does not hold a non-empty list.
+  the new file does not hold a cluster list.
 
 After an upgrade, confirm the three things it is responsible for:
 
@@ -582,13 +502,13 @@ What it does, in order:
 | Phase | |
 |-------|--|
 | 1–2  | Preflight and permission audit — disk, ownership and modes, immutable attributes, POSIX ACLs, AppArmor/SELinux, auditd/AIDE/fapolicyd, and effective access asked of the kernel as the real `www-data` and `topic-manager` principals |
-| 3    | Upgrade blockers — `server.secret_key` must be set, and if a service bind is configured the LDAP bind must actually succeed. Both are resolved the way the *service* sees them: the unit's `Environment=` / `EnvironmentFile=` (drop-ins included) first, then the shell, then `config.yaml` |
-| 4    | Backup to `/var/backups/topic-manager/<TIMESTAMP>` plus a `.tar.gz` alongside it — config, TLS key and certificate, extra CA material, a consistent SQLite snapshot, the venv, the nginx config, the systemd unit **and its drop-in directory**, and a recorded permission baseline. Checksummed and verified before the upgrade is allowed to continue |
-| 5    | Fetch the target source and read every Python pin from its `requirements.txt` — the script keeps no pins of its own |
+| 3    | Upgrade blockers — `server.secret_key` must be set; `config.yaml` must name its directory (`auth.ldap_server`, `ldap_base_dn`, `ldap_domain` — v1.1.0 has no built-in defaults, and this blocker is **not** overridable with `--force`); and if a service bind is configured the LDAP bind must actually succeed. They are resolved the way the *service* sees them: the unit's `Environment=` / `EnvironmentFile=` (drop-ins included) first, then the shell, then `config.yaml`. The audit also reports the current `tm.db` mode and `nginx.conf`'s `ssl_protocols` |
+| 4    | Backup to `/var/backups/topic-manager/<TIMESTAMP>` plus a `.tar.gz` alongside it — config, TLS key and certificate, extra CA material, a consistent SQLite snapshot, the venv, the nginx site **and `/etc/nginx/nginx.conf`**, the systemd unit **and its drop-in directory**, and a recorded permission baseline. Checksummed and verified before the upgrade is allowed to continue |
+| 5    | Fetch the target source — online from the git URL you give with `--repo-url` (there is no default), or offline from the staged bundle — and read every Python pin from its `requirements.txt`; the script keeps no pins of its own |
 | 6    | OS packages (`apt full-upgrade`), unless `--skip-os` |
 | 7–9  | Replace venv, backend, frontend, nginx config and unit, and install the polkit rule and the `topic-manager-nginx-test` unit. Vue is verified by SHA-256 before it is allowed to serve |
-| 10   | Restore `config.yaml`, the audit database, TLS material, the systemd drop-in, the cluster store (`clusters.d/` and `cluster-certs/`) and the recorded ownership and modes verbatim — a deliberately narrowed permission is never widened back to a script default. The store is restored *before* the migration runs, so an existing one is never overwritten by the example |
-| 11–12| Config migration — the `clusters:` block moves out of `config.yaml` — then the permission boundary is **measured** as the `topic-manager` principal (it must be able to write `clusters.d`, and must not be able to write `config.yaml` or its directory; either failure fails the upgrade), then start and verify: health, reported version, effective access, and the security headers on every route class |
+| 10   | Restore `config.yaml`, the audit database, TLS material, the systemd drop-in, the cluster store (`clusters.d/` and `cluster-certs/`) and the recorded ownership and modes verbatim — a deliberately narrowed permission is never widened back to a script default. The store is restored *before* the migration runs. The one deliberate exception to "verbatim": `data/` and `tm.db` are set to **0700 / 0600** after the replay, because a v1.0.x baseline records 0644 for the audit database |
+| 11–12| Config migration — the `clusters:` block moves out of `config.yaml` — and `nginx.conf`'s `ssl_protocols` set to `TLSv1.2 TLSv1.3` (backed up, `nginx -t`, put back on failure); then the permission boundary is **measured** as the `topic-manager` principal (it must be able to write `clusters.d`, and must not be able to write `config.yaml` or its directory; either failure fails the upgrade), then start and verify: health, reported version, effective access, and the security headers on every route class |
 
 ### What the upgrade needs, and what it will ask you
 
@@ -600,7 +520,7 @@ back. What it needs is *access*, not answers:
 | Needs | Why | If you cannot grant it |
 |-------|-----|------------------------|
 | **root** (`sudo bash`) | writes `/opt`, `/etc`, `/var`, the unit and the nginx site | it refuses immediately: `Run with sudo` |
-| **Outbound HTTPS to `github.com`** | clones the target source (`--depth 1`) | use `--offline` with a prepared bundle |
+| **A source URL and outbound access to it** | online mode clones the target source (`--depth 1`) from the git URL you give with `--repo-url` (or `TM_REPO_URL`). There is no default: without one, an online run stops before anything changes and says so | use `--offline` with a prepared bundle |
 | **Outbound HTTPS to `pypi.org`** | installs the pins from `requirements.txt` | use `--offline`; it also auto-detects and degrades |
 | **`apt`** | `apt full-upgrade` for nginx, OpenSSL, python3, krb5, kernel | use `--skip-os` to upgrade the app only |
 | **systemd** | stop/start `topic-manager`, reload nginx | none — this is required |
@@ -659,9 +579,9 @@ sudo apt-get install -y git
 # directory owns what root then runs out of it, and `git clone` into an
 # existing empty directory succeeds without noticing who made it.
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/upgrade-src
-sudo git clone https://github.com/ymxplusb/Topic-Manager.git   /var/lib/topic-manager/upgrade-src
+sudo git clone --branch v<version> --depth 1 <your-git-url>   /var/lib/topic-manager/upgrade-src
 cd /var/lib/topic-manager/upgrade-src
-sudo bash install/upgrade-full.sh --audit-only
+sudo bash install/upgrade-full.sh --audit-only --repo-url <your-git-url> --repo-branch v<version>
 ```
 `--audit-only` changes nothing and exits **0** clear, **1** warnings only, **2** blockers present. Resolve every blocker before going further — they are the failures that otherwise appear an hour later as "nobody can log in".
 
@@ -673,7 +593,7 @@ sudo bash install/upgrade-full.sh --list-backups
 
 **Step 5 — Run the upgrade:**
 ```bash
-sudo bash install/upgrade-full.sh
+sudo bash install/upgrade-full.sh --repo-url <your-git-url> --repo-branch v<version>
 ```
 Useful flags: `--dry-run` (audit + plan, no changes), `--skip-os` (application and dependencies only), `--offline` (see below), `--force` (proceed past blockers — the backup is still taken first).
 
@@ -681,7 +601,7 @@ Useful flags: `--dry-run` (audit + plan, no changes), `--skip-os` (application a
 
 1. Verify LDAPS cert is trusted:
 ```bash
-openssl s_client -connect your-dc.yourdomain.com:636 \
+openssl s_client -connect <dc-host>:636 \
   -CAfile /etc/ssl/certs/ca-certificates.crt </dev/null 2>&1 | grep "Verify return code"
 # Expected: Verify return code: 0 (ok)
 ```
@@ -689,8 +609,8 @@ If not 0: `sudo cp your-internal-ca.crt /usr/local/share/ca-certificates/ && sud
 
 2. If `ldap_bind_password` in your config is a real value (not `CHANGE_ME`), verify the service account works:
 ```bash
-ldapwhoami -H ldaps://your-dc.yourdomain.com:636 \
-  -D "CN=svc-account,OU=ServiceAccounts,DC=yourdomain,DC=com" -w "PASSWORD" -x
+ldapwhoami -H ldaps://<dc-host>:636 \
+  -D "<service-account-dn>" -W -x
 # Expected: dn:CN=svc-account,...
 ```
 If `ldap_bind_password` is `CHANGE_ME`, auth falls back to direct user bind — login works without any changes.
@@ -772,24 +692,25 @@ On an **internet-connected** machine with the repo checked out:
 
 ```bash
 bash prepare-offline.sh --bundle
-# Creates: topic-manager-offline-1.0.6.tar.gz
-# Contains: all source files + Python wheels + Vue.js lib
+# Creates: ../topic-manager-offline-<version>.tar.gz and its .sha256
+# Contains: the COMMITTED tree (git archive) + Python wheels + Vue.js + runtime .debs
 ```
 
-Transfer the bundle to the air-gapped host:
-```bash
-scp topic-manager-offline-1.0.6.tar.gz user@target:/tmp/
-```
+Run it on an Ubuntu 24.04 machine of the target's architecture. The bundle is built from
+`git archive` of HEAD — never the working directory — so the repository's own records
+(`.claude/`, `.work/`) and untracked files cannot ship, and `tools/check-env-neutral.sh
+--bundle` deletes it if anything internal or site-specific got in.
 
 On the air-gapped host — root runs `install.sh`, so the tree it runs from is
 created root-owned first and the bundle is unpacked straight into it:
 ```bash
+sha256sum -c topic-manager-offline-<version>.tar.gz.sha256
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/install-src
-sudo tar xzf /tmp/topic-manager-offline-1.0.6.tar.gz   -C /var/lib/topic-manager/install-src --strip-components=1
-sudo bash /var/lib/topic-manager/install-src/install.sh   # auto-detects offline mode
+sudo tar xzf topic-manager-offline-<version>.tar.gz   -C /var/lib/topic-manager/install-src --strip-components=1
+sudo bash /var/lib/topic-manager/install-src/install.sh --ldap-url ... --ldap-base-dn ... --ldap-group ...
 ```
 
-Continue from [Step 3 — Edit the config](#step-3--edit-the-config) above.
+It auto-detects offline mode. See [docs/INSTALL.md](docs/INSTALL.md) section 5.
 
 ---
 
@@ -816,7 +737,7 @@ Key settings:
 | Setting | Description |
 |---------|-------------|
 | `server.secret_key` | Flask session secret — auto-generated on install, do not change |
-| `auth.ldap_server` | LDAPS endpoint, e.g. `ldaps://dc1.yourdomain.com:636` |
+| `auth.ldap_server` | LDAPS endpoint, e.g. `ldaps://dc1.example.org:636` |
 | `auth.ldap_ca_cert` | Path to CA bundle; leave blank to use system trust store |
 | `auth.ldap_bind_dn` | **Optional.** Full DN of a service account used for directory searches. Leave empty for the direct user bind |
 | `auth.ldap_bind_password` | **Optional.** Service account password. If both fields are set they must work — every login is gated on that bind |
@@ -918,8 +839,10 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
 ## Compliance
 
 - HTTPS enforced (HTTP → 301 redirect)
-- TLS 1.2 / 1.3 only; strong cipher suite
-- HTTPOnly + Secure + SameSite=Lax session cookies
+- TLS 1.2 / 1.3 only — in the site AND at the http level of `/etc/nginx/nginx.conf`, which install and upgrade manage (stock Ubuntu enables TLS 1.0/1.1 there). FIPS-approved ciphers only: TLS 1.2 ECDHE with AES-GCM and SHA-256/384; TLS 1.3 AES-GCM suites; curves P-384/P-256; session tickets off; `server_tokens off`
+- Runs on a STIG'd, FIPS-mode Ubuntu 24.04 host. Known limitation: the `cryptography` and `confluent-kafka` wheels bundle their own OpenSSL, outside the host's validated module — see `SBOM.md` and docs/INSTALL.md section 10
+- Audit database `tm.db` 0600 in a 0700 directory, owned by the service account; `UMask=0077` on the unit
+- HTTPOnly + Secure + SameSite=Lax session cookies, signed with HMAC-SHA-256
 - Security headers on all routes: HSTS, CSP (`frame-ancestors 'none'`, `form-action 'none'`, `base-uri 'self'`), X-Content-Type-Options, Referrer-Policy
 - Server-side session store (SQLite); session tokens never leave the server in a readable form
 - Audit log with user, IP, timestamp and detail. **16 audited actions** (derived from `tm/routes.py` with the AST method in `.claude/project.yml`, not by grep): topics (`CREATE`, `DELETE`, `UPDATE_CONFIG`); cluster profiles (`CLUSTER_CREATE`, `CLUSTER_UPDATE`, `CLUSTER_DELETE`, before and after); application settings (`SETTINGS_UPDATE` — the banner and consent settings, naming the keys that changed and never their values; new in v1.1.0); service restarts (`SERVICE_RESTART`, `SERVICE_RESTART_STEP`, `SERVICE_RESTART_REFUSED`, `SERVICE_RESTART_THROTTLED`); and authentication (`LOGIN`, `LOGIN_FAILED`, `LOGIN_REFUSED`, `LOGOUT`, `SESSION_EXPIRED`). A `LOGOUT` row says in its detail whether the person signed out or the idle timeout did it, so the two are distinguishable in the export. SASL passwords are redacted and certificate paths reduced to basenames before anything is logged, because any authenticated user can export the log

@@ -149,6 +149,43 @@ These all happen in Phases 1–4, before a single file is replaced. The install 
 | `Unit drop-in ... did not reach the backup` | A file in `/etc/systemd/system/topic-manager.service.d/` was not captured. It may hold `TM_SECRET_KEY`; a restore without it returns a service that refuses to start |
 | `requirements.txt has no pin for: X` / `pins X, which no Phase 8 install stage handles` | `requirements.txt` in the source tree and the install stages disagree. Fix the file — do not pin by hand on the host |
 | `requirements.txt: 'X' is not an exact == pin` | Every dependency must be pinned exactly, or the offline bundle and the online install cannot be the same thing |
+| `Online upgrade, but no source repository was given.` | Since v1.1.0 the script has **no built-in source**. Pass the git URL your site publishes the release at — `--repo-url <url> [--repo-branch <tag>]`, or `TM_REPO_URL` / `TM_REPO_BRANCH` — or use `--offline` with a staged bundle. Printed in Phase 1, before any backup; `--audit-only`, `--dry-run` and `--backup-only` never fetch and are not refused |
+| `--repo-url '...' is not an https://, ssh:// or git@ URL` / `--repo-branch '...' is not a branch or tag name` | The value is refused before it reaches `git clone`, including anything that starts with `-` |
+| `Refusing to upgrade: config.yaml does not name its directory (...)` | See *The directory settings are missing* below. `--force` does **not** override this one |
+
+### The directory settings are missing (`directory settings in config.yaml  missing: ...`)
+
+Reported as a BLOCK by the audit, and a refusal by `install.sh` on a reinstall:
+`/etc/topic-manager/config.yaml has no value for: ldap_server ldap_base_dn ldap_domain`.
+
+Before v1.1.0, `tm/auth.py` filled `auth.ldap_server`, `ldap_base_dn` and `ldap_domain` in from
+built-in defaults that belonged to one particular site, so a config that omitted them kept
+working without anyone noticing. v1.1.0 has **no** directory defaults; upgrading such a host
+unchanged would stop every sign-in. Add the keys with **your** directory's values, then re-run:
+
+```yaml
+auth:
+  ldap_server:  "ldaps://dc1.example.org:636"
+  ldap_base_dn: "DC=example,DC=org"
+  ldap_domain:  "example.org"
+```
+
+A value still reading `<placeholder>` (as in `config/config.yaml.example`) counts as missing.
+`--force` does not override this blocker: there is no host on which proceeding helps.
+
+### `directory settings in config.yaml  could not be checked (...)`
+The interpreter the audit uses (the service venv, else `python3`) could not read `config.yaml`
+with PyYAML — a YAML error, or `python3` without `python3-yaml` on a host with no venv. Fix the
+cause and re-run; it is not assumed to be fine.
+
+### `tm.db mode  0644 — this upgrade sets tm.db 0600 and data/ 0700` (WARN)
+Informational. Since v1.1.0 the audit database is private to the service account. The upgrade
+narrows it in Phase 10 **after** replaying the recorded baseline (which, on a v1.0.x host,
+records 0644), and Phase 12 measures the result.
+
+### `nginx.conf ssl_protocols  TLSv1 TLSv1.1 TLSv1.2 TLSv1.3 — this upgrade removes TLSv1/TLSv1.1` (WARN)
+Informational: stock Ubuntu enables TLS 1.0/1.1 at the http level. Phase 11 rewrites the line —
+see *nginx.conf management* below.
 
 ---
 
@@ -160,8 +197,10 @@ the backup it verified in Phase 4, then reports the health of what it restored. 
 before doing anything by hand.
 
 ### `git clone failed`
+The clone is from the URL given with `--repo-url` (there is no default). Test it by hand, as
+root, the same way:
 ```bash
-curl -s https://github.com >/dev/null && echo OK
+sudo git ls-remote --heads <your-git-url>
 ```
 If the host is air-gapped, use the offline procedure in README.md → *Offline (air-gapped)
 upgrade*. The bundle must be at `/var/lib/topic-manager/offline-src`.
@@ -631,9 +670,13 @@ sudo grep -n '^clusters:' /etc/topic-manager/config.yaml
   with `config.yaml still carries a clusters: block; it is IGNORED` in the log. Two files
   claiming to hold the cluster list is the shadowing the split exists to prevent: delete the
   block from `config.yaml`, or re-run the migration, which removes it.
+- **`clusters: []` on a new install** — expected since v1.1.0. A fresh install starts with
+  **no** cluster profiles (the example file is a format reference, never live clusters), and
+  the Topics tab says `No cluster profile is configured yet. Add one in Settings > General >
+  Cluster Profiles.` Add one there.
 - **Neither present** — nothing resolves. Restore `clusters.yaml` from the most recent
   backup (`/var/backups/topic-manager/<TIMESTAMP>/etc/clusters.d/clusters.yaml`), or run the
-  migration with `--example` as below.
+  migration as below, which creates an empty store you then fill in Settings.
 
 ---
 
@@ -663,7 +706,7 @@ What it prints:
 | `removed the clusters: block from ...` | `config.yaml` was rewritten, comments preserved |
 | `already migrated (N profile(s) in ...)` | Nothing to do. **This is a success**, not a warning |
 | `clusters.yaml already holds N profile(s); the stale block in config.yaml is being removed` | Both files had a list. The new file wins; the dead block goes |
-| `neither ... carries any cluster profile, and no example was given` | It refuses to write an empty list. Add `--example <source tree>/config/clusters.yaml.example` |
+| `created an empty cluster store at ... — add clusters in Settings > General > Cluster Profiles` | A host with neither a store nor a `clusters:` block. Expected on a fresh install since v1.1.0; `--example` no longer exists |
 | `... STILL has a clusters: key after migration — refusing to report success` | The rewrite did not take. Do not carry on; check the file and the disk |
 | `%s does not exist. The installer creates it with install(1)` | Create `clusters.d` first, with the `install -d` line above |
 
@@ -677,6 +720,97 @@ that cannot read its own secret. Confirm afterwards:
 sudo ls -l /etc/topic-manager/config.yaml    # -rw-r----- root topic-manager
 sudo grep -n '^clusters:' /etc/topic-manager/config.yaml   # no output
 ```
+
+---
+
+## nginx.conf management (v1.1.0)
+
+`install.sh` and the upgrade set every active `ssl_protocols` line in `/etc/nginx/nginx.conf`
+to `ssl_protocols TLSv1.2 TLSv1.3; # managed by Topic Manager: TLS 1.2/1.3 only` (or add one
+at the top of `http {`). The file is backed up first — `install.sh` to
+`/var/backups/topic-manager/nginx.conf.before-install-<TS>`, the upgrade to
+`<backup>/system/nginx.conf.before-tls-edit` (and the whole file is in the Phase 4 restore
+point, which `--restore` and the automatic rollback put back).
+
+| Message | Meaning |
+|---|---|
+| `nginx -t failed after setting ssl_protocols in /etc/nginx/nginx.conf, so the original was put back` | The edit itself broke the configuration (very unusual). The original is in place and nginx -t passes with it. The message includes nginx's own output |
+| `nginx -t fails with OR without the TLS edit, so the problem is elsewhere` | Not this edit — often a missing certificate or another site. nginx.conf was put back as it was; fix the other fault and re-run |
+| `... has an ssl_protocols directive that does not end on its own line` | Refused rather than rewritten blind. Put it on one line and re-run |
+| `/etc/nginx/nginx.conf is a symlink; refusing to edit through it` | Replace the link with the real file, or edit it yourself to `ssl_protocols TLSv1.2 TLSv1.3;` |
+
+Check it: `grep -E '^\s*ssl_protocols' /etc/nginx/nginx.conf`, and
+`openssl s_client -connect localhost:443 -tls1_1 </dev/null` must fail the handshake.
+
+---
+
+## FIPS-mode hosts
+
+- **Supported.** nginx TLS uses the host's OpenSSL (the validated FIPS provider when FIPS mode
+  is on) and the cipher list is FIPS-approved only; the session cookie is HMAC-SHA-256; LDAPS
+  uses Python's `ssl` (host OpenSSL), SIMPLE bind only; secrets come from the kernel CSPRNG.
+- **Known limitation, not a failure: the module boundary.** The `cryptography` and
+  `confluent-kafka` wheels bundle their **own** OpenSSL, which is not the host's validated
+  module. `cryptography` parses PEM certificates uploaded in the Cluster Builder;
+  `confluent-kafka` (librdkafka) makes the TLS connection to SSL/SASL_SSL Kafka brokers. Both
+  run on a FIPS host; their cryptography is outside the validated boundary. Record it as an
+  accepted limitation, or keep the Kafka path inside a boundary your accreditation already
+  covers.
+- **A browser cannot connect after FIPS mode is enabled.** The client offered only suites
+  outside the list (ChaCha20, CBC, X25519-only). Any current browser offers AES-GCM with
+  P-256; check with `openssl s_client -connect <host>:443 -tls1_2`.
+- **`openssl could not generate a self-signed certificate`** on install — confirm
+  `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -sha256 ...` works by hand;
+  it is FIPS-approved. Or supply your own pair with `--tls-cert/--tls-key`.
+
+---
+
+## The audit database mode (tm.db 0600, data/ 0700)
+
+- **`/opt/topic-manager/data/tm.db is '644 topic-manager', expected '600 topic-manager'`**
+  (install) or **`/opt/topic-manager/data/tm.db is ..., expected 600 topic-manager`** (upgrade
+  Phase 12, which then rolls back). Something re-widened it after the enforcement ran — a
+  restore by hand, or an ACL/MAC policy. Check `getfacl` on the directory; fix with
+  `sudo chown topic-manager:topic-manager /opt/topic-manager/data/tm.db && sudo chmod 600
+  /opt/topic-manager/data/tm.db && sudo chmod 700 /opt/topic-manager/data`.
+- **`/opt/topic-manager/data/tm.db is a symlink; refusing to chown or chmod through it`** — the
+  application owns `data/`, so a link there would let it choose what root re-modes. The real
+  database is a regular file; find out how the link got there before removing it.
+- The service itself creates the file 0600 (and narrows an older one at start-up) and runs
+  with `UMask=0077`, so SQLite's `-wal`/`-journal` siblings are 0600 too.
+
+---
+
+## Sign-in fails with "Sign-in is not configured on this server: auth.... missing from config.yaml"
+
+The application found no value for a required directory key. It no longer falls back to any
+built-in directory. Add the key(s) named (see *The directory settings are missing* above) and
+`sudo systemctl restart topic-manager`. The same line is in the service log.
+
+## Everyone was signed out by the upgrade
+
+Expected once, after upgrading to v1.1.0: the session cookie is now signed with HMAC-SHA-256
+instead of Flask's SHA-1 default, so cookies signed before the upgrade no longer validate.
+Sign in again.
+
+---
+
+## Fresh install (install.sh)
+
+| Message | What to do |
+|---|---|
+| `Cannot write /etc/topic-manager/config.yaml: no value for --ldap-url ...` | Pass the directory flags (see `sudo bash install.sh --help`) or run on a terminal to be prompted. Nothing was installed |
+| `--ldap-url must be ldaps://<host>[:<port>]` | Plain `ldap://` is not supported; certificate validation is enforced |
+| `Offline, and these packages are missing: ...` | The bundle has no `.deb` for them. Install from the host's own mirror, or rebuild the bundle with `prepare-offline.sh` on Ubuntu 24.04 of the same architecture |
+| `Offline package install failed` | The bundled `.deb`s do not fit this host (release or architecture). Same remedy |
+| `--tls-cert and --tls-key are not a matching certificate/key pair` | The two files are not a pair, or one could not be read. Compare `openssl x509 -noout -pubkey -in <crt>` with `openssl pkey -pubout -in <key>` |
+| `nginx -t failed:` | nginx's own output follows. A fresh install always has a certificate now, so this is a real fault |
+| `topic-manager did not answer /api/health` | `sudo journalctl -u topic-manager -n 50 --no-pager` |
+
+### prepare-offline.sh: `The bundle failed the leak check above and was deleted`
+`tools/check-env-neutral.sh --bundle` found process records (`.claude/`, `.work/`), a scan
+report, or a site-specific name or address inside the bundle. It is built from `git archive`
+of HEAD, so the cause is in a **committed** file: fix it, commit, rebuild.
 
 ---
 
