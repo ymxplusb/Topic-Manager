@@ -196,6 +196,24 @@ Adversary and security-review findings, all fixed on this branch before release:
   with the real apt against a target that has the old sibling installed: no removal with the
   expansion, a named refusal without it.
 
+### Round 5 (real-host install, 2026-09-26)
+
+- **The firewall step no longer kills the install on a host with ufw active.** Measured on the
+  real STIG + FIPS host with the round-4 bundle: packages (357 lockstep siblings added, `gcc-14`
+  over the bound and not expanded), venv, backend, frontend, config, cluster store, systemd,
+  polkit, the nginx site, the self-signed ECDSA certificate and the nginx.conf TLS edit all
+  succeeded, then `ufw --quiet allow 80/tcp` answered `ERROR: Invalid syntax` and the install
+  exited 1. ufw has no `--quiet` option; the line had been there since v1.0.6, so every host with
+  ufw active (every STIG host) failed at that step. `install.sh` now runs `ufw allow 80/tcp` and
+  `ufw allow 443/tcp` with their output captured, checks each exit code, and on a failure warns
+  with ufw's reason and the command to run instead of claiming the ports are open. The ufw
+  status is read whole rather than piped to `grep -q`. With the flag removed on the host, a
+  reinstall ran to `install complete — running`, `/api/health` answered
+  `{"status":"ok","version":"1.1.0"}`, tm.db was 0600 and the boundary check passed. No other
+  invalid ufw option exists in the scripts or docs. t27 runs the firewall step against a stub
+  that rejects unknown options exactly as real ufw does (checked against real ufw with
+  `--dry-run`).
+
 ### Known limitations
 
 - **FIPS module boundary**: the `cryptography` and `confluent-kafka` wheels bundle their own

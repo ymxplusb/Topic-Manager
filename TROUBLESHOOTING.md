@@ -867,6 +867,7 @@ Sign in again.
 | `Cannot check /etc/topic-manager/config.yaml before changing anything` | Neither the existing venv nor `python3` can import PyYAML. `sudo apt install python3-yaml` and re-run; nothing was changed |
 | `--tls-cert and --tls-key are not a matching certificate/key pair` | The two files are not a pair, or one could not be read. Compare `openssl x509 -noout -pubkey -in <crt>` with `openssl pkey -pubout -in <key>` |
 | `nginx -t failed:` | nginx's own output follows. A fresh install always has a certificate now, so this is a real fault |
+| `ufw is active but could NOT open: 443/tcp (<ufw's reason>)` (WARN) | Everything else was installed, but the site is unreachable through the firewall until the rule exists. Read ufw's reason, then `sudo ufw allow 80/tcp; sudo ufw allow 443/tcp` and `sudo ufw status`. (Before v1.1.0 round 5 the install instead died here with ufw's `ERROR: Invalid syntax` on every host with ufw active — it passed ufw an option ufw does not have. Re-run the fixed `install.sh`; it is safe over a finished install) |
 | `topic-manager did not answer /api/health` | `sudo journalctl -u topic-manager -n 50 --no-pager` |
 
 ### prepare-offline.sh: `--bundle needs a git work tree` / `Not a git work tree`

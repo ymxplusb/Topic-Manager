@@ -1370,3 +1370,53 @@ TARGET|install
 EQUIV|no
 ANCHOR|        [[ -z "$why" ]] || die "The offline bundle could not supply $* (apt exit ${rc}); nothing was
 REPLACE|        true || die "The offline bundle could not supply $* (apt exit ${rc}); nothing was
+
+# ─── round 5: the firewall step (t27) ────────────────────────────────────────
+
+--- M168
+DESC|install: THE ROUND-5 DEFECT — ufw is given --quiet again (it has no such option)
+TESTS|t27-firewall.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        out="$(ufw allow "$port" 2>&1)" || failed="${failed} ${port} (${out%%$'\n'*})"
+REPLACE|        out="$(ufw --quiet allow "$port" 2>&1)" || failed="${failed} ${port} (${out%%$'\n'*})"
+
+--- M169
+DESC|install: a failed ufw rule is ignored
+TESTS|t27-firewall.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        out="$(ufw allow "$port" 2>&1)" || failed="${failed} ${port} (${out%%$'\n'*})"
+REPLACE|        out="$(ufw allow "$port" 2>&1)" || true
+
+--- M170
+DESC|install: ufw's output is no longer kept quiet
+TESTS|t27-firewall.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        out="$(ufw allow "$port" 2>&1)" || failed="${failed} ${port} (${out%%$'\n'*})"
+REPLACE|        ufw allow "$port" || failed="${failed} ${port} (${out%%$'\n'*})"
+
+--- M171
+DESC|install: ports are claimed open whatever happened
+TESTS|t27-firewall.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if [[ -z "$failed" ]]; then
+REPLACE|    if true; then
+
+--- M172
+DESC|install: rules are added to an INACTIVE firewall
+TESTS|t27-firewall.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ "$st" == *"Status: active"* ]] || return 0
+REPLACE|    true
+
+--- M173
+DESC|install: a failed rule ends the install
+TESTS|t27-firewall.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        warn "ufw is active but could NOT open:${failed}"
+REPLACE|        die "ufw is active but could NOT open:${failed}"

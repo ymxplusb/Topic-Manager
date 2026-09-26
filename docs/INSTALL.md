@@ -336,7 +336,9 @@ covered by the host's validated module:
 
 ## 11. Firewall
 
-If `ufw` is active, `install.sh` opens 80/tcp and 443/tcp. Otherwise open them yourself, and
+If `ufw` is active, `install.sh` opens 80/tcp and 443/tcp (`ufw allow 80/tcp`, `ufw allow
+443/tcp`). If ufw refuses a rule, the install finishes with a warning naming the port and ufw's
+reason, and does not claim the ports are open. Otherwise open them yourself, and
 nothing else is needed inbound except SSH for administration. The complete inventory is
 `PPSM.csv`.
 

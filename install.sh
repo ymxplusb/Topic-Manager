@@ -1015,12 +1015,32 @@ manage_nginx_ssl_protocols /etc/nginx/nginx.conf \
     "${BACKUP_ROOT}/nginx.conf.before-install-$(date +%Y%m%d-%H%M%S)"
 
 # ─── firewall ────────────────────────────────────────────────────────────────
-if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
+# open_firewall_ports — open 80/tcp and 443/tcp when ufw is ACTIVE.
+# Round 5, MEASURED on the real STIG + FIPS host (every STIG host has ufw
+# active): the old `ufw --quiet allow 80/tcp` failed with "ERROR: Invalid
+# syntax" — ufw has NO --quiet option — and killed the install at its last
+# step. Output is discarded by redirection instead, and each rule's exit code
+# is checked: a rule that fails is a loud warning naming the command to run,
+# never a "ports open" claim. Not fatal: everything else is installed by now.
+# The status is read whole and matched in-shell, not piped to grep -q, which
+# under pipefail can SIGPIPE ufw and read an active firewall as inactive.
+open_firewall_ports() {
+    local port out failed="" st
+    command -v ufw >/dev/null 2>&1 || return 0
+    st="$(ufw status 2>/dev/null || true)"
+    [[ "$st" == *"Status: active"* ]] || return 0
     info "Opening firewall ports 80 and 443..."
-    ufw --quiet allow 80/tcp
-    ufw --quiet allow 443/tcp
-    success "Firewall ports 80/443 open"
-fi
+    for port in 80/tcp 443/tcp; do
+        out="$(ufw allow "$port" 2>&1)" || failed="${failed} ${port} (${out%%$'\n'*})"
+    done
+    if [[ -z "$failed" ]]; then
+        success "Firewall ports 80/443 open"
+    else
+        warn "ufw is active but could NOT open:${failed}"
+        warn "  The site is unreachable until you run: sudo ufw allow 80/tcp; sudo ufw allow 443/tcp"
+    fi
+}
+open_firewall_ports
 
 # ─── logrotate ───────────────────────────────────────────────────────────────
 info "Installing logrotate config..."
