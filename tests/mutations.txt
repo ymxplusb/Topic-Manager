@@ -1323,7 +1323,7 @@ EQUIV|no
 ANCHOR|            BOUND) bound_list+=("${what}: ${src} binaries") ;;
 REPLACE|            BOUND) true ;;
 
---- M163
+--- M162
 DESC|install: the REMOVED block is never read, so a forced removal gets the generic message
 TESTS|t23-offline-apt.sh t26-bundle-siblings.sh
 TARGET|install
@@ -1331,7 +1331,7 @@ EQUIV|no
 ANCHOR|    removed="$(apt_plan_names "$plan" REMOVED)"
 REPLACE|    removed=""
 
---- M164
+--- M163
 DESC|install: the upgraded sources are never read, so every removal is called collateral
 TESTS|t23-offline-apt.sh t26-bundle-siblings.sh
 TARGET|install
@@ -1339,7 +1339,7 @@ EQUIV|no
 ANCHOR|            [[ -n "$src" ]] && upsrc["$src"]=1
 REPLACE|            true
 
---- M165
+--- M164
 DESC|install: a removal is called a sibling whatever its source
 TESTS|t23-offline-apt.sh
 TARGET|install
@@ -1347,7 +1347,7 @@ EQUIV|no
 ANCHOR|        if [[ -n "$src" && -n "${upsrc[$src]:-}" ]]; then
 REPLACE|        if [[ -n "$src" ]]; then
 
---- M166
+--- M165
 DESC|install: the purge marker (*) is kept on a removed name
 TESTS|t23-offline-apt.sh
 TARGET|install
@@ -1355,7 +1355,7 @@ EQUIV|no
 ANCHOR|        on && /^  /   { for (i = 1; i <= NF; i++) { n = $i; sub(/\*$/, "", n); print n }; next }
 REPLACE|        on && /^  /   { for (i = 1; i <= NF; i++) { n = $i; print n }; next }
 
---- M167
+--- M166
 DESC|install: only the first line of a wrapped package list is read
 TESTS|t23-offline-apt.sh
 TARGET|install
@@ -1363,7 +1363,7 @@ EQUIV|no
 ANCHOR|        on && /^  /   { for (i = 1; i <= NF; i++) { n = $i; sub(/\*$/, "", n); print n }; next }
 REPLACE|        on && /^  /   { for (i = 1; i <= NF; i++) { n = $i; sub(/\*$/, "", n); print n }; exit }
 
---- M168
+--- M167
 DESC|install: the removal explanation is computed but not used
 TESTS|t23-offline-apt.sh t26-bundle-siblings.sh
 TARGET|install
