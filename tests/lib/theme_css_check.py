@@ -119,3 +119,22 @@ print('cb_solid=%s' % (palettes['cb'].get('--aurora-field') == 'none'
 body = re.search(r'(?m)^body \{\n  font-family[^}]*\}', css)
 print('body_font_size=%s' % (re.search(r'font-size:\s*([^;]+);', body.group(0)).group(1) if body else 'MISSING'))
 print('radius=%s' % palettes['dark'].get('--radius', 'MISSING'))
+
+# Round 2 (adversary F9): the CB glyphs are PLACEMENT-NEUTRAL. The badge marker
+# keeps its 5x5 box (the glyph overflows it visually); every other glyph is
+# absolutely positioned, so it adds no width to its line.
+rules = re.findall(r'(\.cb-mode [^{}]*?::before)\s*\{([^}]*)\}', css)
+body = {sel.strip(): b for sel, b in rules}
+bad = []
+bdg = body.get('.cb-mode .bdg::before', '')
+if not (re.search(r'width:\s*5px', bdg) and re.search(r'height:\s*5px', bdg)) or 'width:auto' in bdg.replace(' ', ''):
+    bad.append('.cb-mode .bdg::before (marker box not kept at 5x5)')
+inherits = {'.cb-mode .stig.w::before': '.cb-mode .stig::before',
+            '.cb-mode .stig.r::before': '.cb-mode .stig::before'}
+for sel, b in body.items():
+    if 'content:' not in b.replace(' ', '') or sel.startswith('.cb-mode .bdg'):
+        continue
+    src = body.get(inherits.get(sel, sel), '')
+    if 'position:absolute' not in src.replace(' ', ''):
+        bad.append(sel)
+print('cb_placement=%s' % ('OK' if not bad else 'BAD ' + '; '.join(bad)))

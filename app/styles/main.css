@@ -650,19 +650,28 @@ select.fc option { background:var(--bg-card) }
    surfaces (set in THEME VARIABLES: no glass gradient, no aurora field).
    ══════════════════════════════════════════════════ */
 .cb-mode :focus-visible { outline:3px solid var(--accent-amber); outline-offset:2px }
-.cb-mode .bdg::before { width:auto; height:auto; border-radius:0; background:none !important; font-size:.62rem; line-height:1 }
+/* PLACEMENT-NEUTRAL (round 2, adversary F9). A glyph must not widen a badge or
+   push text: the owner's rule is no placement change in any mode. So a badge
+   keeps its 5x5 marker box and the glyph is drawn centred in it, overflowing
+   visually into the existing gap; every other glyph is positioned absolutely
+   against a parent made position:relative (which moves nothing), in space the
+   element already has — the card padding, or the pill's corner. */
+.cb-mode .bdg::before { width:5px; height:5px; display:inline-flex; align-items:center; justify-content:center;
+                        overflow:visible; border-radius:0; background:none !important; font-size:.6rem; line-height:0 }
 .cb-mode .bdg-ok::before   { content:'\2713'; color:var(--accent-green) }
 .cb-mode .bdg-warn::before { content:'!';     color:var(--accent-amber) }
 .cb-mode .bdg-int::before  { content:'\2022'; color:var(--text-muted) }
-.cb-mode .lag-tag::before  { content:'\2715\00a0' }
-.cb-mode .lag-hi::before   { content:'!\00a0' }
-.cb-mode .lag-ok::before   { content:'\2713\00a0' }
-.cb-mode .stat-card .sub.ok::before   { content:'\2713\00a0' }
-.cb-mode .stat-card .sub.warn::before { content:'!\00a0' }
-.cb-mode .stat-card .sub.err::before  { content:'\2715\00a0' }
-.cb-mode .stig::before   { content:'\2713' }
-.cb-mode .stig.w::before { content:'!' }
-.cb-mode .stig.r::before { content:'\2715' }
-.cb-mode .login-err::before { content:'\2715\00a0' }
+.cb-mode .stat-card .sub, .cb-mode .stig, .cb-mode .lag-tag, .cb-mode .lag-hi,
+.cb-mode .lag-ok, .cb-mode .login-err { position:relative }
+.cb-mode .stat-card .sub.ok::before   { content:'\2713'; position:absolute; right:100%; margin-right:3px; top:0 }
+.cb-mode .stat-card .sub.warn::before { content:'!';     position:absolute; right:100%; margin-right:3px; top:0 }
+.cb-mode .stat-card .sub.err::before  { content:'\2715'; position:absolute; right:100%; margin-right:3px; top:0 }
+.cb-mode .lag-hi::before   { content:'!';     position:absolute; right:100%; margin-right:2px }
+.cb-mode .lag-ok::before   { content:'\2713'; position:absolute; right:100%; margin-right:2px }
+.cb-mode .lag-tag::before  { content:'\2715'; position:absolute; top:-.6em; right:-.5em; font-size:.55rem; line-height:1 }
+.cb-mode .stig::before     { content:'\2713'; position:absolute; top:-.6em; right:-.5em; font-size:.55rem; line-height:1 }
+.cb-mode .stig.w::before   { content:'!' }
+.cb-mode .stig.r::before   { content:'\2715' }
+.cb-mode .login-err::before { content:'\2715'; position:absolute; left:3px; top:8px }
 .cb-mode .ntab.act { text-decoration:underline; text-underline-offset:4px }
 .cb-mode .settings-rail-item.active { outline:2px solid var(--accent); outline-offset:-2px }

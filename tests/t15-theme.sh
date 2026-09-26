@@ -84,6 +84,9 @@ c_cb_cues() {
         "a status in colour-blind mode is carried by hue alone"
     tm_assert_eq "True" "$(_field "${TM_TMP}/css" cb_solid)" \
         "colour-blind mode still paints the glass gradient or the aurora field"
+    # Round 2 (adversary F9): no placement change in ANY mode, CB included.
+    tm_assert_eq "OK" "$(_field "${TM_TMP}/css" cb_placement)" \
+        "a colour-blind glyph can widen a badge or push text"
 }
 tm_case "cb-mode-has-glyph-cues-and-solid-surfaces" none c_cb_cues
 
