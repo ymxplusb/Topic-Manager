@@ -295,7 +295,17 @@ gates:
       README/INSTALL/SBOM, the newest CHANGELOG section) equals VERSION, and
       all 16 ?v= tokens equal the derived token. Its first run reported 13
       stale surfaces against VERSION 1.0.11. Red-proofed in t22.
-  - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-09-26, note: "t00-t22. 2026-09-26: local (Git Bash + a venv of requirements.txt) 145+ pass, mode/chown cases SKIP loudly; Linux host via --remote --strict 155 pass / 0 fail with only the node cases skipped (node is absent there) — the two runs are complementary. Mutation controls M01-M87 in tests/mutations.txt (tests/mutate.sh, --remote for the mode cases). One workstation-only artefact: t12's route case fails under Git Bash because MSYS rewrites the db path in an env var but not in the YAML; it passes on Linux and CI." }
+  - name: requirements-lock
+    cmd: "bash tools/check-requirements-lock.sh"
+    verified: 2026-09-26
+    note: >-
+      requirements.lock (tools/gen-requirements-lock.py) pins every Python
+      package incl. transitive ones with the sha256 of every published wheel;
+      every installer uses it with --require-hashes --only-binary :all:. The
+      gate holds it to requirements.txt and refuses unhashed/malformed/duplicate
+      entries. After changing a pin: regenerate, commit, re-run sca (which now
+      queries the transitive pins too). Red-proofed in t25.
+  - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-09-26, note: "t00-t25. Round 2, 2026-09-26: Linux host via --remote --strict (ships git archive HEAD) 210+ pass / 0 fail, only the 'needs node' cases skip (node absent there; the workstation run covers them). Mutation controls M01-M107 (tests/mutate.sh --remote): all killed except 4 documented equivalents. Workstation-only artefact: t12's route case can fail under Git Bash (MSYS path conversion); passes on Linux and CI." }
 
 gate_verification:
   - "A gate must assert its own COVERAGE, not just agreement. Guarding on
@@ -608,6 +618,23 @@ hazards:
       export-ignore — which must name the directory AND its /** contents, or
       git archive still emits the empty directories (measured) — and
       tools/check-env-neutral.sh --bundle deletes a leaky bundle.
+
+  - id: offline-bundle-is-a-repository
+    note: >-
+      MEASURED 2026-09-26 on a real STIG (USG) + FIPS Ubuntu 24.04.4 host: the
+      bundle's .deb closure includes every alternative provider, and handing
+      apt the raw list failed ("pkgProblemResolver::Resolve generated breaks").
+      The bundle is now an indexed apt repository used through a private,
+      pinned (priority 1), --no-download apt config, asking only for missing
+      top-level packages, so a FIPS library is never replaced. Never go back
+      to passing .deb paths to apt/dpkg (t23 asserts it).
+
+  - id: online-clone-must-be-pinned
+    note: >-
+      Root runs what the online upgrade clones. A branch or tag is movable, so
+      --repo-commit <40-hex> is mandatory with --repo-url and HEAD is compared
+      with it before any byte of the tree is read (t20). Signed-tag
+      verification is a follow-up.
 
   - id: agent-heredoc-backslashes
     note: >-
