@@ -332,7 +332,9 @@ a_removal_names_siblings() {
     tm_assert_grep "Lockstep siblings missing from the bundle: libpython3.12t64 (source python3.12)" "${TM_TMP}/out" \
         "the refusal does not name the lockstep sibling the bundle lacks"
     tm_assert_grep "Would be removed with them (they depend on them): linux-tools-6.8.0-142-fips ubuntu-server vim" "${TM_TMP}/out" \
-        "the collateral removals are not told apart from the missing sibling (or the purge marker was kept)"
+        "the collateral removals are not told apart from the missing sibling"
+    # (apt's own listing, echoed above the message, legitimately carries "vim*")
+    grep -q 'depend on them): .*vim\*' "${TM_TMP}/out" && _tm_afail "apt's purge marker (*) was kept on a package name"
     tm_assert_grep "FULLY PATCHED" "${TM_TMP}/out" "the refusal does not point at rebuilding the bundle on a fully patched host"
     tm_assert_grep "nothing was" "${TM_TMP}/out" "the refusal does not say nothing changed"
     [ -z "$(_install_call)" ] || _tm_afail "the install ran after a refused resolution"
