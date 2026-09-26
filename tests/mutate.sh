@@ -71,15 +71,17 @@ if [ -n "$REMOTE" ]; then
     [ -n "${TM_SSH_KEY:-}" ] && SSH_OPTS+=(-i "$TM_SSH_KEY")
     RDIR="/tmp/tm-mutate-$(date +%Y%m%d-%H%M%S)"
     TAR="$(mktemp "${TMPDIR:-/tmp}/tm-mut.XXXXXX.tar")"
-    # Both scripts under test, plus the tree the covering cases import. The
-    # same list tests/run.sh --remote ships.
-    SHIP="tests tm app index.html config systemd nginx tools install.sh prepare-offline.sh install/upgrade-full.sh install/polkit README.md PPSM.csv VERSION requirements.txt"
-    ( cd "$TM_REPO_ROOT" && tar -cf "$TAR" $SHIP ) || exit 2
+    # HEAD via git archive, exactly as tests/run.sh --remote ships it (see the
+    # note there): every tracked file, LF endings, no process records, and a
+    # git work tree again on the far side. Commit before --remote.
+    DIRTY="$(git -C "$TM_REPO_ROOT" status --porcelain --untracked-files=no 2>/dev/null | wc -l)"
+    [ "${DIRTY:-0}" -eq 0 ] || echo "  NOTE: ${DIRTY} uncommitted change(s) are NOT in this run — it mutates HEAD $(git -C "$TM_REPO_ROOT" rev-parse --short HEAD)."
+    git -C "$TM_REPO_ROOT" archive --format=tar -o "$TAR" HEAD || exit 2
     ssh "${SSH_OPTS[@]}" "$REMOTE" "mkdir -p '$RDIR'" || exit 2
     scp -q "${SSH_OPTS[@]}" "$TAR" "${REMOTE}:${RDIR}/t.tar" || exit 2
     rm -f "$TAR"
     ssh "${SSH_OPTS[@]}" "$REMOTE" \
-        "cd '$RDIR' && tar -xf t.tar && find $SHIP -type f -exec sed -i 's/\r\$//' {} + && sudo -n PYTHONDONTWRITEBYTECODE=1 TM_NO_COLOUR=1 bash tests/mutate.sh ${WANT[*]:-}"
+        "cd '$RDIR' && tar -xf t.tar && rm -f t.tar && git init -q && git add -A && git -c user.name=tm-tests -c user.email=tm-tests@localhost commit -qm snapshot && sudo -n PYTHONDONTWRITEBYTECODE=1 TM_NO_COLOUR=1 bash tests/mutate.sh ${WANT[*]:-}"
     rc=$?
     echo "── remote mutation run exit ${rc}; tree left at ${REMOTE}:${RDIR}"
     exit $rc

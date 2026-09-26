@@ -64,24 +64,28 @@ if [ -n "$REMOTE" ]; then
     RDIR="/tmp/tm-tests-$(date +%Y%m%d-%H%M%S)"
     echo "${C_BLD}── shipping tests + install/upgrade-full.sh to ${REMOTE}:${RDIR}${C_OFF}"
     TAR="$(mktemp "${TMPDIR:-/tmp}/tm-tests.XXXXXX.tar")"
-    # The tree the cases drive: both scripts, the backend they import, the
-    # config examples, the nginx site and header snippet (t18), the gate tools,
-    # and the documents the consistency cases read. Shipping too little made
-    # t06/t07 die with ModuleNotFoundError on the remote host, which is a
-    # harness error, not a result.
-    SHIP="tests tm app index.html config systemd nginx tools install.sh prepare-offline.sh install/upgrade-full.sh install/polkit README.md PPSM.csv VERSION requirements.txt"
-    ( cd "$TM_REPO_ROOT" && tar -cf "$TAR" $SHIP ) \
-        || { echo "could not build the transfer tarball" >&2; exit 2; }
+    # WHAT IS SHIPPED IS HEAD, the way CI sees it (v1.1.0). `git archive`
+    # gives every tracked file — the cases read the docs, the gates, the
+    # PPSM, the SBOM and the CHANGELOG as well as the code — with LF endings
+    # already applied by .gitattributes (hazards[windows-clone-crlf]) and
+    # without the export-ignored process records. A hand-picked subset of
+    # paths went stale as soon as a new case read a new file (measured: five
+    # false failures on the first v1.1.0 remote run). Commit before --remote;
+    # uncommitted changes are NOT in the run, and it says so.
+    DIRTY="$(git -C "$TM_REPO_ROOT" status --porcelain --untracked-files=no 2>/dev/null | wc -l)"
+    [ "${DIRTY:-0}" -eq 0 ] || echo "${C_YEL}  NOTE: ${DIRTY} uncommitted change(s) to tracked files are NOT in this run — it tests HEAD $(git -C "$TM_REPO_ROOT" rev-parse --short HEAD).${C_OFF}"
+    git -C "$TM_REPO_ROOT" archive --format=tar -o "$TAR" HEAD \
+        || { echo "could not build the transfer tarball (git archive HEAD)" >&2; exit 2; }
     ssh "${SSH_OPTS[@]}" "$REMOTE" "mkdir -p '$RDIR'" || exit 2
     scp -q "${SSH_OPTS[@]}" "$TAR" "${REMOTE}:${RDIR}/t.tar" || exit 2
     rm -f "$TAR"
-    # CRLF: this repo is cloned on Windows (contract hazards[windows-clone-crlf]).
-    # A \r on a shebang line makes every script "not found" on Linux.
-    # PYTHONDONTWRITEBYTECODE: tm_python prefers the service's own venv on a
-    # host, and a root python importing from it must not write .pyc files
-    # into it — this run is read-only toward the installed product.
+    # The extracted tree is made a git work tree again, as a CI clone is, for
+    # the cases that ask git about it (t21). PYTHONDONTWRITEBYTECODE:
+    # tm_python prefers the service's own venv on a host, and a root python
+    # importing from it must not write .pyc files into it — this run is
+    # read-only toward the installed product.
     ssh "${SSH_OPTS[@]}" "$REMOTE" \
-        "cd '$RDIR' && tar -xf t.tar && find $SHIP -type f -exec sed -i 's/\r\$//' {} + && sudo -n PYTHONDONTWRITEBYTECODE=1 TM_NO_COLOUR=1 bash tests/run.sh --strict"
+        "cd '$RDIR' && tar -xf t.tar && rm -f t.tar && git init -q && git add -A && git -c user.name=tm-tests -c user.email=tm-tests@localhost commit -qm snapshot && sudo -n PYTHONDONTWRITEBYTECODE=1 TM_NO_COLOUR=1 bash tests/run.sh --strict"
     rc=$?
     echo "${C_BLD}── remote run exit ${rc}; tree left at ${REMOTE}:${RDIR}${C_OFF}"
     exit $rc
