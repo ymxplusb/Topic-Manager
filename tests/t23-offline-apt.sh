@@ -49,6 +49,8 @@ _driver() {
         echo 'die() { echo "[DIE] $*" >&2; exit 1; }; info() { echo "[INFO] $*"; }'
         echo 'NON_INTERACTIVE="${T_NONINT:-true}"'
         tm_extract_func "$INSTALL_SH" apt_fips_packages
+        tm_extract_func "$INSTALL_SH" apt_plan_names
+        tm_extract_func "$INSTALL_SH" apt_removal_reason
         tm_extract_func "$INSTALL_SH" apt_install_from_bundle
         echo 'apt_install_from_bundle "$@"'
         echo 'echo RETURNED'
@@ -91,6 +93,9 @@ cat "${TM_TMP}/policy.out"
 STUB
     cat > "${TM_TMP}/bin/dpkg-query" <<STUB
 #!/usr/bin/env bash
+# "-W -f=<fmt> name..." answers for the NAMED packages only, as dpkg-query does.
+case "\$*" in *source:Package*)
+    shift 2; for n in "\$@"; do awk -F'\t' -v p="\$n" '\$1 == p' "${TM_TMP}/dpkg.src" 2>/dev/null; done; exit 0 ;; esac
 # A failing dpkg-query can still print PART of the database first (a damaged
 # status file) — the failure must stop the run, not the emptiness.
 cat "${TM_TMP}/dpkg.out"
@@ -299,6 +304,54 @@ a_cleanup_sim()     { _cleanup_case 0 100 0 "nothing was"; }
 tm_case "config-removed-when-resolution-fails" none a_cleanup_sim
 a_cleanup_install() { _cleanup_case 0 0 100 "may have applied PART"; }
 tm_case "config-removed-when-the-install-fails" none a_cleanup_install
+
+# Round 4, the real STIG + FIPS host: apt could only upgrade python3.12 by
+# REMOVING its lockstep sibling libpython3.12t64 (and what depends on it).
+# --no-remove refuses; the message must NAME the missing siblings, tell them
+# apart from the collateral, and point at rebuilding the bundle.
+_removal_sim() {
+    cat > "${TM_TMP}/sim.out" <<'EOF'
+The following packages will be REMOVED:
+  libpython3.12t64 linux-tools-6.8.0-142-fips ubuntu-server
+  vim*
+The following NEW packages will be installed:
+  nginx python3.12-venv
+The following packages will be upgraded:
+  libpython3.12-stdlib python3.12
+  python3.12-minimal
+E: Packages need to be removed but remove is disabled.
+EOF
+}
+a_removal_names_siblings() {
+    _stub 0 100 0; _removal_sim
+    printf '%s\n' $'python3.12\tpython3.12' $'python3.12-minimal\tpython3.12' $'libpython3.12-stdlib\tpython3.12' \
+        $'libpython3.12t64\tpython3.12' $'vim\tvim' $'ubuntu-server\tubuntu-meta' \
+        $'linux-tools-6.8.0-142-fips\tlinux-fips' > "${TM_TMP}/dpkg.src"
+    _run python3-venv nginx
+    tm_assert_ne 0 "$RC" "a plan that needs removals was not refused"
+    tm_assert_grep "Lockstep siblings missing from the bundle: libpython3.12t64 (source python3.12)" "${TM_TMP}/out" \
+        "the refusal does not name the lockstep sibling the bundle lacks"
+    tm_assert_grep "Would be removed with them (they depend on them): linux-tools-6.8.0-142-fips ubuntu-server vim" "${TM_TMP}/out" \
+        "the collateral removals are not told apart from the missing sibling (or the purge marker was kept)"
+    tm_assert_grep "FULLY PATCHED" "${TM_TMP}/out" "the refusal does not point at rebuilding the bundle on a fully patched host"
+    tm_assert_grep "nothing was" "${TM_TMP}/out" "the refusal does not say nothing changed"
+    [ -z "$(_install_call)" ] || _tm_afail "the install ran after a refused resolution"
+    [ -z "$(ls -A "${TM_TMP}/tmproot")" ] || _tm_afail "the temporary apt configuration was left behind"
+}
+tm_case "a-forced-removal-names-the-missing-lockstep-siblings" none a_removal_names_siblings
+
+a_removal_without_sibling() {
+    _stub 0 100 0
+    printf '%s\n' 'The following packages will be REMOVED:' '  dbus-broker' \
+        'The following NEW packages will be installed:' '  nginx' \
+        'E: Packages need to be removed but remove is disabled.' > "${TM_TMP}/sim.out"
+    printf '%s\n' $'dbus-broker\tdbus-broker' > "${TM_TMP}/dpkg.src"
+    _run nginx
+    tm_assert_ne 0 "$RC" "a plan that needs a removal was not refused"
+    tm_assert_grep "Would be removed: dbus-broker" "${TM_TMP}/out" "a removal with no upgraded sibling source is not named"
+    tm_assert_nogrep "Lockstep siblings missing" "${TM_TMP}/out" "a removal that shares no source with an upgrade was blamed on a missing sibling"
+}
+tm_case "a-removal-with-no-upgraded-source-is-not-called-a-sibling" none a_removal_without_sibling
 
 a_needs_an_index() {
     _stub 0 0 0; rm -f "${TM_TMP}/bundle/Packages"; _run nginx

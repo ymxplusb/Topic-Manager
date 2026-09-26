@@ -141,37 +141,134 @@ ok "Vue.js ${VUE_VER} saved to lib/ (sha256 verified against upgrade-full.sh)"
 # apt_install_from_bundle). Build on a fully patched Ubuntu 24.04 of the
 # target's architecture. No compiler or -dev headers: every Python dependency
 # is a binary wheel.
-info "Downloading apt packages and their dependencies (requires an Ubuntu 24.04 host)..."
-PKGS="python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl"
-if command -v apt-get &>/dev/null && command -v apt-cache &>/dev/null; then
-    CLOSURE="$(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts \
-                 --no-breaks --no-replaces --no-enhances $PKGS 2>/dev/null \
-               | grep -E '^[a-z0-9]' | sort -u || true)"
-    GOT=0; MISSED=0
-    for p in $CLOSURE; do
-        if ( cd "$APT_PKG_DIR" && apt-get download "$p" >/dev/null 2>&1 ); then
-            GOT=$((GOT+1))
+
+# At most this many sibling binaries are added for any ONE source package. A
+# source over the bound (gcc-14 builds ~150 binaries, compilers included) is
+# reported and NOT expanded, rather than pull a toolchain into the bundle.
+APT_SIBLING_MAX=40
+
+# apt_source_siblings <arch> <closure-file> — print, one per line,
+#   ADD<TAB>package=version<TAB>source      a sibling to download, or
+#   BOUND<TAB>source<TAB>count              a source over APT_SIBLING_MAX
+#
+# Round 4, MEASURED on the real STIG + FIPS host: binaries built from ONE
+# Debian source move in lockstep (exact-version Depends/Breaks). The request
+# closure carried python3.12 3.12.3-1ubuntu0.17 but not libpython3.12t64,
+# which the target had at 0ubuntu0.13 — so the only plan apt could find
+# REMOVED libpython3.12t64 (and with it vim, ubuntu-server, linux-tools...).
+# So every binary built from the SAME SOURCE AND SOURCE VERSION as a closure
+# package is added: for this architecture and `all`; not -dbg, -dbgsym, -doc
+# or Section debug; not already in the closure. The source comes from each
+# package's `Source:` field ("name" or "name (version)"; absent means the
+# package's own name and version) in `apt-cache show`, and is mapped back to
+# its binaries through `apt-cache dumpavail`, which needs no deb-src lines.
+apt_source_siblings() {
+    local arch="$1" closure="$2" tmp rc=0
+    tmp="$(mktemp -d)" || return 1
+    # A virtual name in the closure makes apt-cache show complain; the real
+    # packages are still printed, and a closure package with no stanza simply
+    # contributes no source.
+    xargs apt-cache show --no-all-versions < "$closure" > "${tmp}/show" 2>/dev/null || true
+    apt-cache dumpavail > "${tmp}/avail" 2>/dev/null || rc=$?
+    if [[ $rc -eq 0 ]]; then
+        awk -v arch="$arch" -v max="$APT_SIBLING_MAX" '
+            BEGIN { RS = "" }
+            FNR == 1 { f++ }
+            f == 1 { n = split($0, L, "\n"); for (i = 1; i <= n; i++) if (L[i] != "") inclosure[L[i]] = 1; next }
+            {
+                pkg = ""; ver = ""; src = ""; a = ""; sec = ""
+                n = split($0, L, "\n")
+                for (i = 1; i <= n; i++) {
+                    if      (L[i] ~ /^Package: /)      pkg = substr(L[i], 10)
+                    else if (L[i] ~ /^Version: /)      ver = substr(L[i], 10)
+                    else if (L[i] ~ /^Source: /)       src = substr(L[i], 9)
+                    else if (L[i] ~ /^Architecture: /) a   = substr(L[i], 15)
+                    else if (L[i] ~ /^Section: /)      sec = substr(L[i], 10)
+                }
+                if (pkg == "" || ver == "") next
+                if (src == "") src = pkg
+                if (match(src, / \(.*\)$/)) { srcver = substr(src, RSTART + 2, RLENGTH - 3); src = substr(src, 1, RSTART - 1) }
+                else srcver = ver
+                key = src SUBSEP srcver
+                if (f == 2) { if (pkg in inclosure) want[key] = 1; next }
+                if (!(key in want) || (pkg in inclosure) || (pkg in seen)) next
+                if (a != arch && a != "all") next
+                if (pkg ~ /-(dbg|dbgsym|doc)$/ || sec ~ /(^|\/)debug$/) next
+                seen[pkg] = 1; cnt[src]++; add[src] = add[src] " " pkg "=" ver
+            }
+            END {
+                for (s in cnt) {
+                    if (cnt[s] > max) { print "BOUND\t" s "\t" cnt[s]; continue }
+                    n = split(add[s], P, " ")
+                    for (i = 1; i <= n; i++) print "ADD\t" P[i] "\t" s
+                }
+            }' "$closure" "${tmp}/show" "${tmp}/avail" | sort || rc=$?
+    fi
+    rm -rf -- "$tmp"
+    return "$rc"
+}
+
+# bundle_apt_packages <dir> <top-level package>... — download the closure and
+# its lockstep siblings into <dir> and index it as an apt repository.
+bundle_apt_packages() {
+    local dir="$1"; shift
+    local closure p kind what src got=0 missed=0 added=0 failed=0 arch sib
+    local -a added_list=() failed_list=() bound_list=()
+    closure="$(mktemp)" || die "could not create a temporary file"
+    apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts \
+        --no-breaks --no-replaces --no-enhances "$@" 2>/dev/null \
+        | grep -E '^[a-z0-9]' | sort -u > "$closure" || true
+    [[ -s "$closure" ]] || { rm -f "$closure"; die "apt-cache could not compute the dependency closure of: $*"; }
+    while IFS= read -r p; do
+        if ( cd "$dir" && apt-get download "$p" >/dev/null 2>&1 ); then
+            got=$((got+1))
         else
-            MISSED=$((MISSED+1))      # virtual packages have no .deb of their own
+            missed=$((missed+1))      # virtual packages have no .deb of their own
         fi
-    done
-    ok "apt packages: ${GOT} downloaded to ${APT_PKG_DIR} (${MISSED} virtual/unavailable skipped)"
+    done < "$closure"
+    ok "apt packages: ${got} downloaded to ${dir} (${missed} virtual/unavailable skipped)"
+    # Round 4: lockstep siblings (see apt_source_siblings).
+    arch="$(dpkg --print-architecture)" || { rm -f "$closure"; die "dpkg --print-architecture failed"; }
+    sib="$(apt_source_siblings "$arch" "$closure")" \
+        || { rm -f "$closure"; die "Could not map the closure to its source packages (apt-cache dumpavail failed)."; }
+    rm -f "$closure"
+    while IFS=$'\t' read -r kind what src; do
+        case "$kind" in
+            ADD)
+                if ( cd "$dir" && apt-get download "$what" >/dev/null 2>&1 ); then
+                    added=$((added+1)); added_list+=("$what")
+                else
+                    failed=$((failed+1)); failed_list+=("${what} (${src})")
+                fi ;;
+            BOUND) bound_list+=("${what}: ${src} binaries") ;;
+        esac
+    done <<<"$sib"
+    ok "lockstep siblings (same source): ${added} added${added_list[*]:+: ${added_list[*]}}"
+    [[ ${#failed_list[@]} -eq 0 ]] || info "lockstep siblings NOT downloadable here, so NOT in the bundle: ${failed_list[*]}"
+    [[ ${#bound_list[@]} -eq 0 ]] || info "sources over the ${APT_SIBLING_MAX}-binary bound, NOT expanded: ${bound_list[*]}"
     # Round 2: the closure holds every ALTERNATIVE provider, so it is not a
     # list to install — it is a REPOSITORY for apt to resolve from on the
     # target (install.sh apt_install_from_bundle). Index it here, where the
     # tools are, or the bundle is refused.
     if command -v apt-ftparchive >/dev/null 2>&1; then
-        ( cd "$APT_PKG_DIR" && apt-ftparchive packages . > Packages ) || die "apt-ftparchive failed"
+        ( cd "$dir" && apt-ftparchive packages . > Packages ) || die "apt-ftparchive failed"
     elif command -v dpkg-scanpackages >/dev/null 2>&1; then
-        ( cd "$APT_PKG_DIR" && dpkg-scanpackages --multiversion . /dev/null > Packages 2>/dev/null ) \
+        ( cd "$dir" && dpkg-scanpackages --multiversion . /dev/null > Packages 2>/dev/null ) \
             || die "dpkg-scanpackages failed"
     else
         die "Neither apt-ftparchive (apt-utils) nor dpkg-scanpackages (dpkg-dev) is installed,
      so the .debs cannot be indexed and the target could not use them. Install
      apt-utils on this build host and re-run."
     fi
-    gzip -9 -c "${APT_PKG_DIR}/Packages" > "${APT_PKG_DIR}/Packages.gz"
-    ok "apt repository index written ($(grep -c '^Package:' "${APT_PKG_DIR}/Packages") entries)"
+    gzip -9 -c "${dir}/Packages" > "${dir}/Packages.gz"
+    ok "apt repository index written ($(grep -c '^Package:' "${dir}/Packages") entries)"
+}
+
+info "Downloading apt packages and their dependencies (requires an Ubuntu 24.04 host)..."
+PKGS="python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl"
+if command -v apt-get &>/dev/null && command -v apt-cache &>/dev/null; then
+    # shellcheck disable=SC2086  # PKGS is a word list by design
+    bundle_apt_packages "$APT_PKG_DIR" $PKGS
 else
     echo "  Skipping apt download — not running on Debian/Ubuntu."
     echo "  The target must then already have: ${PKGS}"

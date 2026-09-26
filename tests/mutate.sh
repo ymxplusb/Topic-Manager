@@ -40,10 +40,12 @@ MUTFILE="${TM_TESTS_DIR}/mutations.txt"
 declare -A TARGET_PATH=(
   [upgrade]="${TM_UPGRADE_SH:-${TM_REPO_ROOT}/install/upgrade-full.sh}"
   [install]="${TM_INSTALL_SH:-${TM_REPO_ROOT}/install.sh}"
+  [prepare]="${TM_PREPARE_SH:-${TM_REPO_ROOT}/prepare-offline.sh}"
 )
 declare -A TARGET_ENV=(
   [upgrade]="TM_UPGRADE_SH"
   [install]="TM_INSTALL_SH"
+  [prepare]="TM_PREPARE_SH"
 )
 TARGET="${TARGET_PATH[upgrade]}"
 

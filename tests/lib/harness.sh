@@ -32,6 +32,9 @@ tm_upgrade_sh() { echo "${TM_UPGRADE_SH:-${TM_REPO_ROOT}/install/upgrade-full.sh
 # permission boundary the cluster store depends on. Same contract — a mutation
 # control points this at a copy outside the repo, never at the tracked file.
 tm_install_sh() { echo "${TM_INSTALL_SH:-${TM_REPO_ROOT}/install.sh}"; }
+# prepare-offline.sh, a third script under test as of round 4 (the bundle's
+# lockstep-sibling expansion). Same contract.
+tm_prepare_sh() { echo "${TM_PREPARE_SH:-${TM_REPO_ROOT}/prepare-offline.sh}"; }
 
 # ─── output ──────────────────────────────────────────────────────────────────
 if [ -t 1 ] && [ -z "${TM_NO_COLOUR:-}" ]; then

@@ -1166,3 +1166,207 @@ TARGET|install
 EQUIV|yes
 ANCHOR|    trap 'rm -rf -- "${APT_BUNDLE_TMP:-/nonexistent}"' EXIT
 REPLACE|    true
+
+# ─── round 4: lockstep siblings in the bundle (t26) and the removal wording (t23)
+# Operators applied mechanically over apt_source_siblings, bundle_apt_packages,
+# apt_plan_names and apt_removal_reason.
+
+--- M143
+DESC|prepare: THE SIBLING MUTATION (round 4) — the lockstep-sibling expansion is disabled, so the bundle carries the request closure only
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|    sib="$(apt_source_siblings "$arch" "$closure")" \
+REPLACE|    sib="" \
+
+--- M144
+DESC|prepare: the per-source bound is 0, so no source is ever expanded
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|APT_SIBLING_MAX=40
+REPLACE|APT_SIBLING_MAX=0
+
+--- M145
+DESC|prepare: a failed apt-cache dumpavail reads as "no siblings"
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|    apt-cache dumpavail > "${tmp}/avail" 2>/dev/null || rc=$?
+REPLACE|    apt-cache dumpavail > "${tmp}/avail" 2>/dev/null || true
+
+--- M146
+DESC|prepare: a Source: field is ignored (every package is its own source)
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                    else if (L[i] ~ /^Source: /)       src = substr(L[i], 9)
+REPLACE|                    else if (L[i] ~ /^Source: /)       src = ""
+
+--- M147
+DESC|prepare: a "name (version)" Source: is not split, so a binNMU sibling is missed
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                if (match(src, / \(.*\)$/)) { srcver = substr(src, RSTART + 2, RLENGTH - 3); src = substr(src, 1, RSTART - 1) }
+REPLACE|                if (0) { srcver = substr(src, RSTART + 2, RLENGTH - 3); src = substr(src, 1, RSTART - 1) }
+
+--- M148
+DESC|prepare: siblings are matched on source NAME only, so another source version is bundled
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                key = src SUBSEP srcver
+REPLACE|                key = src
+
+--- M149
+DESC|prepare: the closure packages never register their source, so nothing is expanded
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                if (f == 2) { if (pkg in inclosure) want[key] = 1; next }
+REPLACE|                if (f == 2) { next }
+
+--- M150
+DESC|prepare: closure packages are added again as siblings
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                if (!(key in want) || (pkg in inclosure) || (pkg in seen)) next
+REPLACE|                if (!(key in want) || (pkg in seen)) next
+
+--- M151
+DESC|prepare: every source is expanded, related or not
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                if (!(key in want) || (pkg in inclosure) || (pkg in seen)) next
+REPLACE|                if ((pkg in inclosure) || (pkg in seen)) next
+
+--- M152
+DESC|prepare: siblings of any architecture are added
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                if (a != arch && a != "all") next
+REPLACE|                if (0) next
+
+--- M153
+DESC|prepare: Architecture: all siblings are skipped
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                if (a != arch && a != "all") next
+REPLACE|                if (a != arch) next
+
+--- M154
+DESC|prepare: -dbg / -dbgsym / -doc / Section debug siblings are bundled
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                if (pkg ~ /-(dbg|dbgsym|doc)$/ || sec ~ /(^|\/)debug$/) next
+REPLACE|                if (0) next
+
+--- M155
+DESC|prepare: Section debug is no longer excluded
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                if (pkg ~ /-(dbg|dbgsym|doc)$/ || sec ~ /(^|\/)debug$/) next
+REPLACE|                if (pkg ~ /-(dbg|dbgsym|doc)$/) next
+
+--- M156
+DESC|prepare: the bound is off by one (a source AT the bound is refused)
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                    if (cnt[s] > max) { print "BOUND\t" s "\t" cnt[s]; continue }
+REPLACE|                    if (cnt[s] >= max) { print "BOUND\t" s "\t" cnt[s]; continue }
+
+--- M157
+DESC|prepare: a source over the bound is expanded anyway
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                    if (cnt[s] > max) { print "BOUND\t" s "\t" cnt[s]; continue }
+REPLACE|                    if (0) { print "BOUND\t" s "\t" cnt[s]; continue }
+
+--- M158
+DESC|prepare: siblings are downloaded at the candidate version, not the source's (the =version is dropped)
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                seen[pkg] = 1; cnt[src]++; add[src] = add[src] " " pkg "=" ver
+REPLACE|                seen[pkg] = 1; cnt[src]++; add[src] = add[src] " " pkg
+
+--- M159
+DESC|prepare: a sibling that cannot be downloaded is not logged
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|                    failed=$((failed+1)); failed_list+=("${what} (${src})")
+REPLACE|                    failed=$((failed+1))
+
+--- M160
+DESC|prepare: what was added is not printed
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|    ok "lockstep siblings (same source): ${added} added${added_list[*]:+: ${added_list[*]}}"
+REPLACE|    ok "lockstep siblings (same source): ${added} added"
+
+--- M161
+DESC|prepare: a source over the bound is not reported
+TESTS|t26-bundle-siblings.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|            BOUND) bound_list+=("${what}: ${src} binaries") ;;
+REPLACE|            BOUND) true ;;
+
+--- M163
+DESC|install: the REMOVED block is never read, so a forced removal gets the generic message
+TESTS|t23-offline-apt.sh t26-bundle-siblings.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    removed="$(apt_plan_names "$plan" REMOVED)"
+REPLACE|    removed=""
+
+--- M164
+DESC|install: the upgraded sources are never read, so every removal is called collateral
+TESTS|t23-offline-apt.sh t26-bundle-siblings.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            [[ -n "$src" ]] && upsrc["$src"]=1
+REPLACE|            true
+
+--- M165
+DESC|install: a removal is called a sibling whatever its source
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if [[ -n "$src" && -n "${upsrc[$src]:-}" ]]; then
+REPLACE|        if [[ -n "$src" ]]; then
+
+--- M166
+DESC|install: the purge marker (*) is kept on a removed name
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        on && /^  /   { for (i = 1; i <= NF; i++) { n = $i; sub(/\*$/, "", n); print n }; next }
+REPLACE|        on && /^  /   { for (i = 1; i <= NF; i++) { n = $i; print n }; next }
+
+--- M167
+DESC|install: only the first line of a wrapped package list is read
+TESTS|t23-offline-apt.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        on && /^  /   { for (i = 1; i <= NF; i++) { n = $i; sub(/\*$/, "", n); print n }; next }
+REPLACE|        on && /^  /   { for (i = 1; i <= NF; i++) { n = $i; sub(/\*$/, "", n); print n }; exit }
+
+--- M168
+DESC|install: the removal explanation is computed but not used
+TESTS|t23-offline-apt.sh t26-bundle-siblings.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        [[ -z "$why" ]] || die "The offline bundle could not supply $* (apt exit ${rc}); nothing was
+REPLACE|        true || die "The offline bundle could not supply $* (apt exit ${rc}); nothing was

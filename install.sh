@@ -281,6 +281,62 @@ apt_fips_packages() {
     printf '%s\n%s\n' "$by_version" "$by_origin" | awk 'NF' | sort -u
 }
 
+# apt_plan_names <apt output> <word> — the package names apt lists under its
+# "The following packages will be <word>:" header (REMOVED, upgraded), one per
+# line. The list is the indented block under the header.
+apt_plan_names() {
+    printf '%s\n' "$1" | awk -v hdr="The following packages will be $2:" '
+        $0 == hdr     { on = 1; next }
+        on && /^  /   { for (i = 1; i <= NF; i++) { n = $i; sub(/\*$/, "", n); print n }; next }
+        on            { exit }'
+}
+
+# apt_removal_reason <apt output> — when apt could only satisfy the request by
+# REMOVING installed packages (refused: --no-remove), say which removals are
+# forced by LOCKSTEP SIBLINGS the bundle lacks. Binaries built from one Debian
+# source (python3.12, libpython3.12t64, libpython3.12-stdlib, ...) carry
+# exact-version dependencies on each other; a bundle that upgrades part of a
+# source without the rest leaves apt one way out — remove the rest, and
+# everything that depends on it. Round 4, measured on the real STIG + FIPS
+# host. Prints nothing when apt proposed no removal.
+apt_removal_reason() {
+    local plan="$1" removed upgraded srcs name src
+    local -a sib=() dep=()
+    local -A upsrc=()
+    removed="$(apt_plan_names "$plan" REMOVED)"
+    [[ -n "$removed" ]] || return 0
+    upgraded="$(apt_plan_names "$plan" upgraded)"
+    if [[ -n "$upgraded" ]]; then
+        # shellcheck disable=SC2046  # one word per package name, by design
+        while IFS=$'\t' read -r name src; do
+            [[ -n "$src" ]] && upsrc["$src"]=1
+        done < <(dpkg-query -W -f='${Package}\t${source:Package}\n' $(printf '%s\n' "$upgraded" | sed 's/:.*//') 2>/dev/null || true)
+    fi
+    # shellcheck disable=SC2046
+    srcs="$(dpkg-query -W -f='${Package}\t${source:Package}\n' $(printf '%s\n' "$removed" | sed 's/:.*//') 2>/dev/null || true)"
+    while IFS= read -r name; do
+        src="$(printf '%s\n' "$srcs" | awk -F'\t' -v p="${name%%:*}" '$1 == p { print $2; exit }')"
+        if [[ -n "$src" && -n "${upsrc[$src]:-}" ]]; then
+            sib+=("${name} (source ${src})")
+        else
+            dep+=("$name")
+        fi
+    done <<<"$removed"
+    printf 'apt could satisfy this only by REMOVING installed packages, and the\n'
+    printf '     offline install never removes one.\n'
+    if [[ ${#sib[@]} -gt 0 ]]; then
+        printf '     Lockstep siblings missing from the bundle: %s\n' "${sib[*]}"
+        printf '     — each is built from the same source as a package the plan upgrades, and\n'
+        printf '     binaries of one source must be upgraded together.\n'
+        [[ ${#dep[@]} -eq 0 ]] || printf '     Would be removed with them (they depend on them): %s\n' "${dep[*]}"
+    else
+        printf '     Would be removed: %s\n' "${dep[*]}"
+    fi
+    printf '     Rebuild the bundle with the prepare-offline.sh of this release (it adds\n'
+    printf '     every binary of the same source) on a FULLY PATCHED Ubuntu 24.04 build\n'
+    printf '     host of the same architecture, then run this again.\n'
+}
+
 # apt_install_from_bundle <bundle-apt-dir> <top-level package>... — offline.
 #
 # MEASURED 2026-09-26 on a STIG (USG stig) + FIPS Ubuntu 24.04.4 host: handing
@@ -325,7 +381,7 @@ apt_fips_packages() {
 apt_install_from_bundle() {
     local dir="$1"; shift
     local tmp rc=0 fips_list="" p ans=""
-    local plan="" line name old ver re_upg re_new
+    local plan="" line name old ver re_upg re_new why=""
     local -a fips=() plan_new=() plan_upg=() plan_bad=()
     local -A is_fips=()
     [[ -f "${dir}/Packages" || -f "${dir}/Packages.gz" ]] || die "Offline, and ${dir} has no Packages index.
@@ -365,6 +421,11 @@ apt_install_from_bundle() {
     if [[ $rc -ne 0 ]]; then
         rm -rf -- "$tmp"; APT_BUNDLE_TMP=""; trap - EXIT
         [[ -z "$plan" ]] || printf '%s\n' "$plan" >&2
+        why="$(apt_removal_reason "$plan")"
+        [[ -z "$why" ]] || die "The offline bundle could not supply $* (apt exit ${rc}); nothing was
+     installed or changed. The bundle never downgrades a package and never
+     replaces a FIPS package, and ${why}
+     See TROUBLESHOOTING.md -> Fresh install."
         die "The offline bundle could not supply $* (apt exit ${rc}); nothing was
      installed or changed. The bundle never downgrades a package and never
      replaces a FIPS package${fips_list:+ (held here: ${fips[*]})}. If apt says a
