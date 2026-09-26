@@ -214,6 +214,19 @@ Adversary and security-review findings, all fixed on this branch before release:
   that rejects unknown options exactly as real ufw does (checked against real ufw with
   `--dry-run`).
 
+### Round 6 (render proof, 2026-09-26)
+
+- **Colour-blind badges no longer move by a fraction of a pixel.** The render proof on the real
+  host matched v1.0.6 to 0.0px in Dark and Light, but in Color Blind mode `bdg-ok` sat 0.6px and
+  `bdg-warn` 1.3px higher and a badge-only row lost 1.3px: the glyph was drawn INSIDE the 5x5
+  marker (`inline-flex`, `line-height:0`), which gave the badge a text baseline. The marker box
+  is now left exactly as in every other mode (only its fill is dropped) and the glyph is an
+  absolutely positioned `::after` over it, as the stat-card, lag, STIG and login-error glyphs
+  already were. Measured with a same-page harness against v1.0.6's `main.css` in dark, light
+  and colour-blind at 1920 and 1366 (33 elements, including every glyph-bearing class): 0.0px
+  everywhere, and colour-blind equal to dark; every glyph still renders (computed `content`
+  checked). The same harness on the previous CSS reproduced the 0.66 / 1.31px deltas.
+
 ### Known limitations
 
 - **FIPS module boundary**: the `cryptography` and `confluent-kafka` wheels bundle their own

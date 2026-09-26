@@ -650,17 +650,26 @@ select.fc option { background:var(--bg-card) }
    surfaces (set in THEME VARIABLES: no glass gradient, no aurora field).
    ══════════════════════════════════════════════════ */
 .cb-mode :focus-visible { outline:3px solid var(--accent-amber); outline-offset:2px }
-/* PLACEMENT-NEUTRAL (round 2, adversary F9). A glyph must not widen a badge or
-   push text: the owner's rule is no placement change in any mode. So a badge
-   keeps its 5x5 marker box and the glyph is drawn centred in it, overflowing
-   visually into the existing gap; every other glyph is positioned absolutely
-   against a parent made position:relative (which moves nothing), in space the
-   element already has — the card padding, or the pill's corner. */
-.cb-mode .bdg::before { width:5px; height:5px; display:inline-flex; align-items:center; justify-content:center;
-                        overflow:visible; border-radius:0; background:none !important; font-size:.6rem; line-height:0 }
-.cb-mode .bdg-ok::before   { content:'\2713'; color:var(--accent-green) }
-.cb-mode .bdg-warn::before { content:'!';     color:var(--accent-amber) }
-.cb-mode .bdg-int::before  { content:'\2022'; color:var(--text-muted) }
+/* PLACEMENT-NEUTRAL (round 2, adversary F9; round 6). No glyph may move
+   anything: the owner's rule is no placement change in any mode. EVERY glyph
+   is positioned absolutely against a parent made position:relative (which
+   moves nothing), in space the element already has, so it is out of flow and
+   takes part in no line box, no baseline and no size.
+   Badges: the 5x5 ::before marker box stays EXACTLY as in every other mode
+   (same content, display, size, margins) — only its fill is dropped — so the
+   badge's box and baseline are the dark/light ones. The glyph is ::after,
+   absolutely positioned over that marker box (padding-left 7px, 5px wide,
+   full height, centred). Round 6: putting the glyph INSIDE the marker
+   (inline-flex, line-height:0) gave the flex badge a text baseline, and
+   measured on the real host bdg-ok sat 0.6px and bdg-warn 1.3px higher than
+   v1.0.6, and a badge-only row lost 1.3px. */
+.cb-mode .bdg { position:relative }
+.cb-mode .bdg::before { background:transparent !important }
+.cb-mode .bdg::after { position:absolute; top:0; bottom:0; left:7px; width:5px; display:flex; align-items:center;
+                       justify-content:center; overflow:visible; font-size:.6rem; line-height:1; pointer-events:none }
+.cb-mode .bdg-ok::after   { content:'\2713'; color:var(--accent-green) }
+.cb-mode .bdg-warn::after { content:'!';     color:var(--accent-amber) }
+.cb-mode .bdg-int::after  { content:'\2022'; color:var(--text-muted) }
 .cb-mode .stat-card .sub, .cb-mode .stig, .cb-mode .lag-tag, .cb-mode .lag-hi,
 .cb-mode .lag-ok, .cb-mode .login-err { position:relative }
 .cb-mode .stat-card .sub.ok::before   { content:'\2713'; position:absolute; right:100%; margin-right:3px; top:0 }

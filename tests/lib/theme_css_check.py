@@ -102,8 +102,9 @@ print('idle_card_fallback_literal=%s' % bool(idle and re.search(r'var\(--[a-z-]+
 
 # Colour-blind cues: every status class carries a glyph in .cb-mode.
 cues = {
-    'bdg-ok': r'\.cb-mode \.bdg-ok::before\s*\{\s*content:\'\\2713\'',
-    'bdg-warn': r'\.cb-mode \.bdg-warn::before\s*\{\s*content:\'!\'',
+    'bdg-ok': r'\.cb-mode \.bdg-ok::after\s*\{\s*content:\'\\2713\'',
+    'bdg-warn': r'\.cb-mode \.bdg-warn::after\s*\{\s*content:\'!\'',
+    'bdg-int': r'\.cb-mode \.bdg-int::after\s*\{\s*content:\'\\2022\'',
     'sub-ok': r'\.cb-mode \.stat-card \.sub\.ok::before\s*\{\s*content:\'\\2713',
     'sub-warn': r'\.cb-mode \.stat-card \.sub\.warn::before\s*\{\s*content:\'!',
     'sub-err': r'\.cb-mode \.stat-card \.sub\.err::before\s*\{\s*content:\'\\2715',
@@ -126,9 +127,17 @@ print('radius=%s' % palettes['dark'].get('--radius', 'MISSING'))
 rules = re.findall(r'(\.cb-mode [^{}]*?::before)\s*\{([^}]*)\}', css)
 body = {sel.strip(): b for sel, b in rules}
 bad = []
+# Round 6: the badge marker box must be the dark/light one UNTOUCHED - CB may
+# drop its fill and nothing else. Measured on the real host: a glyph inside the
+# marker (inline-flex, line-height:0) moved the badge baseline 0.6-1.3px.
 bdg = body.get('.cb-mode .bdg::before', '')
-if not (re.search(r'width:\s*5px', bdg) and re.search(r'height:\s*5px', bdg)) or 'width:auto' in bdg.replace(' ', ''):
-    bad.append('.cb-mode .bdg::before (marker box not kept at 5x5)')
+if re.sub(r'[\s;]+', '', bdg) != 'background:transparent!important':
+    bad.append('.cb-mode .bdg::before (must only drop the fill; box, content and display stay the base ones)')
+after = {sel.strip(): b for sel, b in re.findall(r'(\.cb-mode [^{}]*?::after)\s*\{([^}]*)\}', css)}
+if 'position:absolute' not in after.get('.cb-mode .bdg::after', '').replace(' ', ''):
+    bad.append('.cb-mode .bdg::after (the badge glyph is not out of flow)')
+if not re.search(r'\.cb-mode \.bdg\s*\{\s*position:relative\s*\}', css):
+    bad.append('.cb-mode .bdg (not the containing block of its glyph)')
 inherits = {'.cb-mode .stig.w::before': '.cb-mode .stig::before',
             '.cb-mode .stig.r::before': '.cb-mode .stig::before'}
 for sel, b in body.items():
