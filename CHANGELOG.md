@@ -5,6 +5,114 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
+## [1.1.0] — 2026-09-26
+
+**Aurora Glass theme, a Settings section rail, TLS 1.2/1.3 everywhere with a FIPS-approved
+cipher list, a private audit database, one PPSM, and no environment-specific defaults — plus a
+from-scratch install that reaches the finished state on a clean (STIG'd, FIPS-mode) Ubuntu
+24.04 host, online or air-gapped.**
+
+### Read this before upgrading
+
+- **`config.yaml` must name its directory.** `auth.ldap_server`, `auth.ldap_base_dn` and
+  `auth.ldap_domain` no longer have built-in defaults (they used to default to one particular
+  site's domain controller). The upgrade audit BLOCKS on a config that lacks them and
+  `--force` does **not** override it; `install.sh` refuses a reinstall over one. Add the keys
+  with your values first. See TROUBLESHOOTING.md → *The directory settings are missing*.
+- **Online upgrades need `--repo-url`.** `install/upgrade-full.sh` no longer names a source
+  repository. Pass the git URL your site publishes the release at (`--repo-url`, or
+  `TM_REPO_URL`), or use `--offline`.
+- **Everyone is signed out once.** The session cookie is now signed with HMAC-SHA-256 instead of
+  Flask's SHA-1 default, so cookies from before the upgrade stop validating.
+- **A fresh install starts with no Kafka clusters.** Add them in Settings. The example profiles
+  are no longer imported as live clusters.
+
+### Added
+
+- **Aurora Glass theme** for Dark, Light and Color Blind: Aurora colours, surfaces, glass
+  gradients and the aurora background field, with **no change to content, flow or element
+  placement** (14px body, heading and control sizes, control radii and the three-way theme
+  menu all kept; panel/card/modal radius 20px). `--text-muted` measured at 6.1 / 5.8 / 7.9 : 1
+  on the card surface. Colour-blind mode is the full dark CB palette with solid surfaces, a
+  stronger focus ring, and a glyph on every status (✓ ok, ! warning, ✕ error) beside its text.
+  The classification banners are exempt and still take their colours from Settings.
+- **Settings section rail** (the CORTEX pattern): General (Cluster Profiles, Consent, Banner &
+  Classification), System (Service Control), Support (PPSM, About), with search, persisted
+  under `tmSettingsGroup`, and derived from the template so it cannot drift. Room left for the
+  v1.2.0 Security, Logging and Time source groups. The custom consent/banner selection panel is
+  kept as it was.
+- **`SETTINGS_UPDATE` audit record** for `PUT /api/settings`, naming the keys that changed and
+  never their values. README's Compliance list now has 16 actions.
+- **nginx.conf management**: `install.sh` and the upgrade set `ssl_protocols TLSv1.2 TLSv1.3`
+  at the http level of `/etc/nginx/nginx.conf` (stock Ubuntu enables TLS 1.0/1.1 there),
+  backing the file up, running `nginx -t` and restoring it on failure. The upgrade's restore
+  point now includes `nginx.conf`.
+- **FIPS-approved site TLS policy**: TLS 1.2 ECDHE + AES-GCM + SHA-256/384 only, TLS 1.3
+  AES-GCM suites only, curves P-384/P-256, `ssl_session_timeout 15m`, `ssl_session_tickets
+  off`, `server_tokens off`.
+- **From-scratch install** (`install.sh`): directory settings from `--ldap-*` flags or prompts
+  (no defaults), `--server-name`, `--tls-cert/--tls-key` (verified as a pair) or a self-signed
+  ECDSA P-256 placeholder, `umask 0022` for the run, runtime packages only (`polkitd`,
+  `rsync`, `sudo` now included; no compiler or `-dev` headers), binary wheels only, no pip
+  self-upgrade offline (it used to fail there), offline `.deb`s installed only where missing,
+  and it now **starts the service and measures** health, `tm.db` 0600 and `data/` 0700.
+- **Offline bundle from the committed tree**: `prepare-offline.sh --bundle` uses `git archive`
+  (internal records export-ignored, untracked files left out), downloads the runtime `.deb`s
+  with their dependency closure, writes a `.sha256`, and deletes the bundle if
+  `tools/check-env-neutral.sh --bundle` finds anything internal or site-specific in it.
+- **Gates**: `tools/check-ppsm-consistency.sh` (the two PPSMs agree, with coverage),
+  `tools/check-env-neutral.sh` (no site ties in the tree or the bundle),
+  `tools/check-version-surfaces.sh` (every version surface, including `tm/VERSION`, agrees
+  with `VERSION`). All three run inside `tests/run.sh`, so CI enforces them on every tag.
+- Tests t15–t22 (theme, settings audit, audit-DB modes, TLS/FIPS, PPSM, directory config,
+  environment neutrality, version surfaces) and mutation controls M60–M87.
+
+### Changed
+
+- **Audit database private**: `tm.db` 0600 and `/opt/topic-manager/data` 0700, owned by the
+  service account — created that way by `tm/models.py`, `UMask=0077` on the unit, and enforced
+  by `install.sh` and by the upgrade **after** its baseline replay and after `cp -a` restores
+  (a v1.0.x baseline records 0644), including `--restore` and the automatic rollback.
+- **One PPSM**: `PPSM.csv` and *Settings → Download PPSM* are the same 34 rows — inbound 443,
+  80 (redirect only), 22; outbound LDAPS 636, Kafka at operator-defined ports, DNS, NTP, syslog
+  514/6514 (planned for v1.2.0), OCSP/CRL stated **not used**, and the online-install-only
+  endpoints. LDAP 389 and the site's broker host names removed.
+- The cert/key check in the upgrade compares raw public keys (`openssl x509 -pubkey` vs
+  `openssl pkey -pubout`), so EC keys verify; it used `openssl rsa -modulus`.
+- `tm/migrate_clusters.py`: a host with nothing to migrate gets an **empty** store; `--example`
+  is gone.
+- Dependencies: confluent-kafka 2.15.0 → **2.15.1**; Vue 3.5.42 → **3.5.43** (SHA-256 verified
+  against the npm registry tarball). Every other pin re-measured as latest stable.
+- Environment-neutral throughout: config examples use `<placeholders>` and `example.org`;
+  docs, tests, SBOM and PPSM name no site hosts, addresses, accounts or paths.
+  `docs/INSTALL.md` rewritten as a clean, neutral from-scratch procedure.
+- `tm/VERSION` had been left at 1.0.6 by every release since v1.0.6, so `/api/health` could
+  not tell 1.0.6–1.0.11 apart. It is now held to `VERSION` by a gate.
+
+### Removed
+
+- `.github/workflows/main.yml` (it mirrored GitHub → GitLab and declared GitHub authoritative;
+  GitLab is authoritative).
+- `docs/SonarQube-Report-2026-05-07.html` and `-05-29.html`: dated point-in-time artefacts
+  carrying internal addresses. They remain in git history.
+
+### Known limitations
+
+- **FIPS module boundary**: the `cryptography` and `confluent-kafka` wheels bundle their own
+  OpenSSL, outside the host's validated module. Both run on a FIPS host. See SBOM.md.
+- History entries below this one describe past releases as they were; for example the notes
+  that `install.sh` fetched an unverified Vue 3.5.35 were true of v1.0.2 and were fixed in
+  v1.0.4.
+
+### Not verified
+
+- No FIPS-enabled host was available: behaviour under FIPS mode is argued from how each
+  component is built and configured, not measured.
+- `install.sh` and `prepare-offline.sh --bundle` were not run end to end on a clean host in
+  this release's build; their parts are driven by the test suite against scratch trees.
+
+---
+
 ## [1.0.6] — 2026-09-02
 
 **Idle sessions now end, and the browser signs the user out when they do.**

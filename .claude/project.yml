@@ -1,14 +1,18 @@
 contract_version: 1
 name: Topic Manager
-repo: ymxplusb/Topic-Manager
+# AUTHORITATIVE: the GitLab project james.rodman/topic-manager (remote
+# `gitlab`). The GitHub repository is a stale public copy; the workflow that
+# mirrored it to GitLab and called it authoritative was deleted in v1.1.0.
+repo: james.rodman/topic-manager
 stack: >-
   Vue 3 global build (no build toolchain, no npm) served static by nginx +
   Python 3.12 / Flask / gunicorn backend behind nginx TLS, SQLite for audit log
-  and server-side sessions, LDAP/AD auth against dc1.int.crypticlight.com,
-  confluent-kafka AdminClient against the Jarvis Kafka cluster.
+  and server-side sessions, LDAPS auth against the directory named in
+  config.yaml (no built-in default since v1.1.0), confluent-kafka AdminClient
+  against operator-defined Kafka clusters.
 
-# No CODEMAP.md exists in this repo. The tree is small enough (75 files) to read
-# directly; create one if it grows.
+# No CODEMAP.md exists in this repo. The tree is small enough (91 tracked files
+# as of v1.1.0) to read directly; create one if it grows.
 code_map: null
 
 # ── version surfaces ────────────────────────────────────────────────────────
@@ -20,7 +24,13 @@ surfaces:
   - path: VERSION
     note: canonical release version
   - path: tm/VERSION
-    note: read at import by tm/routes.py and served by /api/version
+    note: >-
+      read at import by tm/routes.py and served by /api/version and
+      /api/health; the upgrade verifies the running service against it. It
+      sat at 1.0.6 through tags v1.0.6..v1.0.11 because CI compares only
+      VERSION with the tag. Since v1.1.0 tools/check-version-surfaces.sh holds
+      it (and every surface below) to VERSION, and runs inside tests/run.sh,
+      so the CI test lane enforces it.
   - path: app/components/modals/AboutModal.js
     note: >-
       TWO surfaces in one file: the app version (now 'unknown' until
@@ -29,10 +39,12 @@ surfaces:
       sbom-consistency gate holds the table to requirements.txt.
   - path: app/components/SettingsTab.js
     note: >-
-      line ~103, inside downloadPpsm()'s CSV row array. Was stale at '1.0.0'
-      (missed in the v1.0.2 cascade), corrected in v1.0.3. The rows are
-      single-quoted JS literals — see hazards[csv-single-quoted-literals].
-      Must agree with the static PPSM.csv, which is the same document.
+      the ['Version', 'N.N.N', ...] row inside downloadPpsm() (~line 283 as of
+      v1.1.0). The rows are single-quoted JS literals — see
+      hazards[csv-single-quoted-literals]. Must agree with the static PPSM.csv
+      ROW FOR ROW, not just in the version: tools/check-ppsm-consistency.sh
+      runs the generator under node and fails on any difference but the
+      Generated date.
   - path: app/main.js
     note: >-
       NOT A VERSION SURFACE ANY MORE — do not give it a literal back. It seeds
@@ -53,8 +65,9 @@ surfaces:
       exists to prevent. app/components/modals/AboutModal.js carries the same
       token on the same image. Every ?v= in the repo MUST move together:
       index.html (14), TopBar.js (1), AboutModal.js (1) = 16 tokens, ONE
-      distinct value. Verify with:
-      grep -rn '?v=[0-9]*' index.html app/ | grep -o '?v=[0-9]*' | sort -u
+      distinct value, derived from VERSION as major*1000+minor*100+patch
+      (1.1.0 -> 1100). tools/check-version-surfaces.sh enforces both. (The
+      v1.1.0 brief said 18 tokens; 16 were measured.)
   - path: index.html
     note: "cache-bust token ?v=NNNN on every script/style — MUST increment per release"
   - path: docs/INSTALL.md
@@ -146,6 +159,11 @@ surfaces:
 # Kafka was also not a component at all: it is not installed on the app host.
 # Re-measure these from the deployed host EVERY release and pin the result into
 # SBOM.md and app/components/modals/AboutModal.js.
+# MEASURED 2026-09-26 on 192.168.202.90 for the v1.1.0 cascade: nginx 1.24.0,
+# polkitd 124 (124-2ubuntu1.24.04.4), Python 3.12.3, SQLite 3.45.1, Ubuntu
+# 24.04.4 LTS, OpenSSL 3.0.13 — unchanged components, so no SBOM/AboutModal row
+# moved. The same host's /etc/nginx/nginx.conf still read
+# "ssl_protocols TLSv1 TLSv1.1 TLSv1.2 TLSv1.3;" — what v1.1.0 now manages.
 # MEASURED 2026-09-02 on 192.168.202.90 for the v1.0.5 cascade: nginx 1.24.0,
 # polkitd 124 (124-2ubuntu1.24.04.3), Python 3.12.3, SQLite 3.45.1, Ubuntu
 # 24.04.4 LTS. All five unchanged from the v1.0.4 pinning — no SBOM or
@@ -170,17 +188,19 @@ straggler_sweep:
   - "grep -rn '1[.]0[.][0-9]' --include='*.sh' --include='*.csv' --include='*.conf' --include='*.service' --include='*.css' --include='*.properties' --include='*.yaml' ."
   # Belt and braces: extension-agnostic. Globs are how surfaces hide — *.css was
   # missing above and app/styles/main.css sat at 1.0.0 for three releases.
-  - "grep -rInE '1[.]0[.][0-9]' . --exclude-dir=.git --exclude-dir=__pycache__ --exclude=CHANGELOG.md --exclude='SonarQube-Report-*.html' | grep -v '1[.]0[.]4'"
-  - "grep -o '?v=[0-9]*' index.html | sort -u   # cache-bust token must match the release"
+  - "grep -rInE '1[.][01][.][0-9]+' . --exclude-dir=.git --exclude-dir=.work --exclude-dir=__pycache__ --exclude=CHANGELOG.md   # then read every hit"
+  - "bash tools/check-version-surfaces.sh   # the machine-checked half of this sweep"
   # Expected historical hits that are NOT stragglers: CHANGELOG.md sections,
-  # SBOM.md '(moved in 1.0.2)' change-history, docs/SonarQube-Report-*.html
-  # (dated point-in-time artefacts), and every deliberate v1.0.0 reference
-  # describing what PROD actually runs or the version-agnostic upgrade path.
+  # SBOM.md '(moved in 1.x.y)' change-history rows, and deliberate "before
+  # v1.0.6" / "since v1.1.0" references describing behaviour history. The
+  # docs/SonarQube-Report-*.html artefacts were removed in v1.1.0.
 
 # ── gates ───────────────────────────────────────────────────────────────────
-# Every command below was RUN before being written here. This repo has NO unit
-# tests, NO linter config and NO CI — these four syntax/parse gates are the
-# entire verifiable safety net. Do not add a gate here without running it first.
+# Every command below was RUN before being written here. CI exists (see ci:):
+# on a vX.Y.Z tag it runs `tests/run.sh --strict`, which also runs the
+# ppsm-consistency, env-neutral and version-surfaces gates as test cases (t19,
+# t21, t22). The syntax/parse gates below are still run by hand. Do not add a
+# gate here without running it first and proving it can go red.
 gates:
   - name: python-syntax
     cmd: "python -m py_compile tm/*.py"
@@ -247,7 +267,35 @@ gates:
       class this release exists to fix. Proven RED on that same mutation and on
       a loosened (>=) specifier.
 
-  - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-08-30, note: "120 cases and 59 mutation controls.txt, 57 killed + 2 documented equivalent + 1 documented equivalent. Git Bash CANNOT hold modes, so 46 cases SKIP LOUDLY here and are only proven on Linux: bash tests/run.sh --remote U@H (46/46, --strict). Proven RED by neutralising backup_dropin against a copy." }
+  - name: ppsm-consistency
+    cmd: "bash tools/check-ppsm-consistency.sh"
+    verified: 2026-09-26
+    requires: node
+    note: >-
+      Runs the REAL SettingsTab.downloadPpsm() under node and requires its CSV
+      to equal PPSM.csv cell for cell (the Generated date excepted), plus
+      coverage (443/80/22 in; 636, Kafka operator-defined, 53, 123, 514/6514
+      planned, OCSP/CRL not used; no 389; no site tie). Proven RED on 7
+      one-sided drifts (incl. an apostrophe in a JS cell) and 5 consistent
+      edits to both copies.
+  - name: env-neutral
+    cmd: "bash tools/check-env-neutral.sh   # --bundle <tgz> for an offline bundle"
+    verified: 2026-09-26
+    note: >-
+      No site host names, private addresses, account names, CA name or
+      workstation paths in the tracked tree (minus .claude/ and .work/, which
+      are export-ignored and never ship). In --bundle mode also refuses
+      .claude/, .work/, .git/, .github/ or scan reports inside the tarball;
+      prepare-offline.sh deletes a bundle that fails it. Red-proofed in t21.
+  - name: version-surfaces
+    cmd: "bash tools/check-version-surfaces.sh"
+    verified: 2026-09-26
+    note: >-
+      Every surface in surfaces: (incl. tm/VERSION, the PPSM pair, headers,
+      README/INSTALL/SBOM, the newest CHANGELOG section) equals VERSION, and
+      all 16 ?v= tokens equal the derived token. Its first run reported 13
+      stale surfaces against VERSION 1.0.11. Red-proofed in t22.
+  - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-09-26, note: "t00-t22. 2026-09-26: local (Git Bash + a venv of requirements.txt) 145+ pass, mode/chown cases SKIP loudly; Linux host via --remote --strict 155 pass / 0 fail with only the node cases skipped (node is absent there) — the two runs are complementary. Mutation controls M01-M87 in tests/mutations.txt (tests/mutate.sh, --remote for the mode cases). One workstation-only artefact: t12's route case fails under Git Bash because MSYS rewrites the db path in an env var but not in the YAML; it passes on Linux and CI." }
 
 gate_verification:
   - "A gate must assert its own COVERAGE, not just agreement. Guarding on
@@ -272,13 +320,18 @@ gate_verification:
      each to be well-formed. This produced a false 'cert/key match verified' in
      upgrade-full.sh, found 2026-08-30."
 
-accepted_test_failures: {}   # no test suite exists
+accepted_test_failures: {}   # none. (t12's route case fails ONLY under Git Bash with a local venv — a path-conversion artefact, see gates[repo-tests]; it is not accepted on Linux/CI)
 
 # ── what is NOT a gate here ─────────────────────────────────────────────────
 unavailable_gates:
   - name: sonarqube
-    status: STALE
+    status: CI
     note: >-
+      SUPERSEDED 2026-09-09: the CI template's Sonar job scans on every tag
+      (SONAR_PROJECT_KEY topic-manager in .gitlab-ci.yml). The note below is
+      the pre-CI history; the dated HTML reports it mentions were removed from
+      the repo in v1.1.0.
+      HISTORY:
       REACHABLE as of 2026-09-01 — the earlier "AppRole DENIED" was a Vault
       user-lockout, since resolved. Endpoint is https://192.168.202.76 (443,
       behind nginx) NOT :9000, which ufw does not open; the url field in the
@@ -329,32 +382,36 @@ render_proof:
 # ── release ─────────────────────────────────────────────────────────────────
 release:
   push_policy: >-
-    Work lands on a release/vX.Y.Z branch and is MERGED to main (8 merge commits
-    across 50). Do not commit release changes directly to main.
-  tag: none
+    Work lands on a release/vX.Y.Z branch and is MERGED to main on GitLab (the
+    authoritative remote). Do not commit release changes directly to main.
+  tag: "vX.Y.Z on GitLab"
   note: >-
-    No git tags exist in this repo at all — releases are identified only by the
-    VERSION files and CHANGELOG. Consider tagging; until then, a "release" is
-    just a merge commit.
+    Tags v1.0.6..v1.0.11 exist. A vX.Y.Z tag runs the ci-templates pipeline
+    (.gitlab-ci.yml, pinned v1.5.3): VERSION == tag, shellcheck, CR check,
+    data-file parse, tests/run.sh --strict, Sonar, then a git-archive tarball
+    and its checksum published to the project's package registry. Nothing is
+    deployed. .gitattributes export-ignores .claude/, .work/ and .github/, so
+    neither the published tarball nor the offline bundle carries them.
   cascade: "bump every entry in surfaces: in ONE commit, including the index.html ?v= token"
 
 ci:
-  github_actions: none        # no .github/workflows/ directory
-  gitlab: none                # no .gitlab-ci.yml
+  github_actions: none        # .github/workflows/main.yml (a GitHub->GitLab mirror) deleted in v1.1.0
+  gitlab: ".gitlab-ci.yml -> james.rodman/ci-templates v1.5.3, on vX.Y.Z tags"
   status: >-
-    There is NO CI of any kind. Every gate is run by hand. An agent must never
-    report "CI passed" for this repo — there is nothing to pass.
+    CI runs on TAGS only. Never report "CI passed" for a branch or a commit
+    that has not been tagged and whose pipeline you have not read; report
+    exactly which gates you ran by hand.
 
 # ── promote ─────────────────────────────────────────────────────────────────
 promote:
   method: manual
-  pipeline: none
+  pipeline: "CI builds and publishes the release tarball on a tag; deployment is operator-run" 
   prod:
     host: 192.168.202.90
     name: TopicManager
     user: claude_admin
     key: ~/.ssh/claude_admin
-    running_version: "1.0.4"
+    running_version: "1.0.6 (measured 2026-09-26 — but tm/VERSION read 1.0.6 in every tag v1.0.6..v1.0.11, so this cannot say which of those six is installed)"
     note: >-
       MEASURED 2026-09-02: `curl -sk https://192.168.202.90/api/health` returns
       {"status":"ok","version":"1.0.4"}, so the host has taken the v1.0.4
@@ -462,14 +519,21 @@ hazards:
 
   - id: vulnerable-pin-in-requirements
     note: >-
-      requirements.txt pins cryptography==44.0.2, which carries five advisories
+      RESOLVED (cryptography 50.0.1 since v1.0.3; tools/sca-check.sh 8/8 clean
+      2026-09-26). Kept as the rule: re-run SCA against requirements.txt.
+      HISTORY: requirements.txt pinned cryptography==44.0.2, which carries five advisories
       (CVE-2026-69247/-69248/-69249, CVE-2026-26007, CVE-2026-34073; fixed in
       50.0.0). Deploying v1.0.2 exactly as released does NOT clear them. Re-run
       SCA against requirements.txt, not just against what is installed.
 
   - id: vue-fetched-without-integrity
     note: >-
-      install.sh and upgrade.sh curl vue.global.prod.js from jsDelivr and serve
+      RESOLVED. install.sh (since v1.0.4), prepare-offline.sh and
+      install/upgrade-full.sh all verify VUE_SHA256; the v1.1.0 pin (3.5.43,
+      b7239405...478e) was verified against the npm registry tarball, not the
+      CDN alone. The text below is history, including the "STILL LIVE for
+      install.sh" line, which stopped being true in v1.0.4.
+      HISTORY: install.sh and upgrade.sh curl vue.global.prod.js from jsDelivr and serve
       whatever comes back — no SRI, no checksum, no signature. Pin by content
       hash. install/upgrade-full.sh does; the older scripts do not.
       STILL LIVE for install.sh, which asks for 3.5.35 and takes whatever comes
@@ -515,9 +579,45 @@ hazards:
 
   - id: no-ci-no-tests
     note: >-
-      There is no CI and no test suite. Nothing catches a regression except the
-      eight declared gates (5 syntax/consistency + sca + the repo test suite) and a human. Weight review accordingly — this is not a
-      repo where "the tests pass" means anything.
+      SUPERSEDED: CI on tags and a test suite (t00-t22) now exist. What
+      remains true: nothing renders the frontend or runs install.sh on a clean
+      host automatically — render proof and a from-scratch install are still
+      manual, and the Linux-only mode cases need --remote.
+
+  - id: tm-version-drift-under-ci-tags
+    note: >-
+      FOUND 2026-09-26 (v1.1.0). CI compares VERSION with the tag and nothing
+      else, so tm/VERSION (what /api/health serves) stayed 1.0.6 through six
+      tagged releases and prod's health answer could not say which was
+      installed. tools/check-version-surfaces.sh (t22) now holds every
+      surface to VERSION inside the test lane.
+
+  - id: ldap-defaults-removed
+    note: >-
+      v1.1.0 removed tm/auth.py's built-in ldap_server / ldap_base_dn /
+      ldap_domain defaults (they named one site's directory). A config.yaml
+      that relied on them locks every user out on the new code, so the
+      upgrade BLOCKS on missing keys and --force does NOT override that one;
+      install.sh refuses a reinstall over such a config BEFORE copying code.
+
+  - id: bundle-was-the-working-directory
+    note: >-
+      Until v1.1.0 prepare-offline.sh tarred the whole checkout, shipping
+      .claude/, .work/ (production addresses), scan reports and untracked
+      files. It now uses git archive of HEAD with .gitattributes
+      export-ignore — which must name the directory AND its /** contents, or
+      git archive still emits the empty directories (measured) — and
+      tools/check-env-neutral.sh --bundle deletes a leaky bundle.
+
+  - id: agent-heredoc-backslashes
+    note: >-
+      MEASURED 2026-09-26 while building v1.1.0: in the agent's Bash tool a
+      `\\` in a quoted heredoc sometimes arrives as `\`, turning
+      `printf '...\n'` into a literal newline and `\` + newline into a line
+      continuation; the Write tool turns `\u0027` into a bare apostrophe (which
+      blanked SettingsTab until node --check caught it). Put backslash-bearing
+      edit specs in files written with the Write tool, avoid \u escapes, and
+      verify every such edit with bash -n / node --check / py_compile.
 
 # ── hosts ───────────────────────────────────────────────────────────────────
 hosts:
@@ -557,8 +657,8 @@ principles:
      A principle that carries a number is a principle with a shelf life. The
      number lives in promote.prod.running_version and NOWHERE else; this
      principle states only the check: curl -sk https://192.168.202.90/api/health"
-  - "This repo has no CI. It DOES have a test suite (tests/, 120 cases) as of 2026-09-01. Never report that CI passed or that tests
-     are green; say exactly which of the eight declared gates (5 syntax/consistency + sca + the repo test suite) ran."
+  - "CI runs on tags only (ci-templates); the test suite is tests/ (t00-t22). Never report that CI passed or that tests
+     are green without saying exactly which declared gates ran, where (workstation, --remote Linux host, CI) and what skipped."
   - "Every authenticated user is a Kafka admin by design. There is no role
      separation — 'authenticated' and 'can delete any topic' are the same thing."
   - "Security headers must be proven SERVED per route class with curl -skI.
