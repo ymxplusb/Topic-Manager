@@ -169,6 +169,9 @@ const App = {
             });
         }
 
+        // Classification banner colours. EXEMPT from the theme on purpose:
+        // they are chosen in Settings and carry meaning, so no theme token may
+        // reach them. SettingsTab.bannerColors holds the same values.
         const colorMap = { green:'#16a34a', blue:'#2563eb', purple:'#7c3aed',
                            red:'#dc2626', orange:'#ea580c', yellow:'#ca8a04' };
         const fgMap    = { white:'#ffffff', black:'#000000', grey:'#d1d5db' };
@@ -192,10 +195,11 @@ const App = {
         }
 
         onMounted(async () => {
-            const t = localStorage.getItem('tmTheme') || 'dark';
-            document.body.classList.remove('light-mode', 'cb-mode');
-            if (t === 'light') document.body.classList.add('light-mode');
-            if (t === 'cb')    document.body.classList.add('cb-mode');
+            // The only theme path that runs BEFORE login. tmReadTheme and
+            // tmApplyTheme live in TopBar.js (loaded first by index.html): one
+            // validated reader, so a malformed saved value or an unavailable
+            // localStorage can neither pick a class nor throw out of here.
+            tmApplyTheme(tmReadTheme());
 
             try {
                 const r = await fetch('/api/settings/public');

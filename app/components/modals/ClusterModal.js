@@ -194,7 +194,7 @@ const ClusterModal = {
         <div class="fg">
           <label>Active Cluster</label>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.72rem;padding-top:7px">
-            <input type="checkbox" v-model="active" style="accent-color:var(--accent-cyan)">
+            <input type="checkbox" v-model="active" style="accent-color:var(--accent)">
             Make this the default cluster
           </label>
           <div class="fhint">Exactly one profile is the default; setting this clears the others.</div>

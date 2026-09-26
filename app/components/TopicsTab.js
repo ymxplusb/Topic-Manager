@@ -186,7 +186,7 @@ const TopicsTab = {
         <div v-if="showBrokerPopup"
              style="position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);z-index:500;
                     background:var(--bg-card);border:1px solid var(--border-color);border-radius:8px;
-                    padding:10px 14px;box-shadow:0 8px 24px rgba(0,0,0,.5);min-width:260px;
+                    padding:10px 14px;box-shadow:var(--shadow-lg);min-width:260px;
                     pointer-events:none;">
           <div style="font-size:.58rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);margin-bottom:8px">Connected Brokers</div>
           <div v-for="b in brokerMeta.brokers" :key="b.id"
@@ -215,7 +215,7 @@ const TopicsTab = {
       <input type="checkbox" v-model="showInternal"> Show internal
     </label>
     <div class="tspacer"></div>
-    <button class="btn btn-sm" v-if="selectedCount > 0" @click="openBulkDelete" style="color:var(--accent-red);border-color:rgba(248,113,113,.35)">
+    <button class="btn btn-sm" v-if="selectedCount > 0" @click="openBulkDelete" style="color:var(--accent-red);border-color:color-mix(in srgb, var(--accent-red) 35%, transparent)">
       🗑 Delete ({{ selectedCount }})
     </button>
     <button class="btn btn-sm" @click="fetch" :disabled="loading">
@@ -228,7 +228,7 @@ const TopicsTab = {
   </div>
 
   <div v-if="loading" style="text-align:center;padding:48px"><span class="spinner" style="width:20px;height:20px"></span></div>
-  <div v-else-if="error" style="color:var(--accent-red);font-size:.75rem;padding:12px;background:rgba(248,113,113,.06);border:1px solid rgba(248,113,113,.2);border-radius:8px;margin-bottom:10px">{{ error }}</div>
+  <div v-else-if="error" style="color:var(--accent-red);font-size:.75rem;padding:12px;background:color-mix(in srgb, var(--accent-red) 6%, transparent);border:1px solid color-mix(in srgb, var(--accent-red) 20%, transparent);border-radius:8px;margin-bottom:10px">{{ error }}</div>
   <div v-else-if="!filtered.length && !loading" class="empty-state">
     <div class="ei">📭</div>
     <div class="et">No topics found</div>

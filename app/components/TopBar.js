@@ -1,5 +1,40 @@
 // Jarvis Topic Manager — Top Navigation Bar
 // Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
+
+// ── Theme preference (v1.1.0) ────────────────────────────────────────────
+// ONE reader and ONE writer for the saved theme, shared by the three places
+// that set the body class: app/main.js onMounted (the only path that runs
+// before login), setTheme() below, and mounted() below. They used to read
+// localStorage directly, which let a malformed or foreign value through as a
+// class decision and threw outright where storage is unavailable (a
+// locked-down browser profile, some private modes) — an exception inside
+// onMounted stops the whole shell from rendering.
+//
+// The value shape is unchanged ('dark' | 'light' | 'cb' under 'tmTheme'), so
+// every preference saved by an earlier release still loads.
+const TM_THEMES = ['dark', 'light', 'cb'];
+const TM_THEME_KEY = 'tmTheme';
+
+function tmReadTheme() {
+    let saved = null;
+    try { saved = localStorage.getItem(TM_THEME_KEY); } catch (e) { saved = null; }
+    return TM_THEMES.includes(saved) ? saved : 'dark';
+}
+
+function tmSaveTheme(t) {
+    try { localStorage.setItem(TM_THEME_KEY, t); } catch (e) { /* the theme still applies for this session */ }
+}
+
+// Colour-blind is its own palette and always dark; the three classes are
+// mutually exclusive, which is what the three-way menu has always meant.
+function tmApplyTheme(t) {
+    const theme = TM_THEMES.includes(t) ? t : 'dark';
+    document.body.classList.remove('light-mode', 'cb-mode');
+    if (theme === 'light') document.body.classList.add('light-mode');
+    else if (theme === 'cb') document.body.classList.add('cb-mode');
+    return theme;
+}
+
 const TopBar = {
     name: 'TopBar',
     props: ['user', 'clusters', 'activeClusterId', 'brokerMeta'],
@@ -8,7 +43,7 @@ const TopBar = {
         return {
             showThemeMenu: false,
             showClusterMenu: false,
-            currentTheme: localStorage.getItem('tmTheme') || 'dark',
+            currentTheme: tmReadTheme(),
         };
     },
     computed: {
@@ -25,12 +60,10 @@ const TopBar = {
     },
     methods: {
         setTheme(t) {
-            this.currentTheme = t;
+            const theme = tmApplyTheme(t);
+            this.currentTheme = theme;
             this.showThemeMenu = false;
-            localStorage.setItem('tmTheme', t);
-            document.body.classList.remove('light-mode', 'cb-mode');
-            if (t === 'light') document.body.classList.add('light-mode');
-            else if (t === 'cb')  document.body.classList.add('cb-mode');
+            tmSaveTheme(theme);
         },
         selectCluster(id) {
             this.showClusterMenu = false;
@@ -42,8 +75,7 @@ const TopBar = {
         closeMenus() { this.showThemeMenu = false; this.showClusterMenu = false; },
     },
     mounted() {
-        const saved = localStorage.getItem('tmTheme');
-        if (saved) this.setTheme(saved);
+        this.currentTheme = tmApplyTheme(tmReadTheme());
         document.addEventListener('click', this.closeMenus);
     },
     beforeUnmount() {
@@ -78,7 +110,7 @@ const TopBar = {
           <div style="font-weight:600;color:var(--text-primary)">{{ c.name }}</div>
           <div style="font-family:var(--mono);font-size:.58rem;color:var(--text-muted)">{{ c.security_protocol }}</div>
         </div>
-        <span v-if="c.id === activeClusterId" style="margin-left:auto;color:var(--accent-cyan);font-size:.7rem">✓</span>
+        <span v-if="c.id === activeClusterId" style="margin-left:auto;color:var(--accent);font-size:.7rem">✓</span>
       </div>
     </div>
   </div>
