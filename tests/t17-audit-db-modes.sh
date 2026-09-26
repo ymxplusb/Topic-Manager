@@ -134,6 +134,61 @@ e_refuses_symlink() {
 }
 tm_case "enforce-refuses-a-symlink-in-both-scripts" modes,symlinks e_refuses_symlink
 
+# ─── THE CONSEQUENCE: Phase 10 on a v1.0.x host ends with 0600/0700 ─────────
+# Drives the REAL Phase 10 re-application block — the baseline replay, the
+# frontend pass, the runtime chowns and the enforcement that follows them —
+# against a fake root whose recorded baseline says tm.db 0644 and data/ 0755,
+# exactly what a v1.0.x host records. Only BASELINE_PATHS is relocated, as in
+# t03, and the harness refuses to run if any entry escapes the fake root.
+_build_phase10() {
+    {
+        echo '#!/usr/bin/env bash'
+        echo 'set -euo pipefail'
+        echo 'FAKEROOT="$1"; ACTION="$2"; PERM_BASELINE="$3"'
+        echo 'info() { echo "[INFO] $*"; }; warn() { echo "[WARN] $*"; }; success() { echo "[OK] $*"; }'
+        echo 'fail() { echo "[FAIL] $*" >&2; exit 1; }'
+        echo 'SERVICE="topic-manager"; APP_USER="root"; WEB_USER="'"$TM_WEB_USER"'"'
+        echo 'APP_HOME="${FAKEROOT}/opt/topic-manager"; VENV="${APP_HOME}/venv"'
+        echo 'FRONTEND_DIR="${FAKEROOT}/var/www/topic-manager"'
+        echo 'CONFIG_DIR="${FAKEROOT}/etc/topic-manager"'
+        echo 'DROPIN_DIR="${FAKEROOT}/etc/systemd/system/${SERVICE}.service.d"'
+        echo 'CLUSTERS_DIR="${CONFIG_DIR}/clusters.d"; CLUSTERS_FILE="${CLUSTERS_DIR}/clusters.yaml"'
+        echo 'CERT_DIR="${APP_HOME}/data/cluster-certs"'
+        tm_extract_between "$UP" '^BASELINE_PATHS=\(' '^\)$' | sed 's#"/#"${FAKEROOT}/#g'
+        echo 'for _p in "${BASELINE_PATHS[@]}"; do case "$_p" in "$FAKEROOT"/*) ;; *) echo "REFUSING: $_p" >&2; exit 90 ;; esac; done'
+        local f
+        for f in record_baseline baseline_stream baseline_is_legacy baseline_assert_record \
+                 baseline_lookup apply_baseline safe_install_dir enforce_audit_db_modes; do
+            tm_extract_func "$UP" "$f"
+        done
+        tm_extract_line "$UP" '^baseline_has\(\)'
+        tm_extract_line "$UP" '^can_access\(\)'
+        echo 'if [ "$ACTION" = record ]; then record_baseline "$PERM_BASELINE"; exit 0; fi'
+        tm_extract_between "$UP" '^info "Re-applying the recorded permission baseline' \
+                                 '^success "Ownership and modes restored"'
+    } > "${TM_TMP}/p10.sh"
+}
+p_phase10_ends_private() {
+    local FR="${TM_TMP}/root" A
+    A="${FR}/opt/topic-manager"
+    mkdir -p "${A}/data" "${A}/tm" "${A}/venv/bin" "${A}/logs" "${FR}/var/www/topic-manager/app"
+    : > "${A}/wsgi.py"; printf 'x\n' > "${FR}/var/www/topic-manager/index.html"
+    chmod 755 "${A}/data"
+    : > "${A}/data/tm.db"; chmod 644 "${A}/data/tm.db"
+    _build_phase10
+    bash "${TM_TMP}/p10.sh" "$FR" record "${TM_TMP}/bl" > "${TM_TMP}/out" 2>&1 \
+        || _tm_afail "record failed: $(cat "${TM_TMP}/out")"
+    tm_assert_recorded "${TM_TMP}/bl" "${A}/data/tm.db" "" "" 644 \
+        "precondition: the baseline did not record the v1.0.x 0644"
+    bash "${TM_TMP}/p10.sh" "$FR" phase10 "${TM_TMP}/bl" > "${TM_TMP}/out" 2>&1 \
+        || _tm_afail "the Phase 10 block failed: $(cat "${TM_TMP}/out")"
+    tm_assert_mode 600 "${A}/data/tm.db" \
+        "Phase 10 left tm.db at the RECORDED 0644 — the upgrade replays a v1.0.x
+        host's world-readable audit database straight back"
+    tm_assert_mode 700 "${A}/data" "Phase 10 left data/ at the recorded 0755"
+}
+tm_case "phase10-on-a-v1.0.x-baseline-ends-0600-0700" modes,chown p_phase10_ends_private
+
 # ─── where it is called, and in what order ───────────────────────────────────
 # The behaviour is proven above; these prove the scripts still CALL it, and
 # call it AFTER the thing that would otherwise undo it.
