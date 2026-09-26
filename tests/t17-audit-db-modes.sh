@@ -50,6 +50,21 @@ m_created_private() {
 }
 tm_case "models-creates-tm.db-0600-and-data-0700" modes m_created_private
 
+# Round 2 hand control D1 (the O_CREAT mode loosened to 0644) SURVIVED: every
+# case went through init_db, whose narrowing pass hid it. get_db ALONE creates
+# the file when it is deleted under a running service — it must be born 0600.
+m_get_db_alone_creates_private() {
+    umask 022
+    mkdir -p "${TM_TMP}/data"; chmod 700 "${TM_TMP}/data"
+    PYTHONPATH="$TM_REPO_ROOT" PYTHONDONTWRITEBYTECODE=1 "$PY" -c "
+import sys
+from tm.models import get_db
+get_db({'audit': {'db_path': sys.argv[1]}}).close()
+" "${TM_TMP}/data/tm.db" > "${TM_TMP}/py.out" 2>&1 || _tm_afail "get_db failed: $(cat "${TM_TMP}/py.out")"
+    tm_assert_mode 600 "${TM_TMP}/data/tm.db" "get_db created tm.db wider than 0600 under a stock umask"
+}
+tm_case "get-db-alone-creates-tm.db-0600" modes m_get_db_alone_creates_private
+
 m_narrows_existing() {
     mkdir -p "${TM_TMP}/data"; chmod 755 "${TM_TMP}/data"
     : > "${TM_TMP}/data/tm.db"; chmod 644 "${TM_TMP}/data/tm.db"
