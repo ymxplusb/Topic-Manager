@@ -695,6 +695,9 @@ restore_cluster_store() {   # restore_cluster_store <backup-dir>
         safe_install_dir 750 "$APP_USER" "$APP_USER" "$CLUSTERS_DIR"
         find "$CLUSTERS_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
         cp -a "${BD}/etc/clusters.d/." "${CLUSTERS_DIR}/"
+        # cp -a of "dir/." also copies the backup directory's OWN mode onto the
+        # target, so the store directory is re-moded after, not only before.
+        safe_install_dir 750 "$APP_USER" "$APP_USER" "$CLUSTERS_DIR"
         find "$CLUSTERS_DIR" -mindepth 1 \( -type f -o -type d \) -exec chown -h "${APP_USER}:${APP_USER}" -- {} +
         [[ -f "$CLUSTERS_FILE" ]] && chmod 640 -- "$CLUSTERS_FILE"
         info "Restored cluster profiles to ${CLUSTERS_DIR}"
@@ -703,6 +706,7 @@ restore_cluster_store() {   # restore_cluster_store <backup-dir>
         safe_install_dir 700 "$APP_USER" "$APP_USER" "$CERT_DIR"
         find "$CERT_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
         cp -a "${BD}/data/cluster-certs/." "${CERT_DIR}/"
+        safe_install_dir 700 "$APP_USER" "$APP_USER" "$CERT_DIR"
         find "$CERT_DIR" -mindepth 1 -type f -exec chown -h "${APP_USER}:${APP_USER}" -- {} + -exec chmod 600 -- {} +
         info "Restored Kafka TLS material to ${CERT_DIR} ($(find "$CERT_DIR" -type f | wc -l) file(s))"
     fi
