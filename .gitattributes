@@ -39,3 +39,6 @@
 .work/**     export-ignore
 .github      export-ignore
 .github/**   export-ignore
+# The CI definition names the site's CI namespace; it runs from the clone,
+# never from an archive, so it does not ship either (round 2).
+.gitlab-ci.yml export-ignore

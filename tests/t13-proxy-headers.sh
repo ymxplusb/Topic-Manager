@@ -78,7 +78,7 @@ one = c.get('/__peer', headers={'X-Forwarded-For': '203.0.113.9'}).get_data(as_t
 # The client sent its own X-Forwarded-For and nginx APPENDED the real peer.
 # Only the last entry may be believed.
 spoof = c.get('/__peer', headers={
-    'X-Forwarded-For': '10.9.9.9, 198.51.100.7, 203.0.113.9'}).get_data(as_text=True)
+    'X-Forwarded-For': '192.0.2.99, 198.51.100.7, 203.0.113.9'}).get_data(as_text=True)
 
 print('bare=%s one=%s spoof=%s' % (bare, one, spoof))
 PYPROBE
@@ -104,7 +104,7 @@ only_one_hop_is_trusted() {
     _mkconfig; _probe
     case "$OUT" in
         *"spoof=203.0.113.9"*) ;;
-        *"spoof=10.9.9.9"*) _tm_afail "the FIRST X-Forwarded-For entry was believed.
+        *"spoof=192.0.2.99"*) _tm_afail "the FIRST X-Forwarded-For entry was believed.
         nginx appends the real peer to whatever the client sent, so that entry
         is chosen by the caller: any user can write their own address into the
         audit log, and it looks precise. Got: ${OUT}" ;;

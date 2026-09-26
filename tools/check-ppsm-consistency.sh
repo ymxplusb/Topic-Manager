@@ -96,23 +96,37 @@ if not any(r[0] == "Generated" for r in gen):
 
 # Coverage: the rows the owner's PPSM must carry, checked on the static copy
 # (the generated one is proven equal to it above).
-def has(section, port, direction, text=""):
-    return any(r[0] == section and r[2] == port and r[4] == direction and text in r[5]
-               for r in s_cmp)
-required = [
-    ("Web", "443", "Inbound", ""), ("Web", "80", "Inbound", "Redirect"),
-    ("Admin", "22", "Inbound", ""), ("Auth", "636", "Outbound", ""),
-    ("Infra", "53", "Outbound", ""), ("Infra", "123", "Outbound", ""),
-    ("Logging", "514", "Outbound", "PLANNED"), ("Logging", "6514", "Outbound", "PLANNED"),
-    ("PKI", "N/A", "Outbound", "NOT USED"),
+# PINNED core rows: section, port, PROTOCOL, direction (round 2, adversary
+# F7). The two copies agreeing proves nothing when both were edited the same
+# wrong way — a TCP->UDP change made identically in PPSM.csv and in
+# downloadPpsm() used to pass. These are the facts of this product's network
+# surface; changing one is a decision, and it is made here, in review.
+PINNED = [
+    ("Web",     "443",  "TCP",     "Inbound",  ""),
+    ("Web",     "80",   "TCP",     "Inbound",  "Redirect"),
+    ("Admin",   "22",   "TCP",     "Inbound",  ""),
+    ("App",     "5001", "TCP",     "Loopback", ""),
+    ("Auth",    "636",  "TCP",     "Outbound", ""),
+    ("Infra",   "53",   "UDP/TCP", "Outbound", ""),
+    ("Infra",   "123",  "UDP",     "Outbound", ""),
+    ("Logging", "514",  "UDP/TCP", "Outbound", "PLANNED"),
+    ("Logging", "6514", "TCP",     "Outbound", "PLANNED"),
+    ("PKI",     "N/A",  "N/A",     "Outbound", "NOT USED"),
 ]
-for sec, port, d, t in required:
-    if not has(sec, port, d, t):
+for sec, port, proto, d, t in PINNED:
+    rows = [r for r in s_cmp if r[0] == sec and r[2] == port and r[4] == d]
+    if not rows:
         fail += 1
-        print("FAIL: no %s %s %s row%s" % (sec, port, d, (" mentioning '%s'" % t) if t else ""))
-if not any(r[0] == "Kafka" and r[4] == "Outbound" and "operator-defined" in r[2] for r in s_cmp):
+        print("FAIL: no %s %s %s row" % (sec, port, d)); continue
+    if not any(r[3] == proto for r in rows):
+        fail += 1
+        print("FAIL: %s %s %s is %s; the pinned protocol is %s" % (sec, port, d, rows[0][3], proto))
+    if t and not any(t in r[5] for r in rows):
+        fail += 1
+        print("FAIL: %s %s %s does not say '%s'" % (sec, port, d, t))
+if not any(r[0] == "Kafka" and r[3] == "TCP" and r[4] == "Outbound" and "operator-defined" in r[2] for r in s_cmp):
     fail += 1
-    print("FAIL: the Kafka broker row does not say its ports are operator-defined")
+    print("FAIL: the Kafka broker row is not TCP outbound at operator-defined ports")
 if any(r[2] == "389" for r in s_cmp):
     fail += 1
     print("FAIL: an LDAP 389 row is listed; the product does not use plain LDAP")

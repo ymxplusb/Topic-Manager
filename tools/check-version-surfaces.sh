@@ -98,6 +98,15 @@ for rel, rx in (("app/main.js", r"ref\('unknown'\)"),
     if not re.search(rx, read(rel) or ""):
         print("FAIL: %s no longer seeds the version as 'unknown'" % rel); fail += 1
 
+# ... and NO version literal anywhere in main.js (round 2, adversary F8). The
+# seed is not the only place one can hide: `d.version || '1.0.9'` in the
+# fetch fallback asserts a version exactly as a hard-coded seed does.
+main_src = read("app/main.js") or ""
+lits = re.findall(r"""['"`]v?\d+\.\d+\.\d+['"`]""", main_src)
+if lits:
+    print("FAIL: app/main.js carries version literal(s) %s — it must only ever show what "
+          "/api/version said, or 'unknown'" % ", ".join(sorted(set(lits)))); fail += 1
+
 if fail:
     print("check-version-surfaces: %d surface(s) disagree with VERSION %s." % (fail, want))
     sys.exit(1)

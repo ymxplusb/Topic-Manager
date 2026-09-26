@@ -68,14 +68,24 @@ PATTERNS = [
     ("personal user name",     r"\bjrod" + r"m(an)?\b"),
     ("workstation path",       "/c/" + "Users/"),
     ("personal repository",    "ymx" + "plusb"),
+    # Round 2 (adversary F6): every RFC 1918 range, not only 192.168/16 ...
+    ("private address (10/8)",       r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"),
+    ("private address (172.16/12)",  r"\b172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b"),
+    # ... internal DNS suffixes (a dotted host name, so a code property such
+    # as `t.internal` does not count) ...
+    ("internal host name",     r"\b[a-z0-9-]+\.int\.[a-z0-9-]+\.[a-z]{2,}\b"),
+    ("internal DNS suffix",    r"\b[a-z0-9-]+\.[a-z0-9-]+\.(internal|intranet|corp|lan|home\.arpa)\b"),
+    # ... secret-store paths and the personal code namespace.
+    ("secret-store path",      r"\b(creds|secret|kv)/(apps|data|hooks|metadata|infra)/"),
+    ("personal namespace",     "james" + r"\.rodman/"),
 ]
 RX = [(label, re.compile(p, re.I)) for label, p in PATTERNS]
 
 # Paths that are this repository's own process records: tracked, but
 # export-ignored and never shipped. In a BUNDLE they are forbidden outright.
-INTERNAL = (".claude/", ".work/")
+INTERNAL = (".claude/", ".work/", ".gitlab-ci.yml")
 FORBIDDEN_IN_BUNDLE = re.compile(
-    r"(^|/)(\.claude|\.work|\.git|\.github)(/|$)|(^|/)docs/SonarQube-Report-[^/]*$")
+    r"(^|/)(\.claude|\.work|\.git|\.github)(/|$)|(^|/)docs/SonarQube-Report-[^/]*$|(^|/)\.gitlab-ci\.yml$")
 
 findings = []
 scanned = 0

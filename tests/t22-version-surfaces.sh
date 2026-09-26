@@ -58,4 +58,15 @@ v_token_drift() {
 }
 tm_case "a-mixed-cache-token-is-caught" none v_token_drift
 
+# Round 2 (adversary F8): the FALLBACK, not only the seed.
+v_fallback_literal() {
+    _copy
+    sed -i "s/version.value = d.version || 'unknown';/version.value = d.version || '1.0.9';/" "${TM_TMP}/copy/app/main.js"
+    cmp -s "${TM_REPO_ROOT}/app/main.js" "${TM_TMP}/copy/app/main.js" && tm_die "the fixture changed nothing"
+    bash "$GATE" --root "${TM_TMP}/copy" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "main.js falling back to a hard-coded '1.0.9' passed — the app would assert a version it was never told"
+    tm_assert_grep "version literal" "${TM_TMP}/out" "the gate failed, but not on the literal"
+}
+tm_case "a-version-literal-in-the-main-js-fallback-is-caught" none v_fallback_literal
+
 tm_finish

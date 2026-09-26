@@ -215,7 +215,7 @@ now = datetime.datetime.now(datetime.timezone.utc)
 db.execute('INSERT OR REPLACE INTO sessions (id, user, created_at, last_seen, expires_at, ip_addr)'
            ' VALUES (?,?,?,?,?,?)',
            ('test-session', 'tester', now.isoformat(), now.isoformat(),
-            (now + datetime.timedelta(hours=1)).isoformat(), '10.0.0.1'))
+            (now + datetime.timedelta(hours=1)).isoformat(), '192.0.2.10'))
 db.commit(); db.close()
 
 hdrs = {'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin'}
