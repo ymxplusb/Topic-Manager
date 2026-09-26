@@ -91,8 +91,11 @@ cat "${TM_TMP}/policy.out"
 STUB
     cat > "${TM_TMP}/bin/dpkg-query" <<STUB
 #!/usr/bin/env bash
-[ -f "${TM_TMP}/dpkg.fail" ] && exit 2
+# A failing dpkg-query can still print PART of the database first (a damaged
+# status file) — the failure must stop the run, not the emptiness.
 cat "${TM_TMP}/dpkg.out"
+[ -f "${TM_TMP}/dpkg.fail" ] && exit 2
+exit 0
 STUB
     # dpkg --compare-versions, for the workstation (no dpkg there). The
     # fixture versions are ones sort -V orders exactly as dpkg does.
