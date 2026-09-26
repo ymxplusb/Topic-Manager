@@ -331,6 +331,26 @@ migrate(os.environ['TM_CONFIG'], os.environ['TM_CLUSTERS_DIR'], owner='${TM_WEB_
 }
 tm_case "migration-gives-the-store-to-the-service-account" chown c_migration_gives_the_store_to_the_service_account
 
+# Round 2: the rewritten config.yaml takes its original owner and mode from
+# the OPEN descriptor (fchmod/fchown). Hand-run control G2 (the template mode
+# replaced by 0644) showed nothing checked this path at all.
+c_config_rewrite_keeps_owner_and_mode() {
+    _mkconfig_legacy
+    chown "root:${TM_WEB_USER}" "${TM_TMP}/config.yaml"; chmod 640 "${TM_TMP}/config.yaml"
+    umask 022
+    _py "
+import os
+from tm.migrate_clusters import migrate
+migrate(os.environ['TM_CONFIG'], os.environ['TM_CLUSTERS_DIR'])
+" > /dev/null
+    tm_assert_grep "moved to" "${TM_TMP}/config.yaml" "precondition: config.yaml was not rewritten"
+    tm_assert_mode 640 "${TM_TMP}/config.yaml" \
+        "the rewritten config.yaml lost its 0640 — it holds secret_key and the bind password"
+    tm_assert_owner "root:${TM_WEB_USER}" "${TM_TMP}/config.yaml" \
+        "the rewritten config.yaml lost its owner/group"
+}
+tm_case "migration-rewrite-keeps-config-yaml-owner-and-mode" modes,chown c_config_rewrite_keeps_owner_and_mode
+
 c_migration_is_idempotent() {
     _mkconfig_legacy
     OUT="$(_py "
