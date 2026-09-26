@@ -45,8 +45,8 @@ the script has **measured** each point rather than assumed it:
 | Audit DB | `/opt/topic-manager/data` `0700`, `tm.db` `0600`, both owned by `topic-manager` |
 | Clusters | `/etc/topic-manager/clusters.d/clusters.yaml` `0640 topic-manager:topic-manager`, **empty** — you add clusters in Settings |
 | Restart control | polkit rule `/etc/polkit-1/rules.d/50-topic-manager.rules` (three unit/verb pairs) and the root-side `topic-manager-nginx-test.service` |
-| Frontend | Vue 3.5.43, **SHA-256 verified** against the pin in `install/upgrade-full.sh` before it is served |
-| Python | a venv of **binary wheels only**, exactly the pins in `requirements.txt`; no compiler on the host |
+| Frontend | `/var/www/topic-manager` **root:root**, dirs 0755 / files 0644 (the web server reads it and cannot rewrite it); Vue 3.5.43, **SHA-256 verified** against the pin in `install/upgrade-full.sh` before it is served |
+| Python | a venv of **binary wheels only**, every package (transitive ones included) **hash-verified** against `requirements.lock`; no compiler on the host |
 
 ---
 
@@ -169,7 +169,10 @@ anything internal or site-specific got in.
 
 ### 5b. On the air-gapped host — install
 
-Carry the bundle and its `.sha256` across, then:
+Carry the bundle and its `.sha256` across. **Check the checksum against a value you obtained
+out of band** — from the release record, or read off the build host by a second person — not
+only against the `.sha256` that travelled with the bundle, which proves integrity in transit
+but not origin. Then:
 
 ```bash
 sha256sum -c topic-manager-offline-<version>.tar.gz.sha256
@@ -179,9 +182,11 @@ sudo bash install.sh \
     --ldap-group "CN=Kafka-Admins,OU=Groups,DC=example,DC=org" --server-name topics.example.org
 ```
 
-With no network, `install.sh` installs only the bundled `.deb`s for packages the host does
-**not** already have (so nothing is downgraded), installs Python from the bundled wheels with
-`--no-index`, and uses the bundled, hash-verified Vue.
+With no network, `install.sh` uses the bundle's `.deb`s as a private apt **repository**: apt's
+own resolver installs only the missing top-level packages, the bundle is pinned below every
+installed package (a FIPS `libssl` or `openssh` is never replaced), nothing is downloaded, and
+the temporary apt configuration is removed afterwards. Python comes from the bundled wheels,
+each checked against its SHA-256 in `requirements.lock`; Vue from the bundle, hash-verified.
 
 ---
 
@@ -301,9 +306,10 @@ nothing else is needed inbound except SSH for administration. The complete inven
 ## 12. Upgrading later
 
 ```bash
-# online: from the git URL your site publishes the release at — there is no default
-sudo bash install/upgrade-full.sh --audit-only --repo-url <your-git-url> --repo-branch v<next>
-sudo bash install/upgrade-full.sh --repo-url <your-git-url> --repo-branch v<next>
+# online: from the git URL your site publishes the release at — there is no default —
+# pinned to the release's full commit id, taken out of band (release notes / tag pipeline)
+sudo bash install/upgrade-full.sh --audit-only --repo-url <your-git-url> --repo-branch v<next> --repo-commit <40-hex-sha>
+sudo bash install/upgrade-full.sh --repo-url <your-git-url> --repo-branch v<next> --repo-commit <40-hex-sha>
 
 # offline: from a bundle staged at /var/lib/topic-manager/offline-src
 sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline

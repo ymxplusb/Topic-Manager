@@ -129,3 +129,50 @@ License: Apache-2.0
 Copyright (c) Apache Software Foundation
 
 Licensed under the Apache License, Version 2.0.
+
+---
+
+# Transitive Python dependencies (requirements.lock)
+
+Installed with the pins above, each verified against its SHA-256 in `requirements.lock`.
+The full licence texts ship inside each wheel (`*.dist-info/LICENSE*`).
+
+## blinker
+Version: 1.9.0
+License: MIT
+Copyright 2010 Jason Kirtland; Pallets
+
+## click
+Version: 8.5.0
+License: BSD-3-Clause
+Copyright 2014 Pallets
+
+## itsdangerous
+Version: 2.2.0
+License: BSD-3-Clause
+Copyright 2011 Pallets
+
+## Jinja2
+Version: 3.1.6
+License: BSD-3-Clause
+Copyright 2007 Pallets
+
+## MarkupSafe
+Version: 3.0.3
+License: BSD-3-Clause
+Copyright 2010 Pallets
+
+## cffi
+Version: 2.1.1
+License: MIT
+Copyright the cffi developers (Armin Rigo, Maciej Fijalkowski)
+
+## pycparser
+Version: 3.0
+License: BSD-3-Clause
+Copyright (c) 2008-2020 Eli Bendersky
+
+## pyasn1
+Version: 0.6.4
+License: BSD-2-Clause
+Copyright (c) 2005-2020 Ilya Etingof

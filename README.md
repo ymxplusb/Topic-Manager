@@ -581,7 +581,8 @@ sudo apt-get install -y git
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/upgrade-src
 sudo git clone --branch v<version> --depth 1 <your-git-url>   /var/lib/topic-manager/upgrade-src
 cd /var/lib/topic-manager/upgrade-src
-sudo bash install/upgrade-full.sh --audit-only --repo-url <your-git-url> --repo-branch v<version>
+sudo git rev-parse HEAD      # must equal the release commit id you got out of band
+sudo bash install/upgrade-full.sh --audit-only --repo-url <your-git-url> --repo-branch v<version> --repo-commit <40-hex-sha>
 ```
 `--audit-only` changes nothing and exits **0** clear, **1** warnings only, **2** blockers present. Resolve every blocker before going further — they are the failures that otherwise appear an hour later as "nobody can log in".
 
@@ -593,8 +594,11 @@ sudo bash install/upgrade-full.sh --list-backups
 
 **Step 5 — Run the upgrade:**
 ```bash
-sudo bash install/upgrade-full.sh --repo-url <your-git-url> --repo-branch v<version>
+sudo bash install/upgrade-full.sh --repo-url <your-git-url> --repo-branch v<version> --repo-commit <40-hex-sha>
 ```
+The upgrade clones only that commit (TLS verification forced, no local transports, known SSH
+host keys only) and refuses the tree if `HEAD` is anything else — a moved tag cannot substitute
+code.
 Useful flags: `--dry-run` (audit + plan, no changes), `--skip-os` (application and dependencies only), `--offline` (see below), `--force` (proceed past blockers — the backup is still taken first).
 
 **Step 6 — Follow the post-upgrade checklist** printed at the end of the run:
@@ -840,6 +844,9 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
 
 - HTTPS enforced (HTTP → 301 redirect)
 - TLS 1.2 / 1.3 only — in the site AND at the http level of `/etc/nginx/nginx.conf`, which install and upgrade manage (stock Ubuntu enables TLS 1.0/1.1 there). FIPS-approved ciphers only: TLS 1.2 ECDHE with AES-GCM and SHA-256/384; TLS 1.3 AES-GCM suites; curves P-384/P-256; session tickets off; `server_tokens off`
+- Python dependencies hash-locked: `requirements.lock` pins every package (transitive ones too) with the SHA-256 of every published wheel; all installers use `--require-hashes --only-binary :all:`
+- Online upgrades pinned to a named 40-hex commit (`--repo-commit`); the offline bundle is a checksummed `git archive` of the tag plus hash-verified wheels
+- Settings changes are audited in the same transaction as the change: no audit row, no change
 - Runs on a STIG'd, FIPS-mode Ubuntu 24.04 host. Known limitation: the `cryptography` and `confluent-kafka` wheels bundle their own OpenSSL, outside the host's validated module — see `SBOM.md` and docs/INSTALL.md section 10
 - Audit database `tm.db` 0600 in a 0700 directory, owned by the service account; `UMask=0077` on the unit
 - HTTPOnly + Secure + SameSite=Lax session cookies, signed with HMAC-SHA-256

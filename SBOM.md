@@ -50,6 +50,23 @@ is written to disk. It was already pinned and already installed — this is a no
 it is used, not a new pin. The pin remains 50.0.1 for the advisories listed under
 *Vulnerability status*.
 
+## Transitive Python dependencies (requirements.lock)
+
+Installed alongside the pins above and verified the same way: `requirements.lock` carries the
+SHA-256 of every published wheel of each, and every installer uses `--require-hashes`.
+`tools/sca-check.sh` queries OSV for these too.
+
+| Component | Version | License | Pulled in by |
+|-----------|---------|---------|--------------|
+| blinker | 1.9.0 | MIT | Flask |
+| click | 8.5.0 | BSD-3-Clause | Flask |
+| itsdangerous | 2.2.0 | BSD-3-Clause | Flask |
+| Jinja2 | 3.1.6 | BSD-3-Clause | Flask |
+| MarkupSafe | 3.0.3 | BSD-3-Clause | Jinja2, Werkzeug |
+| cffi | 2.1.1 | MIT | cryptography |
+| pycparser | 3.0 | BSD-3-Clause | cffi |
+| pyasn1 | 0.6.4 | BSD-2-Clause | ldap3 |
+
 ## Database
 
 | Component | Version | License      | Source       |

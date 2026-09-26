@@ -196,6 +196,26 @@ material, the unit drop-in, the frontend, the venv and the recorded ownership an
 the backup it verified in Phase 4, then reports the health of what it restored. Read the log
 before doing anything by hand.
 
+### `--repo-url needs --repo-commit <40-hex commit id>`
+Online upgrades clone only the exact commit you name (round 2): a branch or tag can be moved on
+the server, and root runs what is cloned. Take the full 40-character commit id of the release
+from its release notes or the tag's CI pipeline — out of band, not from the same server you are
+about to clone — and pass `--repo-commit <sha>` (or `TM_REPO_COMMIT`).
+
+### `The cloned tree is commit '...', not the reviewed ...`
+The branch or tag you named no longer points at the commit you named. Nothing from the clone
+was read or run. Find out why before retrying — this is the check that stops a moved tag.
+
+### `SQLite consistent snapshot failed — the restore point is NOT ready`
+Round 2: a restore point without a consistent copy of the audit database is not a restore
+point, so the upgrade stops before changing anything. Check free space under
+`/var/backups/topic-manager` and that `tm.db` is readable, then re-run.
+
+### `The backed-up Vue does not match the pinned SHA-256 ... — not used`
+The CDN was unreachable and the previous install's Vue is a different version (or was changed).
+Only the pinned file may serve. Stage the offline bundle (its `lib/` carries the pinned Vue) or
+restore network access to the CDN.
+
 ### `git clone failed`
 The clone is from the URL given with `--repo-url` (there is no default). Test it by hand, as
 root, the same way:
@@ -738,6 +758,16 @@ point, which `--restore` and the automatic rollback put back).
 | `nginx -t fails with OR without the TLS edit, so the problem is elsewhere` | Not this edit — often a missing certificate or another site. nginx.conf was put back as it was; fix the other fault and re-run |
 | `... has an ssl_protocols directive that does not end on its own line` | Refused rather than rewritten blind. Put it on one line and re-run |
 | `/etc/nginx/nginx.conf is a symlink; refusing to edit through it` | Replace the link with the real file, or edit it yourself to `ssl_protocols TLSv1.2 TLSv1.3;` |
+| `... has an ssl_protocols directive sharing its line with another directive` | The rewrite replaces the line, so it would delete the other directive. Put `ssl_protocols` on a line of its own and re-run |
+
+**Never widened (round 2).** The rewrite keeps the operator's own list minus anything below
+TLS 1.2: `TLSv1.3` alone stays `TLSv1.3`; `TLSv1 TLSv1.3` becomes `TLSv1.3`; only a line left
+with nothing approved becomes `TLSv1.2 TLSv1.3`.
+
+**`--restore` brings back the PRE-EDIT nginx.conf.** A rollback restores the whole file from the
+Phase 4 restore point, i.e. with whatever `ssl_protocols` it had before the upgrade (on a stock
+host, TLSv1 and TLSv1.1 enabled again). Re-run the upgrade, or set the line by hand, after
+a rollback.
 
 Check it: `grep -E '^\s*ssl_protocols' /etc/nginx/nginx.conf`, and
 `openssl s_client -connect localhost:443 -tls1_1 </dev/null` must fail the handshake.
@@ -745,6 +775,10 @@ Check it: `grep -E '^\s*ssl_protocols' /etc/nginx/nginx.conf`, and
 ---
 
 ## FIPS-mode hosts
+
+- **`Error 2308: No smart card found` on every `sudo`** on a STIG'd host is `pam_pkcs11`
+  looking for a CAC/PIV card, not this product. It is harmless for install and upgrade; the
+  command continues with the next PAM method.
 
 - **Supported.** nginx TLS uses the host's OpenSSL (the validated FIPS provider when FIPS mode
   is on) and the cipher list is FIPS-approved only; the session cookie is HMAC-SHA-256; LDAPS
@@ -781,11 +815,21 @@ Check it: `grep -E '^\s*ssl_protocols' /etc/nginx/nginx.conf`, and
 
 ---
 
-## Sign-in fails with "Sign-in is not configured on this server: auth.... missing from config.yaml"
+## Sign-in says "Sign-in is unavailable. Contact the administrator."
 
-The application found no value for a required directory key. It no longer falls back to any
-built-in directory. Add the key(s) named (see *The directory settings are missing* above) and
-`sudo systemctl restart topic-manager`. The same line is in the service log.
+The application found no usable value for a required directory key — missing, a
+`<placeholder>`, or an `ldap_server` that is not `ldaps://`. It never falls back to a built-in
+directory, and (round 2) it does not tell an unauthenticated client which key: that is in the
+service log — `sudo journalctl -u topic-manager | grep 'Sign-in refused'` — as
+`config.yaml auth.<key> missing, a <placeholder>, or (ldap_server) not an ldaps:// URL`. Fix
+the key (see *The directory settings are missing* above) and
+`sudo systemctl restart topic-manager`.
+
+## Saving a setting fails with "could not be saved together with their audit record"
+
+The change and its `SETTINGS_UPDATE` row are one transaction; the audit row could not be
+written, so nothing changed. The traceback is in the service log. Usually the database is
+full, read-only or not owned by `topic-manager` — see *The audit database mode* above.
 
 ## Everyone was signed out by the upgrade
 
@@ -801,11 +845,26 @@ Sign in again.
 |---|---|
 | `Cannot write /etc/topic-manager/config.yaml: no value for --ldap-url ...` | Pass the directory flags (see `sudo bash install.sh --help`) or run on a terminal to be prompted. Nothing was installed |
 | `--ldap-url must be ldaps://<host>[:<port>]` | Plain `ldap://` is not supported; certificate validation is enforced |
-| `Offline, and these packages are missing: ...` | The bundle has no `.deb` for them. Install from the host's own mirror, or rebuild the bundle with `prepare-offline.sh` on Ubuntu 24.04 of the same architecture |
-| `Offline package install failed` | The bundled `.deb`s do not fit this host (release or architecture). Same remedy |
+| `Offline, and .../install/packages/apt has no Packages index` | The bundle predates round 2 (it handed apt a raw list of .debs, which fails on a STIG/FIPS host). Rebuild it with this release's `prepare-offline.sh` |
+| `Offline package install failed (apt exit N). Nothing installed on the host was replaced` | apt resolved from the bundle and could not satisfy a package without **replacing** something already installed (the bundle is pinned below every installed package, so a FIPS `libssl`/`openssh` is never swapped). Read apt's lines above it; install the named top-level packages from the host's own (FIPS) mirror, or rebuild the bundle on a host whose package set matches |
+| `pip install from requirements.lock failed (a hash mismatch is refused, not retried)` | A wheel did not match its SHA-256 in `requirements.lock` — a tampered mirror, a corrupted bundle, or a bundle built from a different release. Rebuild the bundle; never edit the lock by hand |
+| `Cannot check /etc/topic-manager/config.yaml before changing anything` | Neither the existing venv nor `python3` can import PyYAML. `sudo apt install python3-yaml` and re-run; nothing was changed |
 | `--tls-cert and --tls-key are not a matching certificate/key pair` | The two files are not a pair, or one could not be read. Compare `openssl x509 -noout -pubkey -in <crt>` with `openssl pkey -pubout -in <key>` |
 | `nginx -t failed:` | nginx's own output follows. A fresh install always has a certificate now, so this is a real fault |
 | `topic-manager did not answer /api/health` | `sudo journalctl -u topic-manager -n 50 --no-pager` |
+
+### prepare-offline.sh: `--bundle needs a git work tree` / `Not a git work tree`
+The bundle is built only from `git archive` of the committed tree (round 2 removed the
+directory-copy fallback, which also copied untracked files). Run it from a clone.
+
+### prepare-offline.sh: `pip download from requirements.lock failed. There is no fallback`
+Every wheel must be the locked, hash-verified one for Linux x86_64 / CPython 3.12. If a pin in
+`requirements.txt` changed, regenerate the lock (`python tools/gen-requirements-lock.py`) and
+commit it; `tools/check-requirements-lock.sh` says whether the two agree.
+
+### prepare-offline.sh: `Neither apt-ftparchive (apt-utils) nor dpkg-scanpackages (dpkg-dev)`
+The bundled `.deb`s must be indexed so the target's apt can resolve from them. Install
+`apt-utils` on the build host.
 
 ### prepare-offline.sh: `The bundle failed the leak check above and was deleted`
 `tools/check-env-neutral.sh --bundle` found process records (`.claude/`, `.work/`), a scan
