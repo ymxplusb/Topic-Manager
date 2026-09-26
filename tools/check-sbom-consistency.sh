@@ -55,6 +55,19 @@ if not truth:
     print("FAIL: no == pins parsed from requirements.txt — the gate examined nothing.")
     sys.exit(1)
 
+# The frontend pin has its own source of truth: VUE_VERSION in
+# install/upgrade-full.sh, the line install.sh and prepare-offline.sh read and
+# the one the hash beside it verifies. Added v1.1.0: Vue sits in all three copies
+# below and NOTHING held them to that pin — only sca-check read it, and only to
+# query OSV — so a Vue bump could leave the About dialog advertising the old one.
+up_src = read("install/upgrade-full.sh")
+m = re.search(r'^VUE_VERSION="([^"]+)"', up_src or "", re.M)
+if not m:
+    print("FAIL: VUE_VERSION not found in install/upgrade-full.sh — the frontend pin "
+          "has no source of truth this gate can read.")
+    sys.exit(1)
+truth["vue.js"] = m.group(1)
+
 failures = 0
 checked_files = 0
 

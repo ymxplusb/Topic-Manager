@@ -39,10 +39,10 @@ Jarvis Topic Manager is a lightweight web application that provides a secure, AD
 
 | Layer    | Technology                              |
 |----------|-----------------------------------------|
-| Frontend | Vue.js 3.5.42 (Options API, no build tools) |
+| Frontend | Vue.js 3.5.43 (Options API, no build tools) |
 | Backend  | Python 3.12 / Flask 3.1.3 / gunicorn 26.2.0 |
 | Auth     | AD/LDAPS via ldap3 2.9.1                |
-| Kafka    | confluent-kafka 2.15.0 AdminClient      |
+| Kafka    | confluent-kafka 2.15.1 AdminClient      |
 | Web      | nginx (TLS termination, reverse proxy)  |
 | DB       | SQLite (audit log + server-side sessions) |
 | OS       | Ubuntu Server 24.04 LTS                 |
@@ -82,7 +82,7 @@ sudo bash install.sh
 
 The script:
 - Installs system packages (python3, python3-venv, nginx, libldap, libssl, build-essential)
-- Downloads Vue.js from the CDN automatically (online mode). Note that `install.sh` still asks for **3.5.35** and takes whatever the CDN returns, with no integrity check; the upgrade path pins **3.5.42** by SHA-256 and refuses anything else. A host that has been upgraded is therefore on a *verified* newer Vue than a host freshly installed — see `SBOM.md`
+- Installs Vue.js **3.5.43**, verified by SHA-256 before it is served (online: fetched from the CDN; offline: taken from the bundle's `lib/`). The version and hash are read from `install/upgrade-full.sh`, the same pin the upgrade and `prepare-offline.sh` use, and a file that does not match is refused — so a fresh install and an upgraded host serve byte-identical Vue
 - Creates the `topic-manager` system user
 - Creates `/opt/topic-manager/`, `/var/www/topic-manager/`, `/etc/topic-manager/`
 - Creates `/etc/topic-manager/clusters.d/` (owned by `topic-manager`) and `/opt/topic-manager/data/cluster-certs/` (mode 0700) — the only two directories the application may write outside its own data and log directories. `/etc/topic-manager` itself stays `root:topic-manager 0750`; see [Cluster profiles](#cluster-profiles) for why that split is not arbitrary

@@ -8,14 +8,14 @@ The versions below are the ones in `requirements.txt` (the single source of trut
 Python pin) and the Vue pin in `install/upgrade-full.sh`. `SBOM.md` lists the same set with
 sources and vulnerability status; if these two files ever disagree, one of them is wrong.
 
-> A host installed by `install.sh` and never upgraded serves Vue **3.5.35**, which that
-> script fetches without an integrity check. Upgraded hosts serve the hash-verified 3.5.42
-> recorded below. See SBOM.md → *Known divergence*.
+> Every install route (`install.sh`, the offline bundle, `install/upgrade-full.sh`) serves the
+> same hash-verified Vue recorded below. The old fresh-install divergence (an unverified 3.5.35)
+> is closed.
 
 ---
 
 ## Vue.js
-Version: 3.5.42
+Version: 3.5.43
 License: MIT
 Copyright (c) 2013-present, Yuxi (Evan) You
 
@@ -54,7 +54,7 @@ Copyright 2013-2022 Giovanni Cannata
 ---
 
 ## confluent-kafka-python
-Version: 2.15.0
+Version: 2.15.1
 License: Apache-2.0
 Copyright 2016-2024 Confluent Inc.
 

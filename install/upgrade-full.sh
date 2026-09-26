@@ -101,8 +101,8 @@ PIN_PYYAML=""; PIN_CRYPTOGRAPHY=""; PIN_CONFLUENT_KAFKA=""
 
 # Frontend third-party lib, pinned BY CONTENT — a version in a URL is not
 # an integrity control.
-VUE_VERSION="3.5.42"
-VUE_SHA256="aae6339a0e744cc3503f2a3ae63f5ee0d99ce39f45517e7a51fcb9ecc290ca2c"
+VUE_VERSION="3.5.43"
+VUE_SHA256="b72394052eef1eeda1752db3758ce1be6f88016903f22e5241cc732ea307478e"
 VUE_URL="https://cdn.jsdelivr.net/npm/vue@${VUE_VERSION}/dist/vue.global.prod.js"
 
 # Paths whose ownership and mode are captured before the upgrade and put back

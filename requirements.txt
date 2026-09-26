@@ -27,4 +27,4 @@ PyYAML==6.0.3
 cryptography==50.0.1
 
 # Kafka client - installed last and soft-fails; the app starts without it
-confluent-kafka==2.15.0
+confluent-kafka==2.15.1

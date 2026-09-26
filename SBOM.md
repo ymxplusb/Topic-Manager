@@ -17,12 +17,20 @@
 
 | Component | Version  | License  | Source                     | Pinned by |
 |-----------|----------|----------|----------------------------|-----------|
-| Vue.js    | 3.5.42   | MIT      | vuejs.org                  | `install/upgrade-full.sh` — version **and SHA-256** (`aae6339a…ca2c`), verified before deploy and before bundling |
+| Vue.js    | 3.5.43   | MIT      | vuejs.org                  | `install/upgrade-full.sh` — version **and SHA-256** (`b7239405…478e`), verified before deploy and before bundling |
 
-**Known divergence:** `install.sh` (fresh install only) still requests Vue **3.5.35** from
-the CDN and serves whatever it receives, with no integrity check. A host that has been
-upgraded runs the verified 3.5.42; a host freshly installed and never upgraded runs an
-unverified 3.5.35. Tracked as an open defect against `install.sh`.
+**One verified Vue on every route.** `install.sh`, `prepare-offline.sh` and
+`install/upgrade-full.sh` all read the version and the SHA-256 from the same two lines in
+`install/upgrade-full.sh` and refuse a file that does not match. A fresh install, an
+offline install and an upgrade therefore serve byte-identical Vue. (The "known divergence"
+recorded here until v1.0.x — fresh installs fetching an unverified 3.5.35 — was closed when
+`install.sh` began verifying the pin, and no longer applies.)
+
+The 3.5.43 hash was verified against the **npm registry tarball**
+(`registry.npmjs.org/vue/-/vue-3.5.43.tgz`, whose sha512 matches the registry's own
+`dist.integrity`), by extracting `package/dist/vue.global.prod.js` and hashing it; the
+jsDelivr file the installers fetch is byte-identical to it. The CDN was not trusted to
+vouch for itself.
 
 ## Backend Dependencies
 
@@ -34,7 +42,7 @@ unverified 3.5.35. Tracked as an open defect against `install.sh`.
 | ldap3            | 2.9.1   | LGPL-3.0        | ldap3.readthedocs.io                |
 | PyYAML           | 6.0.3   | MIT             | pyyaml.org                          |
 | cryptography     | 50.0.1  | Apache-2.0/BSD  | cryptography.io                     |
-| confluent-kafka  | 2.15.0  | Apache-2.0      | confluent.io / github.com/confluentinc/confluent-kafka-python |
+| confluent-kafka  | 2.15.1  | Apache-2.0      | confluent.io / github.com/confluentinc/confluent-kafka-python |
 
 `cryptography` became a **direct, first-party** dependency in v1.0.4: `tm/clusters.py`
 imports `x509` and `serialization` to parse every PEM the Cluster Builder accepts before it
@@ -109,7 +117,9 @@ advisory. Superseded pins and why they moved:
 | Werkzeug | 3.1.3 | 3.1.8 | CVE-2026-21860, CVE-2025-66221, CVE-2026-27199 (moved in 1.0.2) |
 | gunicorn | 26.0.0 | 26.2.0 | maintenance |
 | PyYAML | 6.0.2 | 6.0.3 | maintenance |
-| confluent-kafka | 2.14.0 | 2.15.0 | maintenance |
+| confluent-kafka | 2.14.0 | 2.15.0 | maintenance (moved in 1.0.2) |
+| confluent-kafka | 2.15.0 | 2.15.1 | maintenance (moved in 1.1.0) |
+| Vue.js | 3.5.42 | 3.5.43 | maintenance (moved in 1.1.0) |
 
 ## Notes
 
