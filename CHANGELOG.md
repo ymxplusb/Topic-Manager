@@ -138,15 +138,42 @@ Adversary and security-review findings, all fixed on this branch before release:
 - **The offline bundle is an apt repository.** Measured on a real STIG (USG) + FIPS Ubuntu
   24.04.4 host: handing apt every bundled `.deb` failed on mutually exclusive alternatives
   (`pkgProblemResolver::Resolve generated breaks`). `prepare-offline.sh` now indexes the debs;
-  `install.sh` gives apt a private, bundle-only source pinned below every installed package,
-  asks only for the missing top-level packages with `--no-download`, and removes the temporary
-  configuration on every exit. A FIPS library is never replaced. The bundle is built only from
-  `git archive` (the non-git directory-copy fallback is gone).
+  `install.sh` gives apt a private, bundle-only source (at first pinned below every installed
+  package — replaced in round 3, below), asks only for the missing top-level packages with
+  `--no-download`, and removes the temporary configuration on every exit. The bundle is built
+  only from `git archive` (the non-git directory-copy fallback is gone).
 - **Gates**: `check-env-neutral.sh` covers all RFC 1918 ranges, internal DNS suffixes,
   secret-store paths and the personal namespace (`.gitlab-ci.yml` is export-ignored and never
   ships); `check-ppsm-consistency.sh` pins the core rows including the protocol column;
   `check-version-surfaces.sh` refuses any version literal in `main.js`; new
   `check-requirements-lock.sh`. Colour-blind glyphs are placement-neutral.
+
+### Round 3 (real-host install, 2026-09-26)
+
+- **The offline apt step upgrades what a dependency needs; it never downgrades and never
+  replaces a FIPS package.** Measured on the real STIG (USG) + FIPS Ubuntu 24.04.4 host with
+  the round-2 bundle: pinning the bundle below every installed package meant apt could never
+  upgrade anything, so `python3.12-venv : Depends: python3.12 (= 3.12.3-1ubuntu0.17) but
+  3.12.3-1ubuntu0.13 is to be installed` failed the install — and an air-gapped host that lags
+  on patches will hit this almost every time. Now:
+  - the bundle is at apt priority **500**, so apt may upgrade an installed package to the
+    bundled build when resolution needs it; below 1000 apt never selects an older version, so
+    nothing is downgraded, and `--no-remove` means nothing is removed;
+  - every installed package whose version contains `fips`, or whose installed version came from
+    an Ubuntu Pro FIPS archive (`esm.ubuntu.com/fips`, `fips-updates`), gets a **-1 pin for the
+    bundle's copy**, generated at install time from `dpkg-query -W` and `apt-cache policy`; if
+    either cannot be read, the install stops;
+  - the private apt configuration now also excludes the host's `preferences.d`, so no host pin
+    can lift the bundle's priority;
+  - apt **simulates** the request first and `install.sh` prints one line listing what is NEWLY
+    INSTALLED and what is UPGRADED as `package=version`; a plan that would downgrade, remove or
+    replace a FIPS package is refused; on a terminal the operator confirms it, and
+    `--non-interactive` proceeds;
+  - the failure messages say what is guaranteed: "never downgrades, never replaces FIPS
+    packages", and "nothing was installed or changed" only where that is true (resolution
+    failures); a failure during dpkg says part of the plan may have been applied.
+  `install/upgrade-full.sh` installs no `.deb` offline (it skips OS patching with a warning), so
+  it needed no change. t23 now runs the real apt resolver against a fixture package set.
 
 ### Known limitations
 

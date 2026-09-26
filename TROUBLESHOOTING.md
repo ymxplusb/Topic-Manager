@@ -793,6 +793,14 @@ Check it: `grep -E '^\s*ssl_protocols' /etc/nginx/nginx.conf`, and
 - **A browser cannot connect after FIPS mode is enabled.** The client offered only suites
   outside the list (ChaCha20, CBC, X25519-only). Any current browser offers AES-GCM with
   P-256; check with `openssl s_client -connect <host>:443 -tls1_2`.
+- **Offline packages on a FIPS host.** The offline install never replaces a FIPS package: every
+  installed package whose version contains `fips`, or that came from an Ubuntu Pro FIPS archive
+  (`esm.ubuntu.com/fips`, `fips-updates`), has the bundle's copy pinned at -1 for that run.
+  Other installed packages **may be upgraded** to the bundled build when a new package needs
+  it — that is expected on an air-gapped host that lags on patches, and the plan line lists
+  each one before it happens. If apt says a bundled package needs a newer FIPS library
+  (`... but 3.0.13-0ubuntu3.4+Fips1 is to be installed`), update that library from the FIPS
+  archive first; see *Fresh install* below.
 - **`openssl could not generate a self-signed certificate`** on install — confirm
   `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -sha256 ...` works by hand;
   it is FIPS-approved. Or supply your own pair with `--tls-cert/--tls-key`.
@@ -846,7 +854,12 @@ Sign in again.
 | `Cannot write /etc/topic-manager/config.yaml: no value for --ldap-url ...` | Pass the directory flags (see `sudo bash install.sh --help`) or run on a terminal to be prompted. Nothing was installed |
 | `--ldap-url must be ldaps://<host>[:<port>]` | Plain `ldap://` is not supported; certificate validation is enforced |
 | `Offline, and .../install/packages/apt has no Packages index` | The bundle predates round 2 (it handed apt a raw list of .debs, which fails on a STIG/FIPS host). Rebuild it with this release's `prepare-offline.sh` |
-| `Offline package install failed (apt exit N). Nothing installed on the host was replaced` | apt resolved from the bundle and could not satisfy a package without **replacing** something already installed (the bundle is pinned below every installed package, so a FIPS `libssl`/`openssh` is never swapped). Read apt's lines above it; install the named top-level packages from the host's own (FIPS) mirror, or rebuild the bundle on a host whose package set matches |
+| `Offline package plan — NEW (n): ...; UPGRADE (n): ...` (INFO) | Not an error: what the offline apt step is about to do, as `package=version`. An UPGRADE is an installed package moved to the bundled build because a new package needs it (an air-gapped host lags on patches). The bundle never downgrades, never removes and never replaces a FIPS package. On a terminal you are asked to confirm; `--non-interactive` proceeds |
+| `The offline bundle could not supply <packages> (apt exit N); nothing was installed or changed` | apt's own reason is printed just above. `but <version>+Fips1 is to be installed` (or any version containing `fips`) means a bundled package needs a **newer FIPS library** than the host has: the bundle's non-FIPS copy is pinned at -1 and is never used. Patch that library from the Ubuntu Pro FIPS archive (or the host's own mirror), then re-run. Any other unmet dependency: the bundle was built on a host too unlike this one — rebuild it with `prepare-offline.sh` on a host at the same patch level |
+| `Refusing the offline package plan; nothing was installed or changed: <pkg>: ... would be DOWNGRADED / REMOVED / FIPS package ...` | The simulated plan broke the policy, so nothing was run. It should not happen (apt is configured so it cannot); report it with the line printed |
+| `Package plan declined. Nothing has been changed.` | You answered no at `Apply this package plan?`. Nothing was installed |
+| `Could not read the installed package set and its origins` | `dpkg-query -W` or `apt-cache policy` failed, so it could not be established which installed packages are FIPS modules; the install stops rather than guess. Run both by hand to see why (for example a damaged `/var/lib/dpkg/status`, or no package lists under `/var/lib/apt/lists`) |
+| `Offline package install failed (apt exit N) while applying the plan printed above` | Resolution succeeded but dpkg failed while installing, so **part of the plan may be applied**. Run `sudo dpkg --audit` and read dpkg's output above; fix the cause and re-run `install.sh` |
 | `pip install from requirements.lock failed (a hash mismatch is refused, not retried)` | A wheel did not match its SHA-256 in `requirements.lock` — a tampered mirror, a corrupted bundle, or a bundle built from a different release. Rebuild the bundle; never edit the lock by hand |
 | `Cannot check /etc/topic-manager/config.yaml before changing anything` | Neither the existing venv nor `python3` can import PyYAML. `sudo apt install python3-yaml` and re-run; nothing was changed |
 | `--tls-cert and --tls-key are not a matching certificate/key pair` | The two files are not a pair, or one could not be read. Compare `openssl x509 -noout -pubkey -in <crt>` with `openssl pkey -pubout -in <key>` |

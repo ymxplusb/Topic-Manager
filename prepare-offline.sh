@@ -135,8 +135,10 @@ ok "Vue.js ${VUE_VER} saved to lib/ (sha256 verified against upgrade-full.sh)"
 # ─── apt packages (Ubuntu 24.04) ─────────────────────────────────────────────
 # The runtime packages install.sh requires, WITH their dependency closure, so
 # an air-gapped host that lacks one of them can install it from the bundle.
-# install.sh installs only the .debs for packages the host does not already
-# have, so nothing here can downgrade it. Must run on Ubuntu 24.04 of the
+# install.sh asks apt for the missing top-level packages only; apt may UPGRADE
+# an installed dependency to the bundled build when one needs it, never
+# downgrades, and never replaces a FIPS package (install.sh
+# apt_install_from_bundle). Build on a fully patched Ubuntu 24.04 of the
 # target's architecture. No compiler or -dev headers: every Python dependency
 # is a binary wheel.
 info "Downloading apt packages and their dependencies (requires an Ubuntu 24.04 host)..."

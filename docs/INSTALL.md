@@ -183,10 +183,35 @@ sudo bash install.sh \
 ```
 
 With no network, `install.sh` uses the bundle's `.deb`s as a private apt **repository**: apt's
-own resolver installs only the missing top-level packages, the bundle is pinned below every
-installed package (a FIPS `libssl` or `openssh` is never replaced), nothing is downloaded, and
-the temporary apt configuration is removed afterwards. Python comes from the bundled wheels,
-each checked against its SHA-256 in `requirements.lock`; Vue from the bundle, hash-verified.
+own resolver installs only the missing top-level packages, nothing is downloaded, and the
+temporary apt configuration (its own sources **and** preferences; the host's
+`sources.list.d` and `preferences.d` are not read) is removed afterwards, on success or failure.
+The package policy is **never downgrade, never replace a FIPS package, but upgrade what a
+dependency needs**:
+
+- An air-gapped host lags on patches, so a new package often needs a newer build of a library
+  that is already installed (for example `python3.12-venv` needs the matching `python3.12`).
+  The bundle sits at apt priority 500, so apt may **upgrade** that library to the bundled build.
+  Below priority 1000 apt never picks a version older than the installed one, so nothing is
+  **downgraded**, and `--no-remove` means nothing is removed.
+- Every installed package whose version contains `fips` (Ubuntu Pro FIPS builds such as
+  `libssl3t64`, `openssl`, `openssh-*`, `libgcrypt20`, GnuTLS, strongSwan, the kernel), or whose
+  installed version came from an Ubuntu Pro FIPS archive (`esm.ubuntu.com/fips`, `fips-updates`),
+  gets a pin of **-1 for the bundle's copy**, generated at install time from `dpkg-query` and
+  `apt-cache policy`. A FIPS module is never swapped for a non-FIPS build; if a bundled package
+  needs a newer one, the install stops and names it.
+- Before anything is installed, apt **simulates** the request and `install.sh` prints one line:
+
+  ```
+  [INFO] Offline package plan — NEW (2): nginx=1.24.0-2ubuntu7.5 python3.12-venv=3.12.3-1ubuntu0.17; UPGRADE (1): python3.12=3.12.3-1ubuntu0.17 (from 3.12.3-1ubuntu0.13)
+  ```
+
+  On a terminal you are asked `Apply this package plan? [y/N]`; with `--non-interactive` (or no
+  terminal) it proceeds. A plan that would downgrade, remove, or replace a FIPS package is
+  refused outright.
+
+Python comes from the bundled wheels, each checked against its SHA-256 in `requirements.lock`;
+Vue from the bundle, hash-verified.
 
 ---
 
