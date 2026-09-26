@@ -64,6 +64,16 @@ def _max_sessions():
     return _cfg().get('session', {}).get('max_concurrent', 0)
 
 
+_CONTROL_CHARS = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]')
+
+
+def _log_safe(value, limit=64):
+    '''A client-supplied string made safe for ONE log line or audit field:
+    control characters (CR/LF included, so no forged log lines) become "?",
+    and the length is bounded. Round 2, sec-review.'''
+    return _CONTROL_CHARS.sub('?', str(value))[:limit]
+
+
 def _cluster(cluster_id=None):
     cfg = _cfg()
     if cluster_id:
@@ -172,13 +182,14 @@ def login():
 
     ok, result = auth.validate_credentials(_cfg(), username, password)
     if not ok:
-        log.warning('Login failed for user %s from %s: %s', username, request.remote_addr, result)
+        log.warning('Login failed for user %r from %s: %s', _log_safe(username),
+                    request.remote_addr, result)
         # The username here is ATTACKER-CONTROLLED and this row is downloadable
         # by any authenticated user via /api/audit/export. audit.py neutralises
         # spreadsheet formula prefixes and quotes with csv.writer, so it is safe
         # to record — but it is bounded anyway, because an unbounded attacker
         # string in a shared export is not something to rely on one control for.
-        audit.log_action(_cfg(), username[:64] or '(empty)', 'LOGIN_FAILED',
+        audit.log_action(_cfg(), _log_safe(username) or '(empty)', 'LOGIN_FAILED',
                          request.remote_addr or 'unknown',
                          'reason=%s' % str(result)[:120], '')
         return jsonify({'error': result}), 401
@@ -190,9 +201,15 @@ def login():
     cleanup_expired_sessions(db)
 
     max_s = _max_sessions()
+    # Count and insert under ONE write lock (round 2, sec-review): with four
+    # workers, two logins at the limit could both count N-1 and both insert.
+    # BEGIN IMMEDIATE takes the lock before the count; create_session's
+    # commit releases it.
+    db.execute('BEGIN IMMEDIATE')
     if max_s > 0:
         active = count_active_sessions(db, result['username'])
         if active >= max_s:
+            db.rollback()
             db.close()
             log.warning('Concurrent session limit (%d) reached for user %s', max_s, result['username'])
             audit.log_action(cfg, result['username'], 'LOGIN_REFUSED',
@@ -705,25 +722,58 @@ def update_settings():
     if not isinstance(data, dict):
         return jsonify({'error': 'Expected a JSON object of setting: value pairs'}), 400
     cfg = _cfg()
-    db = get_db(cfg)
+    user = session['user']['username']
     accepted = {k: str(v) for k, v in data.items() if k in _ALL_KEYS}
-    before = _read_settings(db, accepted.keys()) if accepted else {}
-    for key, value in accepted.items():
-        db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?,?)',
-                   (key, value))
-    db.commit()
-    db.close()
+    ignored = sorted(str(k) for k in data if k not in _ALL_KEYS)
     # v1.1.0: this route changes what EVERY user sees (the classification
-    # banner, the consent notice) and it wrote no audit record at all. The
-    # record names the keys that actually changed and never their values:
-    # every key today is display-only, but the rule has to hold for the first
-    # secret-bearing setting someone adds to _ALL_KEYS, not be remembered then.
-    changed = sorted(k for k, v in accepted.items() if before.get(k) != v)
-    ignored = sorted(k for k in data if k not in _ALL_KEYS)
-    detail = ('changed: %s' % ', '.join(changed)) if changed else 'no change'
-    if ignored:
-        detail += '; ignored unknown key(s): %s' % ', '.join(k[:40] for k in ignored[:10])
-    audit.log_action(cfg, session['user']['username'], 'SETTINGS_UPDATE',
-                     'app_settings', detail[:500], '')
-    log.info('SETTINGS_UPDATE user=%s %s', session['user']['username'], detail[:200])
+    # banner, the consent notice) and wrote no audit record at all.
+    #
+    # ONE TRANSACTION, ONE CONNECTION (round 2, adversary F1). The settings
+    # rows and the SETTINGS_UPDATE row commit together or not at all: the
+    # standing rule is that an action whose audit record cannot be written
+    # does not happen. They used to commit separately, so a failed audit write
+    # left a changed banner with no record of who changed it.
+    db = get_db(cfg)
+    try:
+        before = _read_settings(db, accepted.keys()) if accepted else {}
+        for key, value in accepted.items():
+            db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?,?)',
+                       (key, value))
+        changed = sorted(k for k, v in accepted.items() if before.get(k) != v)
+        detail = _settings_audit_detail(before, accepted, changed, ignored)
+        audit.log_action(cfg, user, 'SETTINGS_UPDATE', 'app_settings', detail, '', db=db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        log.exception('SETTINGS_UPDATE by user=%s was NOT applied: the change and '
+                      'its audit record are one transaction and it failed', _log_safe(user))
+        return jsonify({'error': 'The settings could not be saved together with their '
+                                 'audit record, so nothing was changed.'}), 500
+    finally:
+        db.close()
+    log.info('SETTINGS_UPDATE user=%s %s', _log_safe(user), _log_safe(detail, 200))
     return jsonify({'ok': True, 'changed': changed})
+
+
+#: Settings whose VALUES the audit record may show, old -> new. Display and
+#: consent settings only: what the banner says and what colour it is are
+#: exactly what an auditor needs to see. Any other key — including every key
+#: added later unless it is added here on purpose — is recorded by NAME only.
+_AUDIT_VALUE_KEYS = frozenset({'banner_enabled', 'banner_text', 'banner_bg',
+                               'banner_fg', 'dow_enabled'})
+
+
+def _settings_audit_detail(before, accepted, changed, ignored):
+    parts = []
+    for k in changed:
+        if k in _AUDIT_VALUE_KEYS:
+            parts.append('%s: %s -> %s' % (k, _log_safe(repr(before.get(k)), 80),
+                                           _log_safe(repr(accepted[k]), 80)))
+        else:
+            parts.append(k)
+    detail = ('changed: %s' % '; '.join(parts)) if parts else 'no change'
+    if ignored:
+        # %r and a control-character strip: the key names come from the client.
+        detail += '; ignored unknown key(s): %s' % ', '.join(
+            _log_safe(repr(k), 40) for k in ignored[:10])
+    return detail[:500]

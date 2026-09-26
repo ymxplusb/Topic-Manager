@@ -14,15 +14,28 @@ def _csv_safe(value):
     return s
 
 
-def log_action(cfg, user, action, target, detail='', cluster_id=''):
-    db = get_db(cfg)
+def log_action(cfg, user, action, target, detail='', cluster_id='', db=None):
+    """Write one audit row.
+
+    With `db`, the row is written on THAT connection inside the caller's open
+    transaction and is NOT committed here: the caller commits the change and
+    its audit record together, or rolls both back (v1.1.0, settings). Without
+    it, the row gets its own connection and commit, as before.
+    """
+    own = db is None
+    if own:
+        db = get_db(cfg)
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-    db.execute(
-        'INSERT INTO audit_log (ts, user, action, target, detail, cluster_id) VALUES (?,?,?,?,?,?)',
-        (ts, user, action, target, detail, cluster_id)
-    )
-    db.commit()
-    db.close()
+    try:
+        db.execute(
+            'INSERT INTO audit_log (ts, user, action, target, detail, cluster_id) VALUES (?,?,?,?,?,?)',
+            (ts, user, action, target, detail, cluster_id)
+        )
+        if own:
+            db.commit()
+    finally:
+        if own:
+            db.close()
 
 
 def get_audit_log(cfg, page=1, per_page=50):
