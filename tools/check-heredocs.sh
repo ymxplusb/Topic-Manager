@@ -42,8 +42,8 @@ root = sys.argv[1]
 # injected into it passed ALL EIGHT GATES, shipping a wsgi.py that cannot start.
 # NGINXEOF and SH were stale; those heredocs no longer exist in the tree.
 EXPECTED = {
-    os.path.join("install", "upgrade-full.sh"): ["PYRESOLVE", "PYLDAP", "PYBACKUP"],
-    "install.sh": ["WSGI"],
+    os.path.join("install", "upgrade-full.sh"): ["PYRESOLVE", "PYLDAP", "PYBACKUP", "PYKEYS"],
+    "install.sh": ["WSGI", "PYKEYS", "PYCFG"],
 }
 
 # Tags that are deliberately NOT Python. Keep this EMPTY unless a real one

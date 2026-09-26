@@ -6,8 +6,13 @@ callers, because two copies of it is the same "two lists, one truth" drift that
 already broke --offline in the upgrade script.
 
     python3 -m tm.migrate_clusters --config /etc/topic-manager/config.yaml \
-        --clusters-dir /etc/topic-manager/clusters.d \
-        [--example config/clusters.yaml.example]
+        --clusters-dir /etc/topic-manager/clusters.d
+
+v1.1.0: a host with neither a cluster store nor a legacy clusters: block gets
+an EMPTY store — `clusters: []` — and the operator adds clusters in Settings.
+It used to be given config/clusters.yaml.example, whose example profiles then
+became a brand-new host's live cluster list, pointing at somebody else's
+brokers. The example file is documentation now, and --example is gone.
 
 It is IDEMPOTENT. Running it on an already-migrated host does nothing and
 exits 0, which matters because install.sh, a reinstall and every upgrade all
@@ -23,10 +28,10 @@ new inode has whatever the umask says, not what the file it replaced had:
   * the rewritten config.yaml gets its original owner and mode copied on;
   * clusters.yaml is CREATED 0640 owned by --owner (the service account).
     It used to land 0600 root:root from mkstemp, or 0644 from a copy of the
-    example under umask 022, and was corrected afterwards by chown/chmod lines
+    old example under umask 022, and was corrected afterwards by chown/chmod lines
     in install.sh and upgrade-full.sh. The documented invariant is
     "0640 topic-manager:topic-manager"; a file that only becomes that a moment
-    later has a window where it is not, and on the example path that window is
+    later has a window where it is not, and on the creation path that window is
     world-readable. It now holds at creation, from the one place that creates it.
 
 Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
@@ -60,6 +65,13 @@ _MARKER = (
     '# ldap_bind_password. Do not add a clusters: block back here — it would\n'
     '# be ignored, and two files claiming to hold the cluster list is exactly\n'
     '# the shadowing the split exists to prevent.\n'
+)
+
+_HEADER_FRESH = (
+    '# Jarvis Topic Manager — cluster profiles\n'
+    '# Created empty by the installer. Add clusters in Settings > General >\n'
+    '# Cluster Profiles; edits made here by hand are picked up without a\n'
+    '# restart, because every worker re-reads on inode/size/mtime change.\n'
 )
 
 _HEADER = (
@@ -177,7 +189,7 @@ def strip_clusters_block(text, clusters_path):
     return ''.join(out), removed
 
 
-def migrate(config_path, clusters_dir, example=None, owner=None):
+def migrate(config_path, clusters_dir, owner=None):
     clusters_path = os.path.join(clusters_dir, CLUSTERS_FILENAME)
     if not os.path.isdir(clusters_dir):
         raise SystemExit('migrate-clusters: %s does not exist. The installer '
@@ -185,7 +197,11 @@ def migrate(config_path, clusters_dir, example=None, owner=None):
                          % clusters_dir)
 
     existing = _read_yaml(clusters_path) or {}
-    already = existing.get('clusters') if isinstance(existing, dict) else None
+    # A store that exists and holds a LIST, even an empty one, is migrated.
+    # Empty is a valid state now (a fresh install starts at zero profiles)
+    # and it must never be "fixed" by importing anything.
+    has_store = isinstance(existing, dict) and isinstance(existing.get('clusters'), list)
+    already = existing.get('clusters') if has_store else None
 
     with open(config_path, 'r', encoding='utf-8') as fh:
         config_text = fh.read()
@@ -211,19 +227,17 @@ def migrate(config_path, clusters_dir, example=None, owner=None):
             allow_unicode=True), owner=owner, mode=CLUSTERS_MODE)
         actions.append('moved %d cluster profile(s) out of config.yaml into %s'
                        % (len(legacy), clusters_path))
-    elif example and os.path.exists(example):
-        # Through _atomic_write, not shutil.copyfile: copyfile creates the
-        # destination with the process umask, which on a stock host is 0644 —
-        # world-readable, and the mode was only corrected by a later shell line.
-        with open(example, 'r', encoding='utf-8') as fh:
-            _atomic_write(clusters_path, fh.read(), owner=owner, mode=CLUSTERS_MODE)
-        actions.append('installed the example cluster profiles at %s' % clusters_path)
+    elif has_store:
+        print('migrate-clusters: already migrated (0 profiles in %s; add them in '
+              'Settings > General > Cluster Profiles)' % clusters_path)
+        return 0
     else:
-        raise SystemExit(
-            'migrate-clusters: neither %s nor %s carries any cluster profile, '
-            'and no example was given. Refusing to write an empty cluster list '
-            '— the application resolves every topic and consumer-group view '
-            'through a cluster.' % (config_path, clusters_path))
+        # A fresh host: an EMPTY store, created 0640 for the service account
+        # through _atomic_write so it never exists at the wrong mode.
+        _atomic_write(clusters_path, _HEADER_FRESH + 'clusters: []\n',
+                      owner=owner, mode=CLUSTERS_MODE)
+        actions.append('created an empty cluster store at %s — add clusters in '
+                       'Settings > General > Cluster Profiles' % clusters_path)
 
     if legacy is not None:
         new_text, removed = strip_clusters_block(config_text, clusters_path)
@@ -239,9 +253,9 @@ def migrate(config_path, clusters_dir, example=None, owner=None):
         raise SystemExit('migrate-clusters: %s STILL has a clusters: key after '
                          'migration — refusing to report success' % config_path)
     after_clu = _read_yaml(clusters_path)
-    if not isinstance(after_clu, dict) or not after_clu.get('clusters'):
-        raise SystemExit('migrate-clusters: %s does not hold a non-empty cluster '
-                         'list after migration' % clusters_path)
+    if not isinstance(after_clu, dict) or not isinstance(after_clu.get('clusters'), list):
+        raise SystemExit('migrate-clusters: %s does not hold a cluster list '
+                         'after migration' % clusters_path)
 
     for action in actions:
         print('migrate-clusters: %s' % action)
@@ -252,13 +266,12 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--config', required=True)
     ap.add_argument('--clusters-dir', required=True)
-    ap.add_argument('--example', default=None)
     ap.add_argument('--owner', default=APP_USER,
                     help='account that must own a newly created %s '
                          '(default: %s). Applied only when running as root.'
                          % (CLUSTERS_FILENAME, APP_USER))
     args = ap.parse_args(argv)
-    return migrate(args.config, args.clusters_dir, args.example, args.owner)
+    return migrate(args.config, args.clusters_dir, args.owner)
 
 
 if __name__ == '__main__':

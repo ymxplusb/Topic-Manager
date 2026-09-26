@@ -34,14 +34,26 @@
 #   sudo bash upgrade-full.sh --restore TS       # roll back to a restore point
 #   sudo bash upgrade-full.sh --force            # proceed past BLOCK findings
 #   sudo bash upgrade-full.sh --no-bind-probe    # skip the live LDAP bind entirely
+#   sudo bash upgrade-full.sh --repo-url URL [--repo-branch REF]
+#                                                # online source (or TM_REPO_URL /
+#                                                # TM_REPO_BRANCH); there is NO default
+#
+# ONLINE vs OFFLINE: online mode clones the release source from the git URL
+# the operator supplies — this script names no repository of its own, because
+# which server is authoritative is a property of the site, not of the product.
+# Without --repo-url (or TM_REPO_URL) an online run stops before Phase 4 and
+# says so; the offline bundle (--offline) needs no network at all.
 #
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 # =============================================================================
 set -euo pipefail
 
 # ─── tunables ────────────────────────────────────────────────────────────────
-REPO_URL="https://github.com/ymxplusb/Topic-Manager.git"
-REPO_BRANCH="main"
+# v1.1.0: no built-in source. This used to clone a public mirror that the
+# owning site no longer treats as authoritative; an upgrade must fetch from
+# where the operator says the release lives, or not fetch at all.
+REPO_URL="${TM_REPO_URL:-}"
+REPO_BRANCH="${TM_REPO_BRANCH:-main}"
 
 APP_USER="topic-manager"
 WEB_USER="www-data"
@@ -136,9 +148,13 @@ while [[ $# -gt 0 ]]; do
         --list-backups)  LIST_BACKUPS=true ;;
         --force)         FORCE=true ;;
         --no-bind-probe) NO_BIND_PROBE=true ;;
+        --repo-url)      shift; REPO_URL="${1:-}"
+                         [[ -n "$REPO_URL" ]] || { echo "--repo-url needs a git URL" >&2; exit 2; } ;;
+        --repo-branch)   shift; REPO_BRANCH="${1:-}"
+                         [[ -n "$REPO_BRANCH" ]] || { echo "--repo-branch needs a branch or tag" >&2; exit 2; } ;;
         --restore)       shift; RESTORE_TS="${1:-}"
                          [[ -n "$RESTORE_TS" ]] || { echo "--restore needs a timestamp (see --list-backups)" >&2; exit 2; } ;;
-        -h|--help)       sed -n '2,42p' "$0"; exit 0 ;;
+        -h|--help)       sed -n '2,52p' "$0"; exit 0 ;;
         *)               echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
     esac
     shift
@@ -480,6 +496,34 @@ tls_keypair_matches() {
     [[ "$c" == *"-----BEGIN PUBLIC KEY-----"*"-----END PUBLIC KEY-----"* ]] || return 1
     [[ "$k" == *"-----BEGIN PUBLIC KEY-----"*"-----END PUBLIC KEY-----"* ]] || return 1
     [[ "$c" == "$k" ]]
+}
+
+# ldap_config_missing <python> <config.yaml> — prints the REQUIRED directory
+# keys that are absent, blank or still an unfilled <placeholder>, space
+# separated; prints nothing when sign-in is configured, and ERROR:... when the
+# file cannot be read. The same rule as tm/auth.py missing_ldap_keys, and a
+# byte-identical copy lives in install/upgrade-full.sh (t20 holds all three to
+# the same answers). v1.1.0 removed the application's built-in directory
+# defaults, so a config that relied on them would lock every user out.
+ldap_config_missing() {
+    "$1" - "$2" <<'PYKEYS'
+import sys
+try:
+    import yaml
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        cfg = yaml.safe_load(fh) or {}
+except Exception as exc:
+    print("ERROR:%s" % type(exc).__name__)
+    sys.exit(0)
+auth = cfg.get("auth") if isinstance(cfg, dict) else None
+auth = auth if isinstance(auth, dict) else {}
+missing = []
+for key in ("ldap_server", "ldap_base_dn", "ldap_domain"):
+    value = str(auth.get(key) or "").strip()
+    if not value or ("<" in value and ">" in value):
+        missing.append(key)
+print(" ".join(missing))
+PYKEYS
 }
 
 # can_access <user> <test-flag> <path> — the honest check. Mode bits can look
@@ -828,6 +872,28 @@ success "Disk space OK (>1 GB on /tmp, /opt, /var)"
 ONLINE=false
 if [[ $OFFLINE_FORCED == false ]] && curl -s --max-time 6 https://pypi.org >/dev/null 2>&1; then ONLINE=true; fi
 info "Network mode: $([[ $ONLINE == true ]] && echo ONLINE || echo OFFLINE)"
+
+# An online run needs to be told where the release source lives. Refused here,
+# before any backup is taken or anything changes, when the run would reach
+# Phase 5; the audit, dry-run and backup-only modes never fetch, so they go on.
+if [[ $ONLINE == true ]]; then
+    if [[ -n "$REPO_URL" ]]; then
+        [[ "$REPO_URL" =~ ^(https://|ssh://|git@)[^[:space:]]+$ && "$REPO_URL" != -* ]] \
+            || fail "--repo-url '${REPO_URL}' is not an https://, ssh:// or git@ URL."
+        [[ "$REPO_BRANCH" =~ ^[A-Za-z0-9._/-]+$ && "$REPO_BRANCH" != -* ]] \
+            || fail "--repo-branch '${REPO_BRANCH}' is not a branch or tag name."
+        info "Online source: ${REPO_URL} (${REPO_BRANCH})"
+    elif [[ $AUDIT_ONLY != true && $DRY_RUN != true && $BACKUP_ONLY != true ]]; then
+        fail "Online upgrade, but no source repository was given.
+     This script has no built-in source. Either:
+       * pass the git URL your site publishes the release from:
+           sudo bash upgrade-full.sh --repo-url <https-or-ssh-git-url> [--repo-branch <ref>]
+         (or set TM_REPO_URL / TM_REPO_BRANCH), or
+       * use the offline bundle, which needs no network:
+           sudo bash upgrade-full.sh --offline      (see install/README.md)
+     Nothing has been changed."
+    fi
+fi
 
 for tool in curl tar sha256sum rsync systemctl nginx python3 stat find openssl; do
     command -v "$tool" >/dev/null || fail "Required tool missing: ${tool}"
@@ -1270,6 +1336,35 @@ case "$LDAP_ST" in
           warn "  or blank ldap_bind_dn/ldap_bind_password to keep direct user bind." ;;
 esac
 
+# --- 2b. The directory must be NAMED in config.yaml (v1.1.0).
+# Before 1.1.0, tm/auth.py filled ldap_server, ldap_base_dn and ldap_domain
+# from built-in defaults that belonged to one particular site. They are gone,
+# so a config.yaml that omitted them — and worked, silently, for months —
+# would stop every sign-in the moment the new code starts. This is a BLOCK
+# that --force does NOT override: there is no configuration of this host on
+# which proceeding helps anyone.
+LDAP_KEYS_HARD_BLOCK=false
+LDAP_KEYS_MISSING="$(ldap_config_missing "$CFG_PY_BIN" "$CONFIG_FILE" 2>/dev/null || echo 'ERROR:resolver')"
+case "$LDAP_KEYS_MISSING" in
+    "") row PASS "directory settings in config.yaml" "ldap_server, ldap_base_dn, ldap_domain all set" ;;
+    ERROR:*)
+        row BLOCK "directory settings in config.yaml" "could not be checked (${LDAP_KEYS_MISSING#ERROR:})"
+        LDAP_KEYS_HARD_BLOCK=true
+        warn "  ${CFG_PY_BIN} could not read ${CONFIG_FILE} with PyYAML, so this check cannot say"
+        warn "  the directory is configured. Fix that and re-run." ;;
+    *)
+        row BLOCK "directory settings in config.yaml" "missing: ${LDAP_KEYS_MISSING}"
+        LDAP_KEYS_HARD_BLOCK=true
+        warn "  v1.1.0 has NO built-in directory defaults. This config.yaml relied on them for:"
+        warn "      ${LDAP_KEYS_MISSING}"
+        warn "  Upgrading as it stands would lock EVERY user out. Add them under auth: in"
+        warn "  ${CONFIG_FILE} with your directory's values, e.g."
+        warn "      ldap_server:  \"ldaps://dc1.example.org:636\""
+        warn "      ldap_base_dn: \"DC=example,DC=org\""
+        warn "      ldap_domain:  \"example.org\""
+        warn "  then re-run. --force does not override this one." ;;
+esac
+
 # --- 3. LDAPS trust. The new version enforces CERT_REQUIRED; an untrusted DC
 # certificate turns into a login outage rather than a warning.
 LDAP_SRV="$(grep -oP 'ldap_server:\s*"?\Kldaps://[^"]+' "$CONFIG_FILE" 2>/dev/null | head -1 || true)"
@@ -1517,6 +1612,14 @@ fi
 # ─── the gate ────────────────────────────────────────────────────────────────
 # A verified restore point now exists. This is the last point before anything
 # destructive happens, so the blockers are enforced here.
+# First the one blocker --force cannot override (v1.1.0: directory keys).
+if [[ $LDAP_KEYS_HARD_BLOCK == true ]]; then
+    fail "Refusing to upgrade: config.yaml does not name its directory (${LDAP_KEYS_MISSING}).
+The new version has no built-in LDAP defaults and would lock every user out.
+--force does not override this. Fix ${CONFIG_FILE} and re-run.
+Nothing has been changed — and a verified backup was still taken:
+  ${BACKUP_DIR}"
+fi
 if [[ $AUDIT_BLOCK -gt 0 ]]; then
     if [[ $FORCE == true ]]; then
         warn "--force given: proceeding despite ${AUDIT_BLOCK} blocker(s). This is on you."
@@ -1925,10 +2028,11 @@ info "Ensuring the cluster profile store ..."
 safe_install_dir 750 root "$APP_USER" "$CONFIG_DIR"
 safe_install_dir 750 "$APP_USER" "$APP_USER" "$CLUSTERS_DIR"
 safe_install_dir 700 "$APP_USER" "$APP_USER" "$CERT_DIR"
+# No --example (v1.1.0): the example is a format reference, never live
+# clusters. A host with no store and no legacy block gets an empty store.
 PYTHONPATH="$APP_HOME" "${VENV}/bin/python3" -m tm.migrate_clusters \
     --config "$CONFIG_FILE" \
     --clusters-dir "$CLUSTERS_DIR" \
-    --example "${WORK_DIR}/config/clusters.yaml.example" \
     || fail "Cluster profile migration failed. It writes clusters.yaml before it
      rewrites config.yaml, so DO NOT assume either file is untouched — read the
      error above. A verified restore point exists:
@@ -1940,8 +2044,8 @@ chmod 640 "$CLUSTERS_FILE"
 apply_baseline "$CLUSTERS_DIR"  "$APP_USER" "$APP_USER" 750
 apply_baseline "$CLUSTERS_FILE" "$APP_USER" "$APP_USER" 640
 apply_baseline "$CERT_DIR"      "$APP_USER" "$APP_USER" 700
-"${VENV}/bin/python3" -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); sys.exit(0 if isinstance(d,dict) and d.get('clusters') else 1)" "$CLUSTERS_FILE" \
-    || fail "${CLUSTERS_FILE} does not hold a non-empty cluster list after migration."
+"${VENV}/bin/python3" -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); sys.exit(0 if isinstance(d,dict) and isinstance(d.get('clusters'), list) else 1)" "$CLUSTERS_FILE" \
+    || fail "${CLUSTERS_FILE} does not hold a cluster list after migration."
 success "Cluster profiles at ${CLUSTERS_FILE}"
 
 # --- The permission boundary, ASKED OF THE KERNEL as the real principal.

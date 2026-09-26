@@ -116,34 +116,93 @@ fi
 ok "Vue.js ${VUE_VER} saved to lib/ (sha256 verified against upgrade-full.sh)"
 
 # ─── apt packages (Ubuntu 24.04) ─────────────────────────────────────────────
-info "Downloading apt packages (requires Ubuntu host or docker)..."
-PKGS="python3 python3-venv python3-dev nginx build-essential libssl-dev libffi-dev libsasl2-dev"
-if command -v apt-get &>/dev/null; then
-    apt-get download $PKGS 2>/dev/null && mv ./*.deb "$APT_PKG_DIR/" 2>/dev/null || true
-    ok "apt packages downloaded (where available)"
+# The runtime packages install.sh requires, WITH their dependency closure, so
+# an air-gapped host that lacks one of them can install it from the bundle.
+# install.sh installs only the .debs for packages the host does not already
+# have, so nothing here can downgrade it. Must run on Ubuntu 24.04 of the
+# target's architecture. No compiler or -dev headers: every Python dependency
+# is a binary wheel.
+info "Downloading apt packages and their dependencies (requires an Ubuntu 24.04 host)..."
+PKGS="python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl"
+if command -v apt-get &>/dev/null && command -v apt-cache &>/dev/null; then
+    CLOSURE="$(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts \
+                 --no-breaks --no-replaces --no-enhances $PKGS 2>/dev/null \
+               | grep -E '^[a-z0-9]' | sort -u || true)"
+    GOT=0; MISSED=0
+    for p in $CLOSURE; do
+        if ( cd "$APT_PKG_DIR" && apt-get download "$p" >/dev/null 2>&1 ); then
+            GOT=$((GOT+1))
+        else
+            MISSED=$((MISSED+1))      # virtual packages have no .deb of their own
+        fi
+    done
+    ok "apt packages: ${GOT} downloaded to ${APT_PKG_DIR} (${MISSED} virtual/unavailable skipped)"
 else
     echo "  Skipping apt download — not running on Debian/Ubuntu."
-    echo "  On Ubuntu: cd ${APT_PKG_DIR} && apt-get download ${PKGS}"
+    echo "  The target must then already have: ${PKGS}"
 fi
 
 # ─── optional bundle ─────────────────────────────────────────────────────────
+# v1.1.0: built from the COMMITTED tree (git archive of HEAD), not a tarball of
+# the working directory. The old tarball shipped whatever sat in the checkout:
+# the agent contract (.claude/), the work orders (.work/) with production
+# addresses, dated scan reports and any untracked file. .gitattributes
+# export-ignores the internal records, and the finished bundle is scanned by
+# tools/check-env-neutral.sh --bundle, which refuses it if anything internal
+# or environment-specific got in. Outside a git checkout an explicit allowlist
+# of the shipped paths is used instead.
 if [[ $CREATE_BUNDLE == true ]]; then
     BUNDLE_NAME="topic-manager-offline-${VERSION}.tar.gz"
+    OUT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+    TOP="topic-manager-${VERSION}"
+    STAGE="$(mktemp -d "${TMPDIR:-/tmp}/tm-bundle.XXXXXX")"
+    trap 'rm -rf "$STAGE"' EXIT
+    mkdir -p "${STAGE}/${TOP}"
     info "Creating bundle: ${BUNDLE_NAME}..."
-    cd "${SCRIPT_DIR}/.."
-    tar czf "${BUNDLE_NAME}" \
-        --exclude='*.pyc' --exclude='__pycache__' \
-        --exclude='.git' --exclude='.gitignore' \
-        "$(basename "$SCRIPT_DIR")"
-    ok "Bundle created: ${BUNDLE_NAME}"
+    if git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        if [[ -n "$(git -C "$SCRIPT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+            echo "  NOTE: uncommitted changes to tracked files are NOT in the bundle —"
+            echo "        it is built from HEAD ($(git -C "$SCRIPT_DIR" rev-parse --short HEAD))."
+        fi
+        git -C "$SCRIPT_DIR" archive --format=tar HEAD | tar -x -C "${STAGE}/${TOP}" \
+            || die "git archive of HEAD failed."
+    else
+        for p in VERSION requirements.txt install.sh prepare-offline.sh index.html \
+                 README.md CHANGELOG.md SBOM.md NOTICES.md PPSM.csv TROUBLESHOOTING.md \
+                 jarvis-favicon.ico jarvis-glyph-32.png jarvis-logo.png jarvis-mark.png \
+                 app tm config systemd nginx tools tests docs \
+                 install/upgrade-full.sh install/README.md install/polkit install/logrotate.d; do
+            [[ -e "${SCRIPT_DIR}/${p}" ]] || continue
+            mkdir -p "${STAGE}/${TOP}/$(dirname "$p")"
+            cp -a "${SCRIPT_DIR}/${p}" "${STAGE}/${TOP}/${p}"
+        done
+        find "${STAGE}/${TOP}" -name __pycache__ -type d -prune -exec rm -rf {} +
+    fi
+    # The generated, untracked payload an air-gapped host needs.
+    mkdir -p "${STAGE}/${TOP}/lib" "${STAGE}/${TOP}/install/packages"
+    cp -a "${LIB_DIR}/vue.global.prod.js" "${STAGE}/${TOP}/lib/"
+    cp -a "$PY_PKG_DIR" "$APT_PKG_DIR" "${STAGE}/${TOP}/install/packages/"
+    tar -czf "${OUT_DIR}/${BUNDLE_NAME}" -C "$STAGE" "$TOP" || die "could not write ${OUT_DIR}/${BUNDLE_NAME}"
+    if ! bash "${SCRIPT_DIR}/tools/check-env-neutral.sh" --bundle "${OUT_DIR}/${BUNDLE_NAME}"; then
+        rm -f "${OUT_DIR}/${BUNDLE_NAME}"
+        die "The bundle failed the leak check above and was deleted. Nothing internal ships."
+    fi
+    ( cd "$OUT_DIR" && sha256_of "$BUNDLE_NAME" > "${BUNDLE_NAME}.sha256.tmp" \
+        && printf '%s  %s\n' "$(cat "${BUNDLE_NAME}.sha256.tmp")" "$BUNDLE_NAME" > "${BUNDLE_NAME}.sha256" \
+        && rm -f "${BUNDLE_NAME}.sha256.tmp" )
+    ok "Bundle created: ${OUT_DIR}/${BUNDLE_NAME} (+ .sha256)"
 fi
 
 echo ""
 echo -e "${GREEN}Offline preparation complete.${NC}"
-echo "Transfer the repo (or the bundle) to the target host, then:"
+echo "Transfer the bundle (and its .sha256) to the target host, then:"
 echo ""
-echo "  FRESH INSTALL — from the transferred repo directory:"
-echo "    sudo bash install.sh"
+echo "  FRESH INSTALL:"
+echo "    sha256sum -c topic-manager-offline-${VERSION}.tar.gz.sha256"
+echo "    tar xzf topic-manager-offline-${VERSION}.tar.gz && cd topic-manager-${VERSION}"
+echo "    sudo bash install.sh --ldap-url ldaps://<dc>:636 --ldap-base-dn <base-dn> \\"
+echo "         --ldap-group <group-dn> [--server-name <fqdn>] [--tls-cert <crt> --tls-key <key>]"
+echo "    (or run it on a terminal and answer the prompts)"
 echo ""
 echo "  UPGRADE an existing host — NOT install.sh, which rsync --deletes the"
 echo "  deployed tree. The upgrade reads the bundle from one fixed path:"
@@ -152,5 +211,5 @@ echo "    sudo tar xzf topic-manager-offline-${VERSION}.tar.gz \\"
 echo "      -C /var/lib/topic-manager/offline-src --strip-components=1"
 echo "    sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline"
 echo ""
-echo "  Full procedure: README.md -> 'Offline (air-gapped) upgrade'"
+echo "  Full procedures: docs/INSTALL.md (fresh install) and README.md -> 'Offline (air-gapped) upgrade'"
 echo ""

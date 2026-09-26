@@ -4,15 +4,45 @@
 # Version: 1.0.6
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 #
-# Usage:
-#   sudo bash install.sh
+# FRESH INSTALL on a clean Ubuntu 24.04 host (including a STIG'd one with FIPS
+# mode enabled), online or offline. To move an EXISTING host to a new release,
+# use install/upgrade-full.sh instead — it backs up, audits and rolls back.
 #
-# The script auto-detects online vs offline mode.
-# Online:  downloads packages from apt/PyPI.
-# Offline: uses pre-downloaded packages in install/packages/ (run
-#          prepare-offline.sh on an internet host first).
+# Usage:
+#   sudo bash install.sh [options]
+#
+#   --ldap-url URL          LDAPS URL of the directory, e.g. ldaps://dc1.example.org:636
+#   --ldap-base-dn DN       user search base, e.g. DC=example,DC=org
+#   --ldap-domain DOMAIN    UPN suffix users sign in with (default: from the base DN)
+#   --ldap-group DN         group whose members may sign in
+#   --ldap-bind-dn DN       optional service account for directory searches; its
+#                           password is read from TM_LDAP_BIND_PASSWORD or prompted
+#                           for, never taken on the command line
+#   --ldap-ca-cert PATH     optional CA bundle for the directory's certificate
+#   --server-name FQDN      name the site answers to (default: hostname -f)
+#   --tls-cert PATH --tls-key PATH
+#                           install this certificate and key (verified as a pair);
+#                           without them an existing pair is kept, or a
+#                           self-signed ECDSA P-256 placeholder is generated
+#   --non-interactive       never prompt; fail if a required value is missing
+#
+# There are NO environment defaults for the directory. On a fresh host the
+# LDAP values come from the flags above or from prompts; an existing
+# config.yaml is kept, and refused if it lacks auth.ldap_server,
+# auth.ldap_base_dn or auth.ldap_domain.
+#
+# Online vs offline is detected (pypi.org reachable or not).
+#   Online:  apt, PyPI and the Vue CDN (hash-verified).
+#   Offline: the bundle built by prepare-offline.sh — install/packages/apt,
+#            install/packages/python and lib/vue.global.prod.js.
 # =============================================================================
 set -euo pipefail
+
+# Deterministic file creation. A STIG'd host runs root with umask 077, and a
+# venv or frontend created under it is unreadable by the service account and
+# by nginx (hazards[stig-umask-403]). Everything sensitive below is given its
+# mode explicitly (install -m, chmod), so 0022 here widens nothing that matters.
+umask 0022
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_USER="topic-manager"
@@ -172,15 +202,52 @@ tls_keypair_matches() {
 # the kernel as the actual principal.
 can_access() { sudo -u "$1" test "$2" "$3" 2>/dev/null; }
 
+# ldap_config_missing <python> <config.yaml> — prints the REQUIRED directory
+# keys that are absent, blank or still an unfilled <placeholder>, space
+# separated; prints nothing when sign-in is configured, and ERROR:... when the
+# file cannot be read. The same rule as tm/auth.py missing_ldap_keys, and a
+# byte-identical copy lives in install/upgrade-full.sh (t20 holds all three to
+# the same answers). v1.1.0 removed the application's built-in directory
+# defaults, so a config that relied on them would lock every user out.
+ldap_config_missing() {
+    "$1" - "$2" <<'PYKEYS'
+import sys
+try:
+    import yaml
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        cfg = yaml.safe_load(fh) or {}
+except Exception as exc:
+    print("ERROR:%s" % type(exc).__name__)
+    sys.exit(0)
+auth = cfg.get("auth") if isinstance(cfg, dict) else None
+auth = auth if isinstance(auth, dict) else {}
+missing = []
+for key in ("ldap_server", "ldap_base_dn", "ldap_domain"):
+    value = str(auth.get(key) or "").strip()
+    if not value or ("<" in value and ">" in value):
+        missing.append(key)
+print(" ".join(missing))
+PYKEYS
+}
+
 # ─── options ─────────────────────────────────────────────────────────────────
 OPT_TLS_CERT=""; OPT_TLS_KEY=""; OPT_SERVER_NAME=""
+OPT_LDAP_URL=""; OPT_LDAP_BASE_DN=""; OPT_LDAP_DOMAIN=""; OPT_LDAP_GROUP=""
+OPT_LDAP_BIND_DN=""; OPT_LDAP_CA_CERT=""; NON_INTERACTIVE=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --tls-cert)    shift; OPT_TLS_CERT="${1:-}" ;;
-        --tls-key)     shift; OPT_TLS_KEY="${1:-}" ;;
-        --server-name) shift; OPT_SERVER_NAME="${1:-}" ;;
-        -h|--help)     sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
-        *)             die "Unknown option: $1 (try --help)" ;;
+        --tls-cert)        shift; OPT_TLS_CERT="${1:-}" ;;
+        --tls-key)         shift; OPT_TLS_KEY="${1:-}" ;;
+        --server-name)     shift; OPT_SERVER_NAME="${1:-}" ;;
+        --ldap-url)        shift; OPT_LDAP_URL="${1:-}" ;;
+        --ldap-base-dn)    shift; OPT_LDAP_BASE_DN="${1:-}" ;;
+        --ldap-domain)     shift; OPT_LDAP_DOMAIN="${1:-}" ;;
+        --ldap-group)      shift; OPT_LDAP_GROUP="${1:-}" ;;
+        --ldap-bind-dn)    shift; OPT_LDAP_BIND_DN="${1:-}" ;;
+        --ldap-ca-cert)    shift; OPT_LDAP_CA_CERT="${1:-}" ;;
+        --non-interactive) NON_INTERACTIVE=true ;;
+        -h|--help)         sed -n '2,42p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        *)                 die "Unknown option: $1 (try --help)" ;;
     esac
     shift
 done
@@ -196,30 +263,104 @@ SERVER_NAME="${OPT_SERVER_NAME:-$(hostname -f 2>/dev/null || hostname)}"
 
 # ─── online detection ────────────────────────────────────────────────────────
 ONLINE=false
+# curl first; python3's own TLS stack when a minimal host has no curl yet.
 if curl -s --max-time 4 https://pypi.org > /dev/null 2>&1; then
+    ONLINE=true
+elif python3 -c "import urllib.request; urllib.request.urlopen('https://pypi.org', timeout=4)" >/dev/null 2>&1; then
     ONLINE=true
 fi
 info "Install mode: $( [[ $ONLINE == true ]] && echo 'ONLINE' || echo 'OFFLINE' )"
 
-# ─── system dependencies ─────────────────────────────────────────────────────
-info "Installing system dependencies..."
-if [[ $ONLINE == true ]]; then
-    apt-get update -qq
-    apt-get install -y --no-install-recommends \
-        python3 python3-venv python3-dev \
-        nginx \
-        build-essential libssl-dev libffi-dev \
-        libsasl2-dev libldap2-dev \
-        curl git ca-certificates
-else
-    PKG_DIR="${SCRIPT_DIR}/install/packages/apt"
-    if [[ -d "$PKG_DIR" ]]; then
-        info "Installing from offline .deb cache..."
-        dpkg -i "${PKG_DIR}"/*.deb 2>/dev/null || apt-get install -f -y
-    else
-        warn "No offline apt packages found at ${PKG_DIR}. System packages must already be installed."
+# ─── directory settings (fresh host only) ────────────────────────────────────
+# Asked for BEFORE anything is installed, so a missing answer stops the run on
+# an untouched host. Flags win; otherwise prompt on a terminal; with
+# --non-interactive (or no terminal) a missing required value is a refusal.
+ask() {   # ask <variable> <prompt> [default]
+    local __var="$1" __prompt="$2" __def="${3:-}" __ans=""
+    [[ -n "${!__var}" ]] && return 0
+    if [[ $NON_INTERACTIVE == true || ! -t 0 ]]; then
+        printf -v "$__var" '%s' "$__def"
+        return 0
     fi
+    read -r -p "  ${__prompt}${__def:+ [${__def}]}: " __ans || true
+    printf -v "$__var" '%s' "${__ans:-$__def}"
+}
+
+NEW_CONFIG=false
+[[ -f "$CONFIG_FILE" ]] || NEW_CONFIG=true
+LDAP_BIND_PW=""
+if [[ $NEW_CONFIG == true ]]; then
+    info "No ${CONFIG_FILE} yet — collecting the directory settings for it."
+    ask OPT_LDAP_URL     "Directory LDAPS URL, e.g. ldaps://dc1.example.org:636"
+    ask OPT_LDAP_BASE_DN "User search base DN, e.g. DC=example,DC=org"
+    # DC=example,DC=org -> example.org, offered as the default sign-in domain.
+    DERIVED_DOMAIN="$(printf '%s' "$OPT_LDAP_BASE_DN" | tr ',' '\n' \
+        | sed -n 's/^[[:space:]]*[Dd][Cc]=//p' | paste -sd. - || true)"
+    ask OPT_LDAP_DOMAIN  "Sign-in domain (the UPN suffix)" "$DERIVED_DOMAIN"
+    ask OPT_LDAP_GROUP   "DN of the group allowed to sign in, e.g. CN=Kafka-Admins,OU=Groups,DC=example,DC=org"
+    ask OPT_LDAP_BIND_DN "Service-account DN for searches (blank: bind as each user)"
+    MISSING_OPTS=""
+    [[ -n "$OPT_LDAP_URL" ]]     || MISSING_OPTS="${MISSING_OPTS} --ldap-url"
+    [[ -n "$OPT_LDAP_BASE_DN" ]] || MISSING_OPTS="${MISSING_OPTS} --ldap-base-dn"
+    [[ -n "$OPT_LDAP_DOMAIN" ]]  || MISSING_OPTS="${MISSING_OPTS} --ldap-domain"
+    [[ -n "$OPT_LDAP_GROUP" ]]   || MISSING_OPTS="${MISSING_OPTS} --ldap-group"
+    [[ -z "$MISSING_OPTS" ]] || die "Cannot write ${CONFIG_FILE}: no value for${MISSING_OPTS}.
+     There is no built-in directory. Pass them as flags (see --help) or run
+     on a terminal to be asked. Nothing has been installed."
+    [[ "$OPT_LDAP_URL" =~ ^ldaps://[A-Za-z0-9._-]+(:[0-9]{1,5})?/?$ ]] \
+        || die "--ldap-url must be ldaps://<host>[:<port>] (plain ldap:// is not supported): '${OPT_LDAP_URL}'"
+    [[ -z "$OPT_LDAP_CA_CERT" || -f "$OPT_LDAP_CA_CERT" ]] \
+        || die "--ldap-ca-cert ${OPT_LDAP_CA_CERT}: no such file."
+    # The service-account password: environment or a silent prompt, never argv.
+    LDAP_BIND_PW="${TM_LDAP_BIND_PASSWORD:-}"
+    if [[ -n "$OPT_LDAP_BIND_DN" && -z "$LDAP_BIND_PW" && $NON_INTERACTIVE != true && -t 0 ]]; then
+        read -r -s -p "  Password for ${OPT_LDAP_BIND_DN} (not echoed): " LDAP_BIND_PW || true
+        echo
+    fi
+    if [[ -n "$OPT_LDAP_BIND_DN" && -z "$LDAP_BIND_PW" ]]; then
+        warn "No password for the service account: config.yaml keeps the CHANGE_ME"
+        warn "  placeholder, so sign-in binds as each user until auth.ldap_bind_password is set."
+    fi
+    success "Directory: ${OPT_LDAP_URL} (base ${OPT_LDAP_BASE_DN}, domain ${OPT_LDAP_DOMAIN})"
 fi
+
+# ─── system dependencies ─────────────────────────────────────────────────────
+# Runtime packages only. No compiler and no -dev headers: every Python
+# dependency is installed from a binary wheel (pip --only-binary :all:), which
+# is also what the offline bundle carries, so a STIG'd host never needs a
+# toolchain. polkitd is what lets the Settings restart control act.
+REQUIRED_PKGS=(python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl)
+pkg_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"; }
+MISSING_PKGS=()
+for p in "${REQUIRED_PKGS[@]}"; do pkg_installed "$p" || MISSING_PKGS+=("$p"); done
+info "Installing system dependencies..."
+if [[ ${#MISSING_PKGS[@]} -eq 0 ]]; then
+    success "All required packages already installed"
+elif [[ $ONLINE == true ]]; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${MISSING_PKGS[@]}"
+else
+    # Offline: only the bundle's .debs for packages NOT already installed, so a
+    # bundled package can never downgrade something the host already has.
+    PKG_DIR="${SCRIPT_DIR}/install/packages/apt"
+    DEBS=()
+    shopt -s nullglob
+    for deb in "${PKG_DIR}"/*.deb; do
+        pkg_installed "$(dpkg-deb -f "$deb" Package 2>/dev/null)" || DEBS+=("$deb")
+    done
+    shopt -u nullglob
+    [[ ${#DEBS[@]} -gt 0 ]] || die "Offline, and these packages are missing: ${MISSING_PKGS[*]}
+     ${PKG_DIR} holds nothing that provides them. Install them from the host's
+     own package mirror, or rebuild the bundle with prepare-offline.sh on an
+     Ubuntu 24.04 machine of the same architecture."
+    info "Installing ${#DEBS[@]} package(s) from the offline bundle ..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${DEBS[@]}" \
+        || die "Offline package install failed. The bundle may be for a different
+     Ubuntu release or architecture; see TROUBLESHOOTING.md."
+fi
+for p in "${REQUIRED_PKGS[@]}"; do
+    pkg_installed "$p" || die "Required package ${p} is still not installed."
+done
 success "System dependencies ready"
 
 # ─── Python version check ────────────────────────────────────────────────────
@@ -230,7 +371,7 @@ success "Python ${PY_VER} OK"
 
 # ─── system user ─────────────────────────────────────────────────────────────
 if ! id "$APP_USER" &>/dev/null; then
-    useradd --system --no-create-home --shell /usr/sbin/nologin "$APP_USER"
+    useradd --system --user-group --no-create-home --shell /usr/sbin/nologin "$APP_USER"
     success "Created system user: ${APP_USER}"
 fi
 
@@ -263,16 +404,19 @@ info "Setting up Python virtual environment..."
 "$PYTHON" -m venv "$VENV"
 source "${VENV}/bin/activate"
 
-pip install --upgrade pip --quiet
-
+# Binary wheels only (--only-binary :all:): nothing is compiled on the host, so
+# no toolchain is needed and what runs is exactly the wheel that was pinned.
 if [[ $ONLINE == true ]]; then
+    pip install --upgrade pip --quiet
     info "Installing Python packages from PyPI..."
-    pip install -r "${SCRIPT_DIR}/requirements.txt" --quiet
+    pip install --only-binary :all: -r "${SCRIPT_DIR}/requirements.txt" --quiet
 else
+    # No pip self-upgrade offline: there is no index to upgrade it from, and
+    # attempting it was a hard failure on an air-gapped host.
     PY_PKG_DIR="${SCRIPT_DIR}/install/packages/python"
     if [[ -d "$PY_PKG_DIR" ]]; then
         info "Installing Python packages from offline cache..."
-        pip install --no-index --find-links="$PY_PKG_DIR" \
+        pip install --no-index --only-binary :all: --find-links="$PY_PKG_DIR" \
             -r "${SCRIPT_DIR}/requirements.txt" --quiet
     else
         die "Offline Python packages not found at ${PY_PKG_DIR}. Run prepare-offline.sh first."
@@ -280,6 +424,27 @@ else
 fi
 deactivate
 success "Python environment ready"
+
+# ─── an existing config.yaml must name its directory ─────────────────────────
+# Checked BEFORE the new backend is copied in: v1.1.0 has no built-in
+# directory defaults, and a reinstall over a host whose config.yaml relied on
+# them would otherwise lock every user out the moment a worker restarted.
+if [[ $NEW_CONFIG != true ]]; then
+    LDAP_MISSING="$(ldap_config_missing "${VENV}/bin/python3" "$CONFIG_FILE")"
+    case "$LDAP_MISSING" in
+        "") success "config.yaml names its directory (ldap_server, ldap_base_dn, ldap_domain)" ;;
+        ERROR:*) die "Could not read ${CONFIG_FILE} to check its directory settings (${LDAP_MISSING#ERROR:}).
+     Fix the file and run again. Nothing in the running install was changed." ;;
+        *) die "${CONFIG_FILE} has no value for: ${LDAP_MISSING}
+     Releases before 1.1.0 filled these in from built-in defaults that belonged
+     to one particular site; 1.1.0 has none, so this install would lock every
+     user out. Add the keys under auth: with YOUR directory's values, e.g.
+       ldap_server:  \"ldaps://dc1.example.org:636\"
+       ldap_base_dn: \"DC=example,DC=org\"
+       ldap_domain:  \"example.org\"
+     then run again. Nothing in the running install was changed." ;;
+    esac
+fi
 
 # ─── backend ─────────────────────────────────────────────────────────────────
 info "Installing backend (tm/)..."
@@ -364,8 +529,8 @@ chown -R www-data:www-data "$FRONTEND_DIR"
 success "Frontend installed at ${FRONTEND_DIR}"
 
 # ─── config ──────────────────────────────────────────────────────────────────
-if [[ ! -f "${CONFIG_DIR}/config.yaml" ]]; then
-    info "Installing default config..."
+if [[ $NEW_CONFIG == true ]]; then
+    info "Writing ${CONFIG_DIR}/config.yaml ..."
     # install(1), not cp+chmod: cp under umask 077 lands the file 0600 and
     # the following chmod races the window in between. install(1) creates it
     # with the final owner and mode in one step.
@@ -373,24 +538,68 @@ if [[ ! -f "${CONFIG_DIR}/config.yaml" ]]; then
         "${SCRIPT_DIR}/config/config.yaml.example" "${CONFIG_DIR}/config.yaml"
 
     # Generate a random secret key
-    SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-    sed -i "s/CHANGE_ME_GENERATE_A_RANDOM_SECRET/${SECRET}/" "${CONFIG_DIR}/config.yaml"
+    # ...and fill in the directory settings. Rewritten IN PLACE (same inode), so the owner and mode install(1) set
+    # hold throughout. Values arrive through the environment, never argv, and
+    # are written as JSON strings, which are valid YAML double-quoted scalars
+    # whatever characters a DN contains. secrets.token_hex draws on the kernel
+    # CSPRNG (os.urandom), which is the approved DRBG on a FIPS host.
+    if ! TM_I_LDAP_SERVER="$OPT_LDAP_URL" TM_I_LDAP_BASE_DN="$OPT_LDAP_BASE_DN" \
+         TM_I_LDAP_DOMAIN="$OPT_LDAP_DOMAIN" TM_I_REQUIRED_GROUP="$OPT_LDAP_GROUP" \
+         TM_I_LDAP_BIND_DN="$OPT_LDAP_BIND_DN" TM_I_LDAP_CA_CERT="$OPT_LDAP_CA_CERT" \
+         TM_I_LDAP_BIND_PW="$LDAP_BIND_PW" \
+         "${VENV}/bin/python3" - "${CONFIG_DIR}/config.yaml" <<'PYCFG'
+import json, os, re, secrets, sys
+import yaml
 
-    warn "Config installed at ${CONFIG_DIR}/config.yaml"
-    warn "  → Edit the LDAP bind DN and password before starting."
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+values = {
+    "ldap_server":    os.environ["TM_I_LDAP_SERVER"],
+    "ldap_base_dn":   os.environ["TM_I_LDAP_BASE_DN"],
+    "ldap_domain":    os.environ["TM_I_LDAP_DOMAIN"],
+    "required_group": os.environ["TM_I_REQUIRED_GROUP"],
+    "ldap_bind_dn":   os.environ.get("TM_I_LDAP_BIND_DN", ""),
+    "ldap_ca_cert":   os.environ.get("TM_I_LDAP_CA_CERT", ""),
+}
+if os.environ.get("TM_I_LDAP_BIND_PW"):
+    values["ldap_bind_password"] = os.environ["TM_I_LDAP_BIND_PW"]
+for key, value in values.items():
+    pattern = re.compile(r'^(  ' + re.escape(key) + r':[ \t]*)"[^"\n]*"', re.M)
+    text, n = pattern.subn(lambda m: m.group(1) + json.dumps(value), text)
+    if n != 1:
+        sys.exit("config template: auth.%s matched %d lines, expected 1" % (key, n))
+text, n = re.subn(r"CHANGE_ME_GENERATE_A_RANDOM_SECRET", secrets.token_hex(32), text)
+if n != 1:
+    sys.exit("config template: the secret_key placeholder matched %d times" % n)
+parsed = yaml.safe_load(text)
+for key, value in values.items():
+    if parsed["auth"].get(key) != value:
+        sys.exit("config template: auth.%s did not round-trip" % key)
+with open(path, "r+", encoding="utf-8") as fh:
+    fh.seek(0)
+    fh.write(text)
+    fh.truncate()
+PYCFG
+    then
+        rm -f "${CONFIG_DIR}/config.yaml"
+        die "Could not write config.yaml (see above); it was removed so a re-run starts clean."
+    fi
+
+    success "Config written to ${CONFIG_DIR}/config.yaml (0640 root:${APP_USER}, new secret key)"
 else
-    info "Config already exists — not overwritten."
+    info "Config already exists — not overwritten (its directory settings were checked above)."
 fi
 
 # ─── cluster profiles ───────────────────────────────────────────────────────
 # A REINSTALL over an existing host finds a config.yaml that still carries
 # the clusters: block, so this runs on install as well as on upgrade. It is
-# the same module the upgrade calls, and it is idempotent.
-info "Migrating cluster profiles into ${CLUSTERS_DIR} ..."
+# the same module the upgrade calls, and it is idempotent. On a FRESH host it
+# creates an EMPTY store (v1.1.0): config/clusters.yaml.example is a format
+# reference, never imported as live clusters. Add them in Settings.
+info "Preparing the cluster profile store in ${CLUSTERS_DIR} ..."
 PYTHONPATH="$SCRIPT_DIR" "${VENV}/bin/python3" -m tm.migrate_clusters \
     --config "${CONFIG_DIR}/config.yaml" \
     --clusters-dir "$CLUSTERS_DIR" \
-    --example "${SCRIPT_DIR}/config/clusters.yaml.example" \
     || die "Cluster profile migration failed."
 # The migration owns the DATA; permissions are set here, with install(1).
 safe_install_dir 750 "$APP_USER" "$APP_USER" "$CLUSTERS_DIR"
@@ -540,19 +749,52 @@ if can_access "$APP_USER" -w "$CONFIG_DIR"; then
 fi
 success "Permission boundary verified: the app owns clusters.d and cannot write config.yaml"
 
+# ─── start and verify ───────────────────────────────────────────────────────
+# The end state is a RUNNING service, measured — not a list of next steps. The
+# config is complete (the directory settings were supplied or checked above)
+# and nginx has a certificate, so there is nothing left for an operator to
+# fill in before it can start.
+info "Starting ${SERVICE_NAME} and nginx ..."
+systemctl restart "${SERVICE_NAME}"
+systemctl enable nginx --quiet
+systemctl reload-or-restart nginx
+HEALTH=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 2
+    HEALTH="$(curl -sk --max-time 5 https://localhost/api/health 2>/dev/null || true)"
+    grep -q '"ok"' <<<"$HEALTH" && break
+done
+grep -q '"ok"' <<<"$HEALTH" \
+    || die "${SERVICE_NAME} did not answer /api/health: ${HEALTH:-no response}
+     See: sudo journalctl -u ${SERVICE_NAME} -n 50 --no-pager"
+success "Health: ${HEALTH}"
+# The service has started, so tm.db now exists — created by tm/models.py under
+# UMask=0077. Measured, not assumed.
+DB_STATE="$(stat -c '%a %U' "${DATA_DIR}/tm.db" 2>/dev/null || echo missing)"
+[[ "$DB_STATE" == "600 ${APP_USER}" ]] \
+    || die "${DATA_DIR}/tm.db is '${DB_STATE}', expected '600 ${APP_USER}'."
+DIR_STATE="$(stat -c '%a %U' "$DATA_DIR" 2>/dev/null || echo missing)"
+[[ "$DIR_STATE" == "700 ${APP_USER}" ]] \
+    || die "${DATA_DIR} is '${DIR_STATE}', expected '700 ${APP_USER}'."
+success "Audit database private: tm.db 0600, data/ 0700, owned by ${APP_USER}"
+
 # ─── summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}  Jarvis Topic Manager install complete.${NC}"
+echo -e "${GREEN}  Jarvis Topic Manager install complete — running.${NC}"
 echo -e "${GREEN}══════════════════════════════════════════════════════${NC}"
 echo ""
+echo "  URL:      https://${SERVER_NAME}/"
+echo "  Config:   ${CONFIG_DIR}/config.yaml"
 echo "  Next steps:"
-echo "  1. Edit config:  sudo nano ${CONFIG_DIR}/config.yaml"
-echo "  2. Place TLS cert at ${CONFIG_DIR}/tls/server.crt (.key)"
-echo "  3. Start services:"
-echo "       sudo systemctl start ${SERVICE_NAME}"
-echo "       sudo systemctl restart nginx"
-echo "  4. Verify:  curl -sk https://localhost/api/health"
+echo "  1. Sign in with a member of the required group, then add the Kafka"
+echo "     clusters in Settings > General > Cluster Profiles (a new install"
+echo "     starts with none)."
+if [[ -z "$OPT_TLS_CERT" ]] && openssl x509 -in "$TLS_CRT" -noout -issuer -subject 2>/dev/null \
+        | awk -F'= ' '/^issuer/{i=$2} /^subject/{s=$2} END{exit !(i==s)}'; then
+echo "  2. The TLS certificate is SELF-SIGNED. Replace ${TLS_CRT} and"
+echo "     ${TLS_KEY} with a CA-issued pair, then: sudo systemctl reload nginx"
+fi
 echo ""
 echo "  Logs:  journalctl -u ${SERVICE_NAME} -f"
 echo "         tail -f ${LOG_DIR}/error.log"

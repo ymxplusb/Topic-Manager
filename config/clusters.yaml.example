@@ -1,8 +1,12 @@
 # Jarvis Topic Manager — Cluster Profiles
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 #
-# Installed to /etc/topic-manager/clusters.d/clusters.yaml,
-# owned topic-manager:topic-manager, mode 0640.
+# A REFERENCE for the file format, NOT an install input (v1.1.0). A fresh
+# install creates /etc/topic-manager/clusters.d/clusters.yaml with an EMPTY
+# list (owned topic-manager:topic-manager, mode 0640) and the operator adds
+# the real clusters in Settings > General > Cluster Profiles. Nothing below is
+# ever copied onto a host; the host names are documentation-only example.org
+# names, not anyone's brokers.
 #
 # This is the ONE file the application writes. It lives in its own directory so
 # that the directory can be app-writable (atomic replace needs to create a temp
@@ -21,18 +25,18 @@
 # service read an arbitrary file and report the error back to you.
 
 clusters:
-  - id: "bare-metal"
-    name: "Bare Metal — Legacy Jarvis"
-    bootstrap_servers: "broker1.int.crypticlight.com:9092,broker2.int.crypticlight.com:9092,broker3.int.crypticlight.com:9092"
+  - id: "primary"
+    name: "Primary cluster"
+    bootstrap_servers: "kafka1.example.org:9092,kafka2.example.org:9092,kafka3.example.org:9092"
     security_protocol: "PLAINTEXT"
     active: true
 
-  - id: "k8s-jarvis"
-    name: "K8s Jarvis"
-    bootstrap_servers: "192.168.202.131:9094,192.168.202.132:9094,192.168.202.133:9094"
+  - id: "tls-cluster"
+    name: "TLS cluster"
+    bootstrap_servers: "kafka-tls1.example.org:9094,kafka-tls2.example.org:9094,kafka-tls3.example.org:9094"
     security_protocol: "SSL"
     # Uploaded through the Cluster Builder; the filename is generated server-side.
-    ssl_cafile: "/opt/topic-manager/data/cluster-certs/k8s-jarvis-ca-4f2ab1c9.pem"
+    ssl_cafile: "/opt/topic-manager/data/cluster-certs/tls-cluster-ca-4f2ab1c9.pem"
     active: false
 
   # SASL_SSL example. sasl_password is write-only over the API: it is accepted,
@@ -40,7 +44,7 @@ clusters:
   # the audit log.
   # - id: "secured"
   #   name: "Secured Cluster"
-  #   bootstrap_servers: "kafka1.example.com:9093"
+  #   bootstrap_servers: "kafka1.example.org:9093"
   #   security_protocol: "SASL_SSL"
   #   sasl_mechanism: "SCRAM-SHA-512"
   #   sasl_username: "topic-manager"

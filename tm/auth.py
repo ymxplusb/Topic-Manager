@@ -1,9 +1,31 @@
+import logging
 import re
 import ssl
 from ldap3 import Server, Connection, ALL, SIMPLE, Tls
 from ldap3.core.exceptions import LDAPException, LDAPBindError
 
+log = logging.getLogger(__name__)
+
 _BIND_PW_PLACEHOLDER = 'CHANGE_ME'
+
+#: The keys sign-in cannot work without. required_group is deliberately NOT
+#: here: an empty value is a documented choice (any directory account), where
+#: an empty server or base DN can only be a mistake.
+REQUIRED_LDAP_KEYS = ('ldap_server', 'ldap_base_dn', 'ldap_domain')
+
+
+def missing_ldap_keys(cfg):
+    """The REQUIRED_LDAP_KEYS that are absent, blank or still an unfilled
+    <placeholder> in cfg['auth']. Empty list when sign-in is configured."""
+    auth_cfg = (cfg or {}).get('auth') or {}
+    if not isinstance(auth_cfg, dict):
+        auth_cfg = {}
+    out = []
+    for k in REQUIRED_LDAP_KEYS:
+        v = str(auth_cfg.get(k) or '').strip()
+        if not v or ('<' in v and '>' in v):
+            out.append(k)
+    return out
 
 
 def _build_tls(cfg):
@@ -24,11 +46,24 @@ def validate_credentials(cfg, username, password):
       2. Re-bind with the user's UPN to verify the supplied password.
     Falls back to direct user-bind when service credentials are absent.
     """
-    auth_cfg = cfg.get('auth', {})
-    ldap_url = auth_cfg.get('ldap_server', 'ldaps://dc1.int.crypticlight.com:636')
-    base_dn = auth_cfg.get('ldap_base_dn', 'DC=int,DC=crypticlight,DC=com')
+    auth_cfg = cfg.get('auth', {}) or {}
+    if not isinstance(auth_cfg, dict):
+        auth_cfg = {}
+    # v1.1.0: NO built-in directory. These three used to default to one
+    # particular site's domain controller, base DN and domain, so a config that
+    # omitted them authenticated against a directory nobody configured. A
+    # missing key is now a refusal that names the key; install.sh and the
+    # upgrade refuse to proceed without them, so this is the last line.
+    missing = missing_ldap_keys(cfg)
+    if missing:
+        log.error('LDAP is not configured: %s missing from config.yaml', ', '.join(missing))
+        return False, ('Sign-in is not configured on this server: %s missing from '
+                       'config.yaml. An administrator must set it.'
+                       % ', '.join('auth.' + k for k in missing))
+    ldap_url = auth_cfg['ldap_server']
+    base_dn = auth_cfg['ldap_base_dn']
     required_group_dn = auth_cfg.get('required_group', '')
-    domain = auth_cfg.get('ldap_domain', 'int.crypticlight.com')
+    domain = auth_cfg['ldap_domain']
     bind_dn = auth_cfg.get('ldap_bind_dn', '')
     bind_pw = auth_cfg.get('ldap_bind_password', '')
 

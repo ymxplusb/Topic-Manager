@@ -25,3 +25,17 @@
 *.ico  binary
 *.docx binary
 *.pdf  binary
+
+# Never shipped (v1.1.0). `git archive` builds the offline bundle
+# (prepare-offline.sh) and the CI release tarball, and these are this
+# repository's own process records: the agent contract and the work orders
+# carry production host names and addresses. tools/check-env-neutral.sh
+# --bundle refuses a bundle that contains them anyway.
+# The directory itself AND everything in it: with only the /** form, git
+# archive still emits the empty directory entries.
+.claude      export-ignore
+.claude/**   export-ignore
+.work        export-ignore
+.work/**     export-ignore
+.github      export-ignore
+.github/**   export-ignore

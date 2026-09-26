@@ -1,5 +1,10 @@
 # Jarvis Topic Manager — Configuration
-# Copy to /etc/topic-manager/config.yaml and edit before running install.sh
+# install.sh writes /etc/topic-manager/config.yaml from this file, filling in
+# the values below from its prompts or --ldap-* flags. To prepare one by hand,
+# copy it there and replace every <placeholder>. There are NO built-in
+# directory defaults: install.sh, the upgrade and the application all refuse
+# to use a config whose auth.ldap_server, ldap_base_dn or ldap_domain is
+# missing or still a <placeholder>.
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 server:
@@ -9,9 +14,13 @@ server:
   secret_key: "CHANGE_ME_GENERATE_A_RANDOM_SECRET"
 
 auth:
-  ldap_server: "ldaps://dc1.int.crypticlight.com:636"
-  ldap_domain: "int.crypticlight.com"
-  ldap_base_dn: "DC=int,DC=crypticlight,DC=com"
+  # LDAPS URL of a domain controller / directory server, e.g.
+  # "ldaps://dc1.example.org:636". Plain ldap:// is not supported for use.
+  ldap_server: "<ldaps://directory-host:636>"
+  # The UPN suffix users sign in with: <user>@<ldap_domain>, e.g. "example.org".
+  ldap_domain: "<directory-domain>"
+  # Where users are searched for, e.g. "DC=example,DC=org".
+  ldap_base_dn: "<base-dn>"
   # Path to PEM CA bundle for LDAPS certificate validation.
   # Leave blank to use the system trust store (/etc/ssl/certs/ca-certificates.crt).
   # Point to your internal CA if it is not in the system store.
@@ -19,10 +28,13 @@ auth:
   # Service account for LDAP searches (read-only, Domain Users sufficient).
   # When set, auth uses a two-phase bind: service account searches for the user,
   # then the user's own DN + password is verified. Recommended over direct user bind.
-  ldap_bind_dn: "CN=svc-kafka-ui,OU=Service Accounts,DC=int,DC=crypticlight,DC=com"
+  # Leave ldap_bind_dn blank ("") to bind directly as the signing-in user.
+  # e.g. "CN=svc-topic-manager,OU=Service Accounts,DC=example,DC=org"
+  ldap_bind_dn: ""
   ldap_bind_password: "CHANGE_ME"
-  # Full DN of the AD group required for access
-  required_group: "CN=Kafka-Admins,CN=Users,DC=int,DC=crypticlight,DC=com"
+  # Full DN of the group whose members may sign in, e.g.
+  # "CN=Kafka-Admins,OU=Groups,DC=example,DC=org". Blank = any directory account.
+  required_group: "<required-group-dn>"
 
 # NOTE: cluster profiles are NOT in this file any more.
 #
@@ -55,8 +67,7 @@ audit:
 
 logging:
   log_level: "INFO"    # DEBUG / INFO / WARNING / ERROR
-  # Set syslog_enabled: true to forward auth events and errors to the local
-  # syslog daemon (/dev/log → rsyslog → Graylog via 60-graylog.conf).
-  # No additional rsyslog configuration is needed — daemon.* is already
-  # forwarded to Graylog Primary by the fleet's existing rsyslog config.
+  # Set syslog_enabled: true to send auth events and errors to the local
+  # syslog daemon (/dev/log, facility daemon). Forwarding them off the host is
+  # the host's own syslog configuration (remote syslog is planned for v1.2.0).
   syslog_enabled: false

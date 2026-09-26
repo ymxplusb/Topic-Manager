@@ -72,6 +72,12 @@ def _cluster(cluster_id=None):
         cid = request.args.get('cluster') or session.get('active_cluster')
         c = get_cluster_by_id(cfg, cid) if cid else get_active_cluster(cfg)
     if not c:
+        # v1.1.0: a fresh install starts with NO cluster profiles (the example
+        # file is documentation, not an install input), so "none configured"
+        # is now the first thing a new operator sees. Say what to do.
+        if not cfg.get('clusters'):
+            raise ValueError('No cluster profile is configured yet. Add one in '
+                             'Settings > General > Cluster Profiles.')
         raise ValueError('No cluster configured or cluster not found')
     if c.get('disabled'):
         raise ValueError('Cluster %s is disabled: %s' % (c.get('id'), c['disabled']))

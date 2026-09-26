@@ -672,3 +672,63 @@ TARGET|install
 EQUIV|no
 ANCHOR|    [[ "$c" == "$k" ]]
 REPLACE|    [[ "$c" != "$k" ]]
+
+# ─── v1.1.0: no built-in directory, no built-in source (t20) ─────────────────
+--- M80
+DESC|upgrade: THE LOCK-OUT MUTATION — the missing-directory-keys gate is gone, so --force (or no blocker count) carries a host onto code with no LDAP defaults
+TESTS|t20-directory-config.sh
+EQUIV|no
+ANCHOR|if [[ $LDAP_KEYS_HARD_BLOCK == true ]]; then
+REPLACE|if false; then
+
+--- M81
+DESC|upgrade: an unfilled <placeholder> counts as configured again
+TESTS|t20-directory-config.sh
+EQUIV|no
+ANCHOR|    if not value or ("<" in value and ">" in value):
+REPLACE|    if not value:
+
+--- M82
+DESC|upgrade: REPO_URL gets a built-in default again
+TESTS|t20-directory-config.sh
+EQUIV|no
+ANCHOR|REPO_URL="${TM_REPO_URL:-}"
+REPLACE|REPO_URL="${TM_REPO_URL:-https://git.example.org/team/topic-manager.git}"
+
+--- M83
+DESC|upgrade: an online run with no source URL is no longer refused
+TESTS|t20-directory-config.sh
+EQUIV|no
+ANCHOR|    elif [[ $AUDIT_ONLY != true && $DRY_RUN != true && $BACKUP_ONLY != true ]]; then
+REPLACE|    elif false; then
+
+--- M84
+DESC|upgrade: THE INJECTION MUTATION — an option-shaped --repo-url reaches git clone unchecked
+TESTS|t20-directory-config.sh
+EQUIV|no
+ANCHOR|        [[ "$REPO_URL" =~ ^(https://|ssh://|git@)[^[:space:]]+$ && "$REPO_URL" != -* ]] \
+REPLACE|        true \
+
+--- M85
+DESC|install: a reinstall over a config.yaml without the directory keys is no longer refused
+TESTS|t20-directory-config.sh
+TARGET|install
+EQUIV|no
+ANCHOR|if [[ $NEW_CONFIG != true ]]; then
+REPLACE|if false; then
+
+--- M86
+DESC|install: an unfilled <placeholder> counts as configured again (install copy)
+TESTS|t20-directory-config.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if not value or ("<" in value and ">" in value):
+REPLACE|    if not value:
+
+--- M87
+DESC|install: the written config is no longer checked to round-trip. DOCUMENTED EQUIVALENT: the writer emits json.dumps() strings, which PyYAML always reads back identically, so this belt is unreachable while the writer is correct (measured 2026-09-26: survives; kept as a guard against a future template change)
+TESTS|t20-directory-config.sh
+TARGET|install
+EQUIV|yes
+ANCHOR|    if parsed["auth"].get(key) != value:
+REPLACE|    if False:

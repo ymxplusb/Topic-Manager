@@ -291,27 +291,25 @@ migrate(os.environ['TM_CONFIG'], os.environ['TM_CLUSTERS_DIR'])
 }
 tm_case "migration-creates-clusters-yaml-0640" modes c_migration_creates_the_file_0640
 
-c_example_install_is_0640_too() {
-    # The other creation path: no legacy block, so the example is installed.
-    # shutil.copyfile created it with the process umask — 0644 on a stock host.
+c_fresh_store_is_0640_too() {
+    # The other creation path: no legacy block and no store — a fresh host.
+    # v1.1.0 creates an EMPTY store there; it must still be born 0640.
     _mkconfig_legacy
     umask 022
-    printf 'clusters:\n  - id: example\n    name: Example\n    bootstrap_servers: "h:9092"\n    security_protocol: PLAINTEXT\n    active: true\n' \
-        > "${TM_TMP}/clusters.yaml.example"
     _py "
 import io, os, re
 p = os.environ['TM_CONFIG']
 s = io.open(p, encoding='utf-8').read()
 io.open(p, 'w', encoding='utf-8').write(re.sub(r'(?ms)^clusters:.*?(?=^\w|\Z)', '', s))
 from tm.migrate_clusters import migrate
-migrate(p, os.environ['TM_CLUSTERS_DIR'], os.path.join(os.path.dirname(p), 'clusters.yaml.example'))
+migrate(p, os.environ['TM_CLUSTERS_DIR'])
 " > /dev/null
-    tm_assert_file "${TM_TMP}/clusters.d/clusters.yaml" "the example was not installed"
+    tm_assert_file "${TM_TMP}/clusters.d/clusters.yaml" "no cluster store was created on a fresh host"
     tm_assert_mode 640 "${TM_TMP}/clusters.d/clusters.yaml" \
-        "the example cluster store was created world-readable — it names every
-        broker and every certificate file the service uses"
+        "the fresh cluster store was created world-readable — once the operator
+        adds clusters it names every broker and every certificate file"
 }
-tm_case "example-cluster-store-is-installed-0640" modes c_example_install_is_0640_too
+tm_case "fresh-cluster-store-is-created-0640" modes c_fresh_store_is_0640_too
 
 # MUTATION FINDING, 2026-09-01: removing the chown from _atomic_write SURVIVED.
 # Both mode cases above call migrate() with no owner, so the ownership half was
@@ -323,7 +321,7 @@ c_migration_gives_the_store_to_the_service_account() {
     _py "
 import os
 from tm.migrate_clusters import migrate
-migrate(os.environ['TM_CONFIG'], os.environ['TM_CLUSTERS_DIR'], None, '${TM_WEB_USER}')
+migrate(os.environ['TM_CONFIG'], os.environ['TM_CLUSTERS_DIR'], owner='${TM_WEB_USER}')
 " > /dev/null
     tm_assert_owner "${TM_WEB_USER}:${TM_WEB_USER}" "${TM_TMP}/clusters.d/clusters.yaml" \
         "the cluster store was not given to the service account at creation. It
@@ -357,10 +355,15 @@ print('STABLE' if h1 == h2 else 'CHANGED')
 }
 tm_case "migration-is-idempotent-across-repeated-runs" none c_migration_is_idempotent
 
-c_migration_refuses_to_write_an_empty_list() {
+# v1.1.0 REVERSES the old rule here, on the owner's direction. A fresh host
+# used to be given config/clusters.yaml.example, so its first cluster list was
+# somebody else's brokers. Now a host with nothing to migrate gets an EMPTY
+# store, and nothing — no example, no default — is ever imported into it.
+c_fresh_host_gets_an_empty_store() {
     _mkconfig_legacy
-    # Strip the clusters block, and offer no example: there is nothing to
-    # migrate and nothing to install, so the only honest outcome is a refusal.
+    # A decoy example beside the config: the old code would have imported it.
+    printf 'clusters:\n  - id: decoy\n    name: Decoy\n    bootstrap_servers: "decoy.example.org:9092"\n    security_protocol: PLAINTEXT\n    active: true\n' \
+        > "${TM_TMP}/clusters.yaml.example"
     _py "
 import io, os, re
 p = os.environ['TM_CONFIG']
@@ -369,21 +372,64 @@ s = re.sub(r'clusters:.*?\nsession:', 'session:', s, flags=re.S)
 io.open(p, 'w', encoding='utf-8').write(s)
 " > /dev/null
     OUT="$(_py "
-import os
+import os, yaml
 from tm.migrate_clusters import migrate
-try:
-    migrate(os.environ['TM_CONFIG'], os.environ['TM_CLUSTERS_DIR'])
-    print('WROTE')
-except SystemExit as exc:
-    print('REFUSED')
+migrate(os.environ['TM_CONFIG'], os.environ['TM_CLUSTERS_DIR'])
+migrate(os.environ['TM_CONFIG'], os.environ['TM_CLUSTERS_DIR'])   # and again: still empty
+d = yaml.safe_load(open(os.path.join(os.environ['TM_CLUSTERS_DIR'], 'clusters.yaml'), encoding='utf-8'))
+print('clusters=%r' % (d.get('clusters'),))
 ")"
     case "$OUT" in
-        *REFUSED*) ;;
-        *) _tm_afail "the migration wrote an empty cluster list rather than
-        refusing. Every topic and consumer-group view resolves through a
-        cluster, so an empty list is a silently broken install. Got: ${OUT}" ;;
+        *"clusters=[]"*) ;;
+        *) _tm_afail "a fresh host did not get an EMPTY cluster store (or a second run
+        filled it). Got: ${OUT}" ;;
+    esac
+    case "$OUT" in *decoy*) _tm_afail "an example profile was imported as a live cluster: ${OUT}" ;; esac
+}
+tm_case "a-fresh-host-gets-an-empty-store-never-the-example" none c_fresh_host_gets_an_empty_store
+
+c_existing_empty_store_is_left_alone() {
+    # "Already migrated" means changes NOTHING, and an empty store is migrated.
+    # MUTATION FINDING 2026-09-26 (MC5): with the empty-store branch removed the
+    # store was silently REWRITTEN on every run — same list, so the other
+    # cases stayed green, but an operator's comments in it were destroyed.
+    _mkconfig_legacy
+    _py "
+import io, os, re
+p = os.environ['TM_CONFIG']
+s = io.open(p, encoding='utf-8').read()
+io.open(p, 'w', encoding='utf-8').write(re.sub(r'(?ms)^clusters:.*?(?=^\w|\Z)', '', s))
+" > /dev/null
+    printf '# operator note: clusters come later\nclusters: []\n' > "${TM_TMP}/clusters.d/clusters.yaml"
+    cp "${TM_TMP}/clusters.d/clusters.yaml" "${TM_TMP}/before.yaml"
+    _py "
+import os
+from tm.migrate_clusters import migrate
+migrate(os.environ['TM_CONFIG'], os.environ['TM_CLUSTERS_DIR'])
+" > /dev/null
+    cmp -s "${TM_TMP}/before.yaml" "${TM_TMP}/clusters.d/clusters.yaml" \
+        || _tm_afail "an existing EMPTY store was rewritten; the operator's comment is gone:
+        $(cat "${TM_TMP}/clusters.d/clusters.yaml")"
+}
+tm_case "an-existing-empty-store-is-left-untouched" none c_existing_empty_store_is_left_alone
+
+c_legacy_block_still_migrates_into_an_empty_store() {
+    # An existing EMPTY store must not swallow a legacy block that still has
+    # real profiles in it.
+    _mkconfig_legacy
+    printf 'clusters: []\n' > "${TM_TMP}/clusters.d/clusters.yaml"
+    OUT="$(_py "
+import os, yaml
+from tm.migrate_clusters import migrate
+migrate(os.environ['TM_CONFIG'], os.environ['TM_CLUSTERS_DIR'])
+d = yaml.safe_load(open(os.path.join(os.environ['TM_CLUSTERS_DIR'], 'clusters.yaml'), encoding='utf-8'))
+print('ids=%s' % [c['id'] for c in d['clusters']])
+")"
+    case "$OUT" in
+        *"ids=['legacy']"*) ;;
+        *) _tm_afail "a legacy clusters: block was dropped because an empty store existed: ${OUT}" ;;
     esac
 }
-tm_case "migration-refuses-to-produce-an-empty-cluster-list" none c_migration_refuses_to_write_an_empty_list
+tm_case "legacy-profiles-still-migrate-into-an-empty-store" none c_legacy_block_still_migrates_into_an_empty_store
 
 tm_finish
