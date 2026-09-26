@@ -20,7 +20,7 @@
 #
 # The mode/owner cases need Linux: Git Bash cannot hold either, so they SKIP
 # loudly rather than passing on modes the filesystem never stored.
-#   bash tests/run.sh --remote claude_admin@<linux-host> --strict
+#   bash tests/run.sh --remote <user>@<linux-host> --strict
 #
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 # =============================================================================

@@ -57,24 +57,31 @@ fi
 if [ -n "$REMOTE" ]; then
     command -v ssh  >/dev/null 2>&1 || { echo "ssh not found" >&2; exit 2; }
     command -v scp  >/dev/null 2>&1 || { echo "scp not found" >&2; exit 2; }
-    RKEY="${TM_SSH_KEY:-$HOME/.ssh/claude_admin}"
+    # The key is the operator's choice (TM_SSH_KEY); without it ssh uses its
+    # own defaults and agent. No environment-specific key name is assumed.
+    SSH_OPTS=(-o BatchMode=yes)
+    [ -n "${TM_SSH_KEY:-}" ] && SSH_OPTS+=(-i "$TM_SSH_KEY")
     RDIR="/tmp/tm-tests-$(date +%Y%m%d-%H%M%S)"
     echo "${C_BLD}── shipping tests + install/upgrade-full.sh to ${REMOTE}:${RDIR}${C_OFF}"
     TAR="$(mktemp "${TMPDIR:-/tmp}/tm-tests.XXXXXX.tar")"
-    # The tree the cases drive: install/upgrade-full.sh AND the backend they
-    # import, the installer whose permission lines they extract, and the
-    # config examples. Shipping only the first two made t06/t07 die with
-    # ModuleNotFoundError on the remote host, which is a harness error, not
-    # a result.
-    ( cd "$TM_REPO_ROOT" && tar -cf "$TAR" tests tm app index.html config systemd install.sh install/upgrade-full.sh install/polkit ) \
+    # The tree the cases drive: both scripts, the backend they import, the
+    # config examples, the nginx site and header snippet (t18), the gate tools,
+    # and the documents the consistency cases read. Shipping too little made
+    # t06/t07 die with ModuleNotFoundError on the remote host, which is a
+    # harness error, not a result.
+    SHIP="tests tm app index.html config systemd nginx tools install.sh prepare-offline.sh install/upgrade-full.sh install/polkit README.md PPSM.csv VERSION requirements.txt"
+    ( cd "$TM_REPO_ROOT" && tar -cf "$TAR" $SHIP ) \
         || { echo "could not build the transfer tarball" >&2; exit 2; }
-    ssh -i "$RKEY" -o BatchMode=yes "$REMOTE" "mkdir -p '$RDIR'" || exit 2
-    scp -q -i "$RKEY" -o BatchMode=yes "$TAR" "${REMOTE}:${RDIR}/t.tar" || exit 2
+    ssh "${SSH_OPTS[@]}" "$REMOTE" "mkdir -p '$RDIR'" || exit 2
+    scp -q "${SSH_OPTS[@]}" "$TAR" "${REMOTE}:${RDIR}/t.tar" || exit 2
     rm -f "$TAR"
     # CRLF: this repo is cloned on Windows (contract hazards[windows-clone-crlf]).
     # A \r on a shebang line makes every script "not found" on Linux.
-    ssh -i "$RKEY" -o BatchMode=yes "$REMOTE" \
-        "cd '$RDIR' && tar -xf t.tar && find tests install tm app config systemd install.sh index.html -type f -exec sed -i 's/\r\$//' {} + && sudo -n TM_NO_COLOUR=1 bash tests/run.sh --strict"
+    # PYTHONDONTWRITEBYTECODE: tm_python prefers the service's own venv on a
+    # host, and a root python importing from it must not write .pyc files
+    # into it — this run is read-only toward the installed product.
+    ssh "${SSH_OPTS[@]}" "$REMOTE" \
+        "cd '$RDIR' && tar -xf t.tar && find $SHIP -type f -exec sed -i 's/\r\$//' {} + && sudo -n PYTHONDONTWRITEBYTECODE=1 TM_NO_COLOUR=1 bash tests/run.sh --strict"
     rc=$?
     echo "${C_BLD}── remote run exit ${rc}; tree left at ${REMOTE}:${RDIR}${C_OFF}"
     exit $rc
@@ -139,7 +146,7 @@ if [ "$S" -gt 0 ]; then
     echo "  Each line above names what it needed. The two usual reasons:"
     echo "    modes/chown  this host cannot hold POSIX modes, so the assertion"
     echo "                 would pass VACUOUSLY. Prove it on Linux:"
-    echo "                     bash tests/run.sh --remote claude_admin@<linux-host>"
+    echo "                     bash tests/run.sh --remote <user>@<linux-host>"
     echo "    node         the frontend cases. node is on the Windows"
     echo "                 workstation and NOT on the Linux host, so those run"
     echo "                 here and skip there. The two runs are complementary;"

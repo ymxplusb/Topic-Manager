@@ -41,19 +41,24 @@ case_default_is_fifteen_in_one_place() {
     src_app="$(cat "${TM_REPO_ROOT}/tm/app.py")"
     src_routes="$(cat "${TM_REPO_ROOT}/tm/routes.py")"
 
-    printf '%s' "$src_cfg" | grep -qE 'DEFAULT_SESSION_TIMEOUT_MINUTES *= *15' \
+    # Here-strings, not `printf | grep -q`. MEASURED 2026-09-26 on the Linux
+    # host: once tm/routes.py grew, grep -q found its match in the first chunk
+    # and exited, printf took SIGPIPE writing the rest, and under pipefail the
+    # pipeline failed — reporting "does not read the shared default" for a
+    # file that does. A check whose verdict depends on pipe timing is not one.
+    grep -qE 'DEFAULT_SESSION_TIMEOUT_MINUTES *= *15' <<<"$src_cfg" \
         || _tm_afail "tm/config.py does not define DEFAULT_SESSION_TIMEOUT_MINUTES = 15"
 
     # THE POINT: neither reader may carry its own number. Both used to say 30,
     # independently, so the cookie lifetime and the session row could disagree.
-    printf '%s' "$src_app" | grep -q "DEFAULT_SESSION_TIMEOUT_MINUTES" \
+    grep -q "DEFAULT_SESSION_TIMEOUT_MINUTES" <<<"$src_app" \
         || _tm_afail "tm/app.py does not read the shared default"
-    printf '%s' "$src_routes" | grep -q "DEFAULT_SESSION_TIMEOUT_MINUTES" \
+    grep -q "DEFAULT_SESSION_TIMEOUT_MINUTES" <<<"$src_routes" \
         || _tm_afail "tm/routes.py does not read the shared default"
 
-    printf '%s' "$src_app" | grep -qE "timeout_minutes'?, *30" \
+    grep -qE "timeout_minutes'?, *30" <<<"$src_app" \
         && _tm_afail "tm/app.py still carries its own literal 30"
-    printf '%s' "$src_routes" | grep -qE "timeout_minutes'?, *30" \
+    grep -qE "timeout_minutes'?, *30" <<<"$src_routes" \
         && _tm_afail "tm/routes.py still carries its own literal 30"
     tm_note "config.py defines 15; app.py and routes.py both read it"
     return 0

@@ -14,7 +14,7 @@
 #
 # EVERY CASE HERE NEEDS A LINUX HOST. Git Bash cannot hold modes or ownership,
 # so all of them would pass vacuously; they are SKIPPED there and named.
-#   bash tests/run.sh --remote claude_admin@<linux-host>
+#   bash tests/run.sh --remote <user>@<linux-host>
 # =============================================================================
 set -uo pipefail
 . "${TM_TESTS_DIR:-$(cd "$(dirname "$0")" && pwd)}/lib/harness.sh"

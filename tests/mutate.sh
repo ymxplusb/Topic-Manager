@@ -67,16 +67,19 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -n "$REMOTE" ]; then
-    RKEY="${TM_SSH_KEY:-$HOME/.ssh/claude_admin}"
+    SSH_OPTS=(-o BatchMode=yes)
+    [ -n "${TM_SSH_KEY:-}" ] && SSH_OPTS+=(-i "$TM_SSH_KEY")
     RDIR="/tmp/tm-mutate-$(date +%Y%m%d-%H%M%S)"
     TAR="$(mktemp "${TMPDIR:-/tmp}/tm-mut.XXXXXX.tar")"
-    # Both scripts under test, plus the tree the covering cases import.
-    ( cd "$TM_REPO_ROOT" && tar -cf "$TAR" tests tm app index.html config systemd install.sh         install/upgrade-full.sh install/polkit ) || exit 2
-    ssh -i "$RKEY" -o BatchMode=yes "$REMOTE" "mkdir -p '$RDIR'" || exit 2
-    scp -q -i "$RKEY" -o BatchMode=yes "$TAR" "${REMOTE}:${RDIR}/t.tar" || exit 2
+    # Both scripts under test, plus the tree the covering cases import. The
+    # same list tests/run.sh --remote ships.
+    SHIP="tests tm app index.html config systemd nginx tools install.sh prepare-offline.sh install/upgrade-full.sh install/polkit README.md PPSM.csv VERSION requirements.txt"
+    ( cd "$TM_REPO_ROOT" && tar -cf "$TAR" $SHIP ) || exit 2
+    ssh "${SSH_OPTS[@]}" "$REMOTE" "mkdir -p '$RDIR'" || exit 2
+    scp -q "${SSH_OPTS[@]}" "$TAR" "${REMOTE}:${RDIR}/t.tar" || exit 2
     rm -f "$TAR"
-    ssh -i "$RKEY" -o BatchMode=yes "$REMOTE" \
-        "cd '$RDIR' && tar -xf t.tar && find tests install tm app config systemd install.sh index.html -type f -exec sed -i 's/\r\$//' {} + && sudo -n TM_NO_COLOUR=1 bash tests/mutate.sh ${WANT[*]:-}"
+    ssh "${SSH_OPTS[@]}" "$REMOTE" \
+        "cd '$RDIR' && tar -xf t.tar && find $SHIP -type f -exec sed -i 's/\r\$//' {} + && sudo -n PYTHONDONTWRITEBYTECODE=1 TM_NO_COLOUR=1 bash tests/mutate.sh ${WANT[*]:-}"
     rc=$?
     echo "── remote mutation run exit ${rc}; tree left at ${REMOTE}:${RDIR}"
     exit $rc

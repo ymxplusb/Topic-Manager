@@ -64,7 +64,7 @@ tm_case "models-narrows-an-existing-database" modes m_narrows_existing
 m_no_symlink_follow() {
     mkdir -p "${TM_TMP}/data" "${TM_TMP}/elsewhere"
     : > "${TM_TMP}/elsewhere/victim"; chmod 644 "${TM_TMP}/elsewhere/victim"
-    ln -s "${TM_TMP}/elsewhere/victim" "${TM_TMP}/data/tm.db-journal"
+    ln -s "${TM_TMP}/elsewhere/victim" "${TM_TMP}/data/tm.db-shm"
     _initdb "${TM_TMP}/data/tm.db" || _tm_afail "init_db failed: $(cat "${TM_TMP}/py.out")"
     tm_assert_mode 644 "${TM_TMP}/elsewhere/victim" \
         "init_db chmodded THROUGH a symlink in the data directory"

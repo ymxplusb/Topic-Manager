@@ -154,7 +154,7 @@ tm_case "verify-refuses-an-incomplete-backup" none c_verify_incomplete
 
 # ─── the host we actually have ───────────────────────────────────────────────
 c_host_without_dropin() {
-    # PROD (192.168.202.90) has NO drop-in directory at all. Every one of these
+    # The production host has NO drop-in directory at all. Every one of these
     # paths must be a clean no-op there, not an abort under `set -e`.
     _mkhost
     rm -rf "$DD"

@@ -25,7 +25,7 @@
 # EVERY CASE NEEDS A LINUX HOST with root and a spare unprivileged account.
 # Git Bash cannot hold modes or ownership, so all of them would pass
 # vacuously; they SKIP there and are named.
-#     bash tests/run.sh --remote claude_admin@<linux-host>
+#     bash tests/run.sh --remote <user>@<linux-host>
 #
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 # =============================================================================
