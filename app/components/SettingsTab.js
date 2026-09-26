@@ -271,24 +271,49 @@ const SettingsTab = {
             }
             return false;
         },
+        // THE SAME DOCUMENT AS PPSM.csv, row for row (v1.1.0). The two used to
+        // disagree; tools/check-ppsm-consistency.sh runs this method under node
+        // and fails on any difference except the Generated date. Edit both, or
+        // the gate stops the release. Single-quoted literals: never an
+        // apostrophe in a cell (hazards[csv-single-quoted-literals]), and never
+        // a double quote, which this naive CSV join does not escape.
         downloadPpsm() {
             const rows = [
-                ['Jarvis Topic Manager — PPSM', '', '', '', '', ''],
+                ['Jarvis Topic Manager — Ports, Protocols and Services Management (PPSM)', '', '', '', '', ''],
                 ['Version', '1.0.6', '', '', '', ''],
+                ['Copyright', '(c) 2025-2026 James Rodman', '', '', '', ''],
+                ['Scope', 'Every port, protocol and service the Topic Manager host listens on or initiates. Ports marked operator-defined come from configuration.', '', '', '', ''],
                 ['Generated', new Date().toISOString().split('T')[0], '', '', '', ''],
                 ['', '', '', '', '', ''],
                 ['Section', 'Service/Component', 'Port', 'Protocol', 'Direction', 'Description'],
-                ['--- INBOUND ---', '', '', '', '', ''],
-                ['Web', 'SSH',            '22',   'TCP', 'Inbound', 'Secure shell administration'],
-                ['Web', 'HTTP',           '80',   'TCP', 'Inbound', 'Redirect to HTTPS (301)'],
-                ['Web', 'HTTPS',          '443',  'TCP', 'Inbound', 'Topic Manager web UI + API'],
-                ['--- INTERNAL (loopback) ---', '', '', '', '', ''],
-                ['App', 'gunicorn Flask', '5001', 'TCP', 'Loopback','nginx → gunicorn backend (127.0.0.1 only)'],
-                ['--- OUTBOUND ---', '', '', '', '', ''],
-                ['Auth', 'AD/LDAPS',       '636',  'TCP', 'Outbound','Active Directory authentication'],
-                ['Auth', 'AD/LDAP',        '389',  'TCP', 'Outbound','Active Directory (fallback)'],
-                ['Kafka', 'Kafka Bare Metal','9092', 'TCP', 'Outbound','Kafka broker plaintext (broker1-3)'],
-                ['Kafka', 'Kafka K8s',      '9094', 'TCP', 'Outbound','Kafka broker SSL (MetalLB VIPs)'],
+                ['--- INBOUND (to the Topic Manager host) ---', '', '', '', '', ''],
+                ['Web', 'HTTPS', '443', 'TCP', 'Inbound', 'Topic Manager web UI and REST API. nginx TLS termination: TLS 1.2 and 1.3 only, FIPS-approved cipher suites (ECDHE with AES-GCM).'],
+                ['Web', 'HTTP', '80', 'TCP', 'Inbound', 'Redirect to HTTPS only (301). No content is served on this port.'],
+                ['Admin', 'SSH', '22', 'TCP', 'Inbound', 'Operating-system administration of the host (key-based). Not used by the application.'],
+                ['--- INTERNAL LOOPBACK (not reachable off the host) ---', '', '', '', '', ''],
+                ['App', 'gunicorn (Flask)', '5001', 'TCP', 'Loopback', 'nginx to the application backend, bound to 127.0.0.1 only.'],
+                ['App', 'systemd-resolved', '53', 'UDP/TCP', 'Loopback', 'Local stub resolver (127.0.0.53). Host service, not part of the application.'],
+                ['--- OUTBOUND (the Topic Manager host initiates) ---', '', '', '', '', ''],
+                ['Auth', 'Directory (LDAPS)', '636', 'TCP', 'Outbound', 'Authentication and group-membership check against the directory named in auth.ldap_server. TLS certificate validation is enforced. Plain LDAP (389) is not used.'],
+                ['Kafka', 'Kafka brokers', 'operator-defined (commonly 9092, 9093, 9094)', 'TCP', 'Outbound', 'Kafka AdminClient to the brokers named in each cluster profile. Commonly 9092 PLAINTEXT and 9093/9094 SSL or SASL_SSL; the profiles decide.'],
+                ['Infra', 'DNS', '53', 'UDP/TCP', 'Outbound', 'Name resolution for the directory and Kafka broker host names.'],
+                ['Infra', 'NTP', '123', 'UDP', 'Outbound', 'Time synchronisation by the host time service. Required for TLS validity and audit timestamps.'],
+                ['Logging', 'Syslog', '514', 'UDP/TCP', 'Outbound', 'PLANNED for v1.2.0 (remote syslog). Not used by this release: the application logs to the local syslog socket only.'],
+                ['Logging', 'Syslog over TLS', '6514', 'TCP', 'Outbound', 'PLANNED for v1.2.0 (remote syslog over TLS). Not used by this release.'],
+                ['PKI', 'OCSP / CRL', 'N/A', 'N/A', 'Outbound', 'NOT USED. Neither nginx nor the application fetches OCSP responses or CRLs; certificate revocation is not checked online.'],
+                ['--- OUTBOUND (online install and upgrade ONLY; none of these at runtime or on an air-gapped host) ---', '', '', '', '', ''],
+                ['Install', 'Ubuntu APT repositories', '80/443', 'TCP', 'Outbound', 'OS packages (nginx, python3-venv, polkitd). Port 80 unless the configured mirror is HTTPS.'],
+                ['Install', 'PyPI (pypi.org, files.pythonhosted.org)', '443', 'TCP', 'Outbound', 'Python wheels for the pinned dependency set.'],
+                ['Install', 'jsDelivr CDN (cdn.jsdelivr.net)', '443', 'TCP', 'Outbound', 'Vue.js runtime, verified against a pinned SHA-256 before use.'],
+                ['Install', 'Source repository (operator-supplied --repo-url)', '443', 'TCP', 'Outbound', 'Online upgrade only: git clone of the release source. No default; the offline bundle needs no network at all.'],
+                ['Tooling', 'OSV.dev (api.osv.dev)', '443', 'TCP', 'Outbound', 'Software composition analysis (tools/sca-check.sh). Developer or CI workstation only, never the target host.'],
+                ['--- DATA AT REST ---', '', '', '', '', ''],
+                ['Storage', 'Audit database', 'N/A', 'File', 'Local', '/opt/topic-manager/data/tm.db: audit log, server-side sessions and app settings. File 0600 and directory 0700, owned by the topic-manager service account.'],
+                ['Storage', 'Session cookie', 'N/A', 'Cookie', 'Browser', 'Holds the server-side session id only, signed with HMAC-SHA-256. HttpOnly, Secure, SameSite=Lax.'],
+                ['Storage', 'Theme and Settings preferences', 'N/A', 'localStorage', 'Browser', 'UI preferences only (theme, last Settings section). No credentials or sensitive data.'],
+                ['Storage', 'TLS private key', 'N/A', 'File', 'Local', '/etc/topic-manager/tls/server.key, 0600 root:root on a fresh install. An upgraded host keeps its recorded mode.'],
+                ['Storage', 'Application config', 'N/A', 'File', 'Local', '/etc/topic-manager/config.yaml, 0640 root:topic-manager. Holds the session signing key and, if a service account is configured, the LDAP bind password.'],
+                ['Storage', 'Backups', 'N/A', 'File', 'Local', '/var/backups/topic-manager/, 0700 root:root. Holds config, TLS key and audit database; archives are 0600.'],
             ];
             const csv = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n');
             const a = document.createElement('a');

@@ -1,33 +1,34 @@
-"Jarvis Topic Manager — Ports Protocols and Services Management (PPSM)",,,,,
+"Jarvis Topic Manager — Ports, Protocols and Services Management (PPSM)",,,,,
 "Version","1.0.6",,,,
 "Copyright","(c) 2025-2026 James Rodman",,,,
-"Last verified","2026-09-01 — against live listeners on 192.168.202.90",,,,
-,,,,,,
+"Scope","Every port, protocol and service the Topic Manager host listens on or initiates. Ports marked operator-defined come from configuration.",,,,
+,,,,,
 "Section","Service/Component","Port","Protocol","Direction","Description"
-"--- INBOUND (Topic Manager Server) ---",,,,,
-"Web","SSH","22","TCP","Inbound","Secure shell administration (key-based; password auth disabled)"
-"Web","HTTP","80","TCP","Inbound","Redirect to HTTPS (301 permanent) — no content served"
-"Web","HTTPS","443","TCP","Inbound","Topic Manager Web UI + REST API (nginx TLS termination, TLS 1.2/1.3 only)"
-"--- INTERNAL LOOPBACK (not externally reachable) ---",,,,,
-"App","Flask/gunicorn","5001","TCP","Loopback","nginx -> gunicorn, bound 127.0.0.1 only"
-"App","systemd-resolved","53","UDP/TCP","Loopback","Local stub resolver (127.0.0.53/127.0.0.54)"
-"--- OUTBOUND (Topic Manager Server initiates) ---",,,,,
-"Auth","Active Directory LDAPS","636","TCP","Outbound","AD credential validation and group membership check. TLS certificate validation is ENFORCED (CERT_REQUIRED) from v1.0.2."
-"Kafka","Kafka Brokers (PLAINTEXT)","9092","TCP","Outbound","Kafka AdminClient wire protocol — broker1-3.int.crypticlight.com"
-"Kafka","Kafka Brokers (SSL)","9094","TCP","Outbound","Kafka AdminClient over SSL — only if a cluster is configured with security_protocol SSL/SASL_SSL. Not used in the current deployment."
-"Infra","DNS","53","UDP/TCP","Outbound","Resolution of the domain controller and Kafka broker hostnames"
-"Infra","NTP","123","UDP","Outbound","Time synchronisation — required for TLS validity and audit timestamp accuracy"
-"--- OUTBOUND (INSTALL / UPGRADE TIME ONLY — not required at runtime) ---",,,,,
-"Install","Ubuntu APT repositories","80/443","TCP","Outbound","OS package installation and patching (apt). Not required on an air-gapped host."
-"Install","PyPI (pypi.org, files.pythonhosted.org)","443","TCP","Outbound","Python wheel download for the pinned dependency set. Not required on an air-gapped host."
-"Install","jsDelivr CDN (cdn.jsdelivr.net)","443","TCP","Outbound","Vue.js runtime download. Verified against a pinned SHA-256 before use. Not required on an air-gapped host."
-"Install","GitHub (github.com)","443","TCP","Outbound","Source clone performed by install/upgrade-full.sh. Not required on an air-gapped host."
-"Install","OSV.dev (api.osv.dev)","443","TCP","Outbound","Software Composition Analysis gate (tools/sca-check.sh). Developer/CI workstation only — never invoked on the target host."
+"--- INBOUND (to the Topic Manager host) ---",,,,,
+"Web","HTTPS","443","TCP","Inbound","Topic Manager web UI and REST API. nginx TLS termination: TLS 1.2 and 1.3 only, FIPS-approved cipher suites (ECDHE with AES-GCM)."
+"Web","HTTP","80","TCP","Inbound","Redirect to HTTPS only (301). No content is served on this port."
+"Admin","SSH","22","TCP","Inbound","Operating-system administration of the host (key-based). Not used by the application."
+"--- INTERNAL LOOPBACK (not reachable off the host) ---",,,,,
+"App","gunicorn (Flask)","5001","TCP","Loopback","nginx to the application backend, bound to 127.0.0.1 only."
+"App","systemd-resolved","53","UDP/TCP","Loopback","Local stub resolver (127.0.0.53). Host service, not part of the application."
+"--- OUTBOUND (the Topic Manager host initiates) ---",,,,,
+"Auth","Directory (LDAPS)","636","TCP","Outbound","Authentication and group-membership check against the directory named in auth.ldap_server. TLS certificate validation is enforced. Plain LDAP (389) is not used."
+"Kafka","Kafka brokers","operator-defined (commonly 9092, 9093, 9094)","TCP","Outbound","Kafka AdminClient to the brokers named in each cluster profile. Commonly 9092 PLAINTEXT and 9093/9094 SSL or SASL_SSL; the profiles decide."
+"Infra","DNS","53","UDP/TCP","Outbound","Name resolution for the directory and Kafka broker host names."
+"Infra","NTP","123","UDP","Outbound","Time synchronisation by the host time service. Required for TLS validity and audit timestamps."
+"Logging","Syslog","514","UDP/TCP","Outbound","PLANNED for v1.2.0 (remote syslog). Not used by this release: the application logs to the local syslog socket only."
+"Logging","Syslog over TLS","6514","TCP","Outbound","PLANNED for v1.2.0 (remote syslog over TLS). Not used by this release."
+"PKI","OCSP / CRL","N/A","N/A","Outbound","NOT USED. Neither nginx nor the application fetches OCSP responses or CRLs; certificate revocation is not checked online."
+"--- OUTBOUND (online install and upgrade ONLY; none of these at runtime or on an air-gapped host) ---",,,,,
+"Install","Ubuntu APT repositories","80/443","TCP","Outbound","OS packages (nginx, python3-venv, polkitd). Port 80 unless the configured mirror is HTTPS."
+"Install","PyPI (pypi.org, files.pythonhosted.org)","443","TCP","Outbound","Python wheels for the pinned dependency set."
+"Install","jsDelivr CDN (cdn.jsdelivr.net)","443","TCP","Outbound","Vue.js runtime, verified against a pinned SHA-256 before use."
+"Install","Source repository (operator-supplied --repo-url)","443","TCP","Outbound","Online upgrade only: git clone of the release source. No default; the offline bundle needs no network at all."
+"Tooling","OSV.dev (api.osv.dev)","443","TCP","Outbound","Software composition analysis (tools/sca-check.sh). Developer or CI workstation only, never the target host."
 "--- DATA AT REST ---",,,,,
-"Storage","SQLite Audit DB","N/A","File","Local","/opt/topic-manager/data/tm.db — audit log (user, action, target, timestamp, cluster) and application settings"
-"Storage","Server-side Sessions","N/A","File","Local","sessions table in the same SQLite DB — session id, user, created/last-seen/expiry, source IP. The browser cookie carries only a signed session id, never user data."
-"Storage","Session Cookie","N/A","Cookie","Browser","Signed Flask cookie holding the session id only. HTTPOnly, Secure, SameSite=Lax."
-"Storage","Theme/Banner Prefs","N/A","localStorage","Browser","UI preferences only — no credentials or sensitive data"
-"Storage","TLS Private Key","N/A","File","Local","/etc/topic-manager/tls/server.key — 0640 root:topic-manager"
-"Storage","Application Config","N/A","File","Local","/etc/topic-manager/config.yaml — 0640 root:topic-manager. Contains the Flask secret_key and, if a service account is configured, the LDAP bind password."
-"Storage","Backups","N/A","File","Local","/var/backups/topic-manager/<timestamp>/ — 0700 root:root. Contains config, TLS key and audit DB; archives are 0600."
+"Storage","Audit database","N/A","File","Local","/opt/topic-manager/data/tm.db: audit log, server-side sessions and app settings. File 0600 and directory 0700, owned by the topic-manager service account."
+"Storage","Session cookie","N/A","Cookie","Browser","Holds the server-side session id only, signed with HMAC-SHA-256. HttpOnly, Secure, SameSite=Lax."
+"Storage","Theme and Settings preferences","N/A","localStorage","Browser","UI preferences only (theme, last Settings section). No credentials or sensitive data."
+"Storage","TLS private key","N/A","File","Local","/etc/topic-manager/tls/server.key, 0600 root:root on a fresh install. An upgraded host keeps its recorded mode."
+"Storage","Application config","N/A","File","Local","/etc/topic-manager/config.yaml, 0640 root:topic-manager. Holds the session signing key and, if a service account is configured, the LDAP bind password."
+"Storage","Backups","N/A","File","Local","/var/backups/topic-manager/, 0700 root:root. Holds config, TLS key and audit database; archives are 0600."
