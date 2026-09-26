@@ -67,6 +67,28 @@ safe_install_dir() {   # safe_install_dir <mode> <owner> <group> <path>
     install -d -m "$m" -o "$o" -g "$g" "$p"
 }
 
+# enforce_audit_db_modes — the audit database is private to the service
+# account (v1.1.0): ${APP_HOME}/data 0700 and tm.db 0600, both owned by
+# ${APP_USER}, and the same for SQLite's -wal/-shm/-journal siblings, which
+# hold the same rows. Called AFTER anything that copies the database back
+# (cp -a keeps the backup's old 0644) or replays a recorded mode (a baseline
+# taken on a v1.0.x host records 0644), so it is always the last word.
+# NEVER through a symlink: the application owns data/, so a link it put where
+# tm.db was would otherwise have root chown and chmod the link's target.
+enforce_audit_db_modes() {
+    local d="${APP_HOME}/data" f
+    safe_install_dir 700 "$APP_USER" "$APP_USER" "$d"
+    for f in "${d}/tm.db" "${d}/tm.db-wal" "${d}/tm.db-shm" "${d}/tm.db-journal"; do
+        [[ -L "$f" ]] && fail "${f} is a symlink; refusing to chown or chmod through it.
+     The application owns ${d}, so a link here lets it choose what root
+     changes. Remove it (the real database is a regular file) and run again."
+        [[ -e "$f" ]] || continue
+        [[ -f "$f" ]] || fail "${f} exists and is not a regular file."
+        chown -h "${APP_USER}:${APP_USER}" -- "$f" || fail "chown failed on ${f}"
+        chmod 600 -- "$f" || fail "chmod failed on ${f}"
+    done
+}
+
 # can_access <user> <test-flag> <path> — the honest check. Mode bits can look
 # right while an ACL, a parent directory or a MAC policy still says no, so ask
 # the kernel as the actual principal.
@@ -119,7 +141,9 @@ fi
 info "Creating application directories..."
 safe_install_dir 750 "$APP_USER" "$APP_USER" "$APP_HOME"
 safe_install_dir 750 "$APP_USER" "$APP_USER" "$LOG_DIR"
-safe_install_dir 750 "$APP_USER" "$APP_USER" "$DATA_DIR"
+# 0700, not 0750 (v1.1.0): it holds the audit database. enforce_audit_db_modes
+# below is the authority for it and for tm.db.
+safe_install_dir 700 "$APP_USER" "$APP_USER" "$DATA_DIR"
 safe_install_dir 755 root root "$FRONTEND_DIR"
 # root:${APP_USER} 0750 — the app can traverse and READ config.yaml, and
 # can create nothing here. Not root:root, which would stop it reading its
@@ -165,6 +189,8 @@ info "Installing backend (tm/)..."
 rsync -a --delete "${SCRIPT_DIR}/tm/" "${APP_HOME}/tm/"
 chown -R "$APP_USER:$APP_USER" "${APP_HOME}/tm"
 chown -R "$APP_USER:$APP_USER" "$LOG_DIR" "$DATA_DIR"
+# A reinstall over a v1.0.x host finds tm.db at 0644 and data/ at 0750.
+enforce_audit_db_modes
 # WSGI entry point
 cat > "${APP_HOME}/wsgi.py" <<'WSGI'
 from tm.app import create_app

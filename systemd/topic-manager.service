@@ -32,6 +32,11 @@ StandardError=journal
 SyslogIdentifier=topic-manager
 
 # Hardening
+# v1.1.0: every file the service creates is private to it unless the code
+# sets a mode on purpose (clusters.yaml is chmod 0640 explicitly). This is what
+# keeps the audit database and its -wal/-journal siblings 0600 even if
+# something other than tm/models.py ever creates them.
+UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

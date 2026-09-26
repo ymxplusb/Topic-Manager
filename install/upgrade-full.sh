@@ -382,6 +382,28 @@ safe_install_dir() {   # safe_install_dir <mode> <owner> <group> <path>
     install -d -m "$m" -o "$o" -g "$g" "$p"
 }
 
+# enforce_audit_db_modes — the audit database is private to the service
+# account (v1.1.0): ${APP_HOME}/data 0700 and tm.db 0600, both owned by
+# ${APP_USER}, and the same for SQLite's -wal/-shm/-journal siblings, which
+# hold the same rows. Called AFTER anything that copies the database back
+# (cp -a keeps the backup's old 0644) or replays a recorded mode (a baseline
+# taken on a v1.0.x host records 0644), so it is always the last word.
+# NEVER through a symlink: the application owns data/, so a link it put where
+# tm.db was would otherwise have root chown and chmod the link's target.
+enforce_audit_db_modes() {
+    local d="${APP_HOME}/data" f
+    safe_install_dir 700 "$APP_USER" "$APP_USER" "$d"
+    for f in "${d}/tm.db" "${d}/tm.db-wal" "${d}/tm.db-shm" "${d}/tm.db-journal"; do
+        [[ -L "$f" ]] && fail "${f} is a symlink; refusing to chown or chmod through it.
+     The application owns ${d}, so a link here lets it choose what root
+     changes. Remove it (the real database is a regular file) and run again."
+        [[ -e "$f" ]] || continue
+        [[ -f "$f" ]] || fail "${f} exists and is not a regular file."
+        chown -h "${APP_USER}:${APP_USER}" -- "$f" || fail "chown failed on ${f}"
+        chmod 600 -- "$f" || fail "chmod failed on ${f}"
+    done
+}
+
 # can_access <user> <test-flag> <path> — the honest check. Mode bits can look
 # right while an ACL, a parent directory or a MAC policy still says no, so ask
 # the kernel as the actual principal.
@@ -583,6 +605,11 @@ restore_from_backup() {
         info "Restored recorded ownership and modes"
     fi
     PERM_BASELINE="$SAVED_BASELINE"
+    # The database came back by cp -a and its recorded mode was just replayed,
+    # and a backup from a v1.0.x host records 0644 for both. Narrow it again:
+    # a rollback must not re-expose the audit trail and the live session ids.
+    enforce_audit_db_modes
+    info "Audit database re-moded: ${APP_HOME}/data 0700, tm.db 0600"
 
     # --- The permission boundary, ASKED OF THE KERNEL as the real principal.
     # Same five questions Phase 11 asks, because --restore replays recorded
@@ -875,6 +902,16 @@ for d in "${APP_HOME}/data" "${APP_HOME}/logs"; do
         && row PASS "${APP_USER} can write $(basename "$d")/" "" \
         || row BLOCK "${APP_USER} cannot write ${d}" "audit log and gunicorn logs would fail"
 done
+# v1.1.0 narrows the audit database. Said at audit time so an operator is not
+# surprised by it; a WARN, because the upgrade itself is the fix.
+if [[ -f "${APP_HOME}/data/tm.db" ]]; then
+    DB_MODE_NOW="$(stat -c '%a' "${APP_HOME}/data/tm.db" 2>/dev/null || echo '?')"
+    if [[ "$DB_MODE_NOW" == "600" ]]; then
+        row PASS "tm.db mode" "0600"
+    else
+        row WARN "tm.db mode" "0${DB_MODE_NOW} — this upgrade sets tm.db 0600 and data/ 0700"
+    fi
+fi
 
 echo
 echo "  ── recorded permission baseline"
@@ -1774,10 +1811,14 @@ chown -R "${APP_USER}:${APP_USER}" "${APP_HOME}/tm" "${APP_HOME}/wsgi.py" "$VENV
 apply_baseline "${APP_HOME}/tm"     "$APP_USER" "$APP_USER" 755
 apply_baseline "${APP_HOME}/wsgi.py" "$APP_USER" "$APP_USER" 644
 apply_baseline "${APP_HOME}/venv"   root root 755
-safe_install_dir 755 "$APP_USER" "$APP_USER" "${APP_HOME}/data"
 safe_install_dir 755 "$APP_USER" "$APP_USER" "${APP_HOME}/logs"
-apply_baseline "${APP_HOME}/data" "$APP_USER" "$APP_USER" 750
 apply_baseline "${APP_HOME}/logs" "$APP_USER" "$APP_USER" 750
+# NOT the recorded mode (v1.1.0). data/ and tm.db are the one place the
+# baseline is deliberately overridden: a v1.0.x host recorded 0755/0750 and
+# 0644, and replaying that would put the audit trail and every live session
+# id back in reach of every local account. This runs AFTER the replay loop
+# above and after the cp -a restore of tm.db, so it is the last word.
+enforce_audit_db_modes
 success "Ownership and modes restored"
 
 # =============================================================================
@@ -1885,6 +1926,17 @@ recheck "$APP_USER" -r "${CONFIG_DIR}/config.yaml"
 recheck "$APP_USER" -x "${VENV}/bin/python3"
 recheck "$APP_USER" -w "${APP_HOME}/data"
 recheck "$APP_USER" -w "${APP_HOME}/logs"
+# Measured, not assumed: the service has been running for a few seconds, so
+# tm.db exists and any -wal file it made is there too.
+for _dbp in "${APP_HOME}/data:700" "${APP_HOME}/data/tm.db:600"; do
+    _got="$(stat -c '%a %U' "${_dbp%:*}" 2>/dev/null || echo 'missing')"
+    if [[ "$_got" == "${_dbp##*:} ${APP_USER}" ]]; then
+        printf '      %-14s %-3s %s  OK\n' "mode" "${_dbp##*:}" "${_dbp%:*}"
+    else
+        warn "      ${_dbp%:*} is ${_got}, expected ${_dbp##*:} ${APP_USER}"
+        PERM_FAIL=$((PERM_FAIL+1))
+    fi
+done
 [[ $PERM_FAIL -eq 0 ]] || fail "${PERM_FAIL} effective-access check(s) failed after deployment.
 The service is running but cannot serve or write correctly. Rolling back."
 success "Effective access verified for ${WEB_USER} and ${APP_USER}"

@@ -519,3 +519,68 @@ EQUIV|no
 ANCHOR|    WORK_DIR_OWNED=true          # this run created it, so this run may delete it
 ANCHOR|    assert_root_owned_path "$WORK_DIR"
 REPLACE|    WORK_DIR_OWNED=true          # this run created it, so this run may delete it
+
+# ─── v1.1.0: the audit database is private (t17) ─────────────────────────────
+# enforce_audit_db_modes exists in BOTH scripts, byte-identical (t17 asserts
+# that). Each copy is mutated on its own target.
+--- M60
+DESC|upgrade: enforce_audit_db_modes leaves tm.db world-readable (0644)
+TESTS|t17-audit-db-modes.sh
+EQUIV|no
+ANCHOR|        chmod 600 -- "$f" || fail "chmod failed on ${f}"
+REPLACE|        chmod 644 -- "$f" || fail "chmod failed on ${f}"
+
+--- M61
+DESC|upgrade: enforce_audit_db_modes gives data/ 0755 again
+TESTS|t17-audit-db-modes.sh
+EQUIV|no
+ANCHOR|    safe_install_dir 700 "$APP_USER" "$APP_USER" "$d"
+REPLACE|    safe_install_dir 755 "$APP_USER" "$APP_USER" "$d"
+
+--- M62
+DESC|upgrade: THE SECURITY MUTATION — the symlink refusal is gone, so root chmods whatever the app linked tm.db to
+TESTS|t17-audit-db-modes.sh
+EQUIV|no
+ANCHOR|        [[ -L "$f" ]] && fail "${f} is a symlink; refusing to chown or chmod through it.
+REPLACE|        [[ -L "$f" ]] && true "${f} is a symlink; refusing to chown or chmod through it.
+
+--- M63
+DESC|upgrade: Phase 10 stops enforcing, so the replayed v1.0.x baseline puts tm.db back to 0644
+TESTS|t17-audit-db-modes.sh
+EQUIV|no
+ANCHOR|# above and after the cp -a restore of tm.db, so it is the last word.
+ANCHOR|enforce_audit_db_modes
+REPLACE|# above and after the cp -a restore of tm.db, so it is the last word.
+
+--- M64
+DESC|upgrade: restore_from_backup (and so the automatic rollback) stops re-moding tm.db after cp -a
+TESTS|t17-audit-db-modes.sh
+EQUIV|no
+ANCHOR|    enforce_audit_db_modes
+ANCHOR|    info "Audit database re-moded: ${APP_HOME}/data 0700, tm.db 0600"
+REPLACE|    info "Audit database re-moded: ${APP_HOME}/data 0700, tm.db 0600"
+
+--- M65
+DESC|install: enforce_audit_db_modes leaves tm.db world-readable (0644)
+TESTS|t17-audit-db-modes.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        chmod 600 -- "$f" || fail "chmod failed on ${f}"
+REPLACE|        chmod 644 -- "$f" || fail "chmod failed on ${f}"
+
+--- M66
+DESC|install: data/ is created 0750 again
+TESTS|t17-audit-db-modes.sh
+TARGET|install
+EQUIV|no
+ANCHOR|safe_install_dir 700 "$APP_USER" "$APP_USER" "$DATA_DIR"
+REPLACE|safe_install_dir 750 "$APP_USER" "$APP_USER" "$DATA_DIR"
+
+--- M67
+DESC|install: a reinstall over a v1.0.x host no longer narrows tm.db
+TESTS|t17-audit-db-modes.sh
+TARGET|install
+EQUIV|no
+ANCHOR|# A reinstall over a v1.0.x host finds tm.db at 0644 and data/ at 0750.
+ANCHOR|enforce_audit_db_modes
+REPLACE|# A reinstall over a v1.0.x host finds tm.db at 0644 and data/ at 0750.
