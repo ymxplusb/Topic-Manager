@@ -305,7 +305,7 @@ gates:
       gate holds it to requirements.txt and refuses unhashed/malformed/duplicate
       entries. After changing a pin: regenerate, commit, re-run sca (which now
       queries the transitive pins too). Red-proofed in t25.
-  - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-09-26, note: "t00-t25. Round 2, 2026-09-26: Linux host via --remote --strict (ships git archive HEAD) 210+ pass / 0 fail, only the 'needs node' cases skip (node absent there; the workstation run covers them). Mutation controls M01-M107 (tests/mutate.sh --remote): all killed except 4 documented equivalents. Round 3, 2026-09-26 (offline apt policy): --remote --strict 229 pass / 0 fail / 20 skip (all needs node); M01-M142 --remote: 136 killed, 0 survived, 6 documented equivalents (M14, M45, M87, M103, M141, M142). t23's real-apt cases need the 'apt' requirement and its prompt cases 'pty' (both Linux only; they SKIP on the workstation). Workstation-only artefact: t12's route case can fail under Git Bash (MSYS path conversion); passes on Linux and CI." }
+  - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-09-26, note: "t00-t25. Round 2, 2026-09-26: Linux host via --remote --strict (ships git archive HEAD) 210+ pass / 0 fail, only the 'needs node' cases skip (node absent there; the workstation run covers them). Mutation controls M01-M107 (tests/mutate.sh --remote): all killed except 4 documented equivalents. Round 3, 2026-09-26 (offline apt policy): --remote --strict 229 pass / 0 fail / 20 skip (all needs node); M01-M142 --remote: 136 killed, 0 survived, 6 documented equivalents (M14, M45, M87, M103, M141, M142). Round 4: --remote --strict and M01-M167, see WO-0003 builder.round4. t23's real-apt cases need the 'apt' requirement and its prompt cases 'pty' (both Linux only; they SKIP on the workstation). Workstation-only artefact: t12's route case can fail under Git Bash (MSYS path conversion); passes on Linux and CI." }
 
 gate_verification:
   - "A gate must assert its own COVERAGE, not just agreement. Guarding on
@@ -637,6 +637,13 @@ hazards:
       installed origin is esm.ubuntu.com/fips*, host preferences.d excluded,
       --no-remove, and the plan simulated and printed before it runs. t23
       runs the REAL resolver against a fixture dpkg status (Linux only).
+      ROUND 4, MEASURED on the same host: the policy held (29 FIPS packages)
+      but apt could only upgrade python3.12 by REMOVING libpython3.12t64 —
+      binaries of one Debian source move in lockstep and the bundle carried
+      the REQUEST closure only. prepare-offline.sh adds every binary of the
+      same source + source version (arch + all, no dbg/doc, <= 40 per source)
+      and install.sh names missing siblings in a removal refusal. t26 proves
+      it with real .debs, a real bundle build and the real resolver.
 
   - id: online-clone-must-be-pinned
     note: >-

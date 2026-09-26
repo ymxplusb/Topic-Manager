@@ -175,6 +175,27 @@ Adversary and security-review findings, all fixed on this branch before release:
   `install/upgrade-full.sh` installs no `.deb` offline (it skips OS patching with a warning), so
   it needed no change. t23 now runs the real apt resolver against a fixture package set.
 
+### Round 4 (real-host install, 2026-09-26)
+
+- **The offline bundle carries every lockstep sibling.** Measured on the real STIG + FIPS host
+  with the round-3 bundle: the policy worked (29 FIPS packages held) and refused safely, but
+  apt's only plan REMOVED `libpython3.12t64` (and with it `vim`, `ubuntu-server`,
+  `linux-tools-*`) to upgrade `python3.12` from 0ubuntu0.13 to 0ubuntu0.17. Binaries built from
+  one Debian source depend on each other's exact version, and the bundle carried only the
+  closure of the requested packages. `prepare-offline.sh` now adds every binary built from the
+  same source and source version as any closure package (this architecture and `all`; no
+  `-dbg`, `-dbgsym`, `-doc` or debug-section packages; at most 40 per source, a larger source
+  is reported and not expanded), prints what it added, and names any sibling it could not
+  download. It needs no `deb-src` lines: the source comes from each package's `Source:` field
+  and is mapped back through `apt-cache dumpavail`.
+- **A forced removal is explained.** When apt could resolve only by removing packages (still
+  refused), `install.sh` names the removals that are lockstep siblings missing from the bundle,
+  lists what would go with them, and points at rebuilding the bundle on a fully patched build
+  host.
+- t26 builds real `.deb`s, bundles them with the real `bundle_apt_packages`, and resolves them
+  with the real apt against a target that has the old sibling installed: no removal with the
+  expansion, a named refusal without it.
+
 ### Known limitations
 
 - **FIPS module boundary**: the `cryptography` and `confluent-kafka` wheels bundle their own

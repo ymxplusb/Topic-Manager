@@ -150,8 +150,10 @@ half-configured is left claiming success; see TROUBLESHOOTING.md.
 
 ### 5a. On a connected machine — build the bundle
 
-Use an **Ubuntu 24.04** machine of the **same architecture** as the target (the `.deb`
-closure and the wheels are architecture-specific), with a clone of the release:
+Use a **fully patched** (`apt update && apt full-upgrade`) **Ubuntu 24.04** machine of the
+**same architecture** as the target (the `.deb` closure and the wheels are
+architecture-specific), with a clone of the release. It must be at least as patched as the
+target: the bundle can only upgrade the target to versions the build host could download.
 
 ```bash
 git checkout v<version>
@@ -161,6 +163,16 @@ bash prepare-offline.sh --bundle
 This downloads the pinned wheels (binary only, verified against `requirements.txt`), Vue
 (verified against its SHA-256 pin), and the runtime `.deb`s with their dependency closure, then
 builds `../topic-manager-offline-<version>.tar.gz` and its `.sha256`.
+
+The `.deb` set also carries every **lockstep sibling**: each binary built from the same Debian
+source, at the same source version, as a package in the closure (for example
+`libpython3.12t64` beside `python3.12`). Binaries of one source depend on each other's exact
+version, so a target that has an older `libpython3.12t64` installed can only take the newer
+`python3.12` if the newer `libpython3.12t64` comes with it — otherwise apt's only way out is to
+remove it. Siblings are for this architecture and `all`; `-dbg`, `-dbgsym`, `-doc` and
+debug-section packages are skipped; a source with more than 40 siblings (a compiler suite) is
+reported and not expanded. The build prints what it added
+(`lockstep siblings (same source): N added: ...`) and names any sibling it could not download.
 
 The bundle is built from the **committed tree** (`git archive`), never from the working
 directory: the repository's own process records (`.claude/`, `.work/`) are export-ignored,
@@ -208,7 +220,9 @@ dependency needs**:
 
   On a terminal you are asked `Apply this package plan? [y/N]`; with `--non-interactive` (or no
   terminal) it proceeds. A plan that would downgrade, remove, or replace a FIPS package is
-  refused outright.
+  refused outright. If apt could only proceed by **removing** packages, the refusal names the
+  ones that are lockstep siblings missing from the bundle and the ones that would go with them;
+  rebuild the bundle (5a) on a fully patched build host.
 
 Python comes from the bundled wheels, each checked against its SHA-256 in `requirements.lock`;
 Vue from the bundle, hash-verified.
