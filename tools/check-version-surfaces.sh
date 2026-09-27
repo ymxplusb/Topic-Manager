@@ -75,15 +75,30 @@ for rel, rx, what in SURFACES:
 
 # Cache-bust tokens: every ?v= in the shipped frontend is ONE value, derived
 # from VERSION, so a browser can never mix two releases' files.
+# Round 8 (gatekeeper): removing one token passed, and so did a non-numeric
+# one (only \d+ was ever read). Every ?v= value is now read whatever it is,
+# must be digits only, and there must be EXACTLY EXPECTED_TOKENS of them:
+# index.html 14 + TopBar.js 1 + AboutModal.js 1 (contract surfaces[TopBar]).
+# Adding or removing a cache-busted asset is a deliberate edit of this number.
+EXPECTED_TOKENS = 16
 tokens = {}
 for rel in ["index.html"] + ["app/components/" + f for f in sorted(os.listdir(os.path.join(root, "app/components"))) if f.endswith(".js")] \
                           + ["app/components/modals/" + f for f in sorted(os.listdir(os.path.join(root, "app/components/modals"))) if f.endswith(".js")]:
     src = read(rel) or ""
-    for t in re.findall(r"\?v=(\d+)", src):
+    for t in re.findall(r"\?v=([^\"'\s&#)>]*)", src):
         tokens.setdefault(t, []).append(rel)
 count = sum(len(v) for v in tokens.values())
+nonnum = sorted(t for t in tokens if not re.fullmatch(r"\d+", t))
 if count == 0:
     print("FAIL: no ?v= cache tokens found at all"); fail += 1
+elif nonnum:
+    fail += 1
+    print("FAIL: non-numeric ?v= cache token(s): %s (in %s)"
+          % (", ".join(repr(t) for t in nonnum), ", ".join(sorted({r for t in nonnum for r in tokens[t]}))))
+elif count != EXPECTED_TOKENS:
+    fail += 1
+    print("FAIL: %d ?v= cache tokens, expected exactly %d — a cache-busted asset lost (or gained) its token"
+          % (count, EXPECTED_TOKENS))
 elif set(tokens) != {token}:
     fail += 1
     print("FAIL: ?v= cache tokens %s; VERSION %s needs every one to be %s"

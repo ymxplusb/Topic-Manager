@@ -77,6 +77,10 @@ for section, keys in REQUIRED.items():
     for k in keys:
         if k not in cfg[section]:
             missing.append("%s.%s" % (section, k))
+        # Round 8 (gatekeeper): `port:` with no value parsed to None and
+        # passed. A required key must carry a value (a placeholder counts).
+        elif cfg[section][k] is None or (isinstance(cfg[section][k], str) and not cfg[section][k].strip()):
+            missing.append("%s.%s (present but EMPTY)" % (section, k))
 
 # v1.2.0: session.max_concurrent SEEDS Settings > Sessions on a fresh
 # install (install.sh writes config.yaml from this example), so it must be the

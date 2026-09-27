@@ -203,6 +203,15 @@ s_file_without_cases() {
     local rc=0
     _runner -- "$TM_TMP/t99-fake8.sh" >"$TM_TMP/r8" 2>&1 || rc=$?
     tm_assert_rc 2 "$rc" "a test file that ran NO case was accepted"
+    # The per-file rule, not the total: beside a file with TWO cases, a file
+    # with none leaves the total (2) >= the file count (2). Mutation H3 (the
+    # per-file check neutralised) SURVIVED the single-file fixture above.
+    printf '%s\n' 'set -uo pipefail' '. "${TM_TESTS_DIR}/lib/harness.sh"' 'tm_header "two"' \
+        'fx() { true; }' 'tm_case "one" none fx' 'tm_case "two" none fx' 'tm_finish' > "$TM_TMP/t99-fake8b.sh"
+    rc=0
+    _runner -- "$TM_TMP/t99-fake8b.sh" "$TM_TMP/t99-fake8.sh" >"$TM_TMP/r8b" 2>&1 || rc=$?
+    tm_assert_rc 2 "$rc" "a caseless file hid behind another file's two cases"
+    tm_assert_grep "t99-fake8.sh — it exited 0 and reported NO case" "$TM_TMP/r8b" "the caseless file was not named"
 }
 tm_case "runner-refuses-a-file-with-no-cases" none s_file_without_cases
 
