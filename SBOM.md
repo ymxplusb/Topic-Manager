@@ -84,6 +84,15 @@ adds to a machine, so every row can be checked against an advisory feed.
 | polkit (`polkitd`) | 124 | LGPL-2.0+ and Expat | polkit.freedesktop.org |
 | Python | 3.12.3 | PSF-2.0 | python.org |
 | SQLite | 3.45.1 | Public Domain | sqlite.org |
+| rsyslog (v1.2.0: remote syslog forwarding) | 8.2312.0 | GPL-3.0+ / LGPL-3.0+ / Apache-2.0 | rsyslog.com |
+| rsyslog-openssl (v1.2.0: syslog over TLS) | same source as rsyslog, 8.2312.0 (binaries of one Debian source move in lockstep) — NOT measured: absent on both measured hosts | as rsyslog | rsyslog.com |
+| chrony (v1.2.0: time source; only where no time daemon runs or `--install-chrony`) | 4.5 | GPL-2.0 | chrony-project.org |
+
+MEASURED 2026-09-26: rsyslog `8.2312.0-3ubuntu9.2` and chrony `4.5-1ubuntu4.2` on the STIG+FIPS
+QC host (Ubuntu 24.04.4); rsyslog 8.2312.0 on the test host, which runs systemd-timesyncd, not
+chrony. rsyslog is part of Ubuntu Server; chrony REPLACES systemd-timesyncd when installed (they
+conflict). The app-side versions shown in the About dialog are not updated by this half of
+v1.2.0 (the About dialog is frontend; see WO-0004).
 
 **SQLite is not a separate package.** `sqlite3` is not installed on the target;
 3.45.1 is the library compiled into Python 3.12.3's stdlib `_sqlite3`. It moves
@@ -91,9 +100,10 @@ when Python moves, and cannot be upgraded independently.
 
 **polkit is an OS component we configure, not one we vendor.** It ships with
 Ubuntu Server 24.04. `install.sh` adds `/etc/polkit-1/rules.d/50-topic-manager.rules`,
-which authorises the `topic-manager` account for exactly three unit/verb pairs
+which authorises the `topic-manager` account for exactly seven unit/verb pairs
 (`restart topic-manager.service`, `reload`/`restart nginx.service`,
-`start topic-manager-nginx-test.service`) and nothing else.
+`start topic-manager-nginx-test.service`, and since v1.2.0 `start` on the four
+`topic-manager-apply-*.service` units) and nothing else.
 
 ### Target platform
 
@@ -125,6 +135,8 @@ cryptography runs inside the host's FIPS-validated OpenSSL, and which does not:
 | Python `ssl` (LDAPS to the directory) and `hashlib` (session-cookie HMAC-SHA-256) | host OpenSSL via the system `python3` | **Yes** |
 | `cryptography` 50.0.1 (PEM parsing of uploaded cluster certificates) | OpenSSL **bundled in the wheel** | **No** |
 | `confluent-kafka` 2.15.1 / librdkafka (TLS to SSL/SASL_SSL Kafka brokers) | OpenSSL **bundled in the wheel** | **No** |
+| v1.2.0 certificate upload checks (`tm/tls_check.py`, app and root helper) | the host `openssl` CLI, never `cryptography` | **Yes** — measured on the FIPS QC host: openssl itself refuses to make RSA-1024, secp256k1, Ed25519 and SHA-1 certificates there |
+| v1.2.0 syslog over TLS (`rsyslog-openssl`, the `ossl` netstream driver) | host OpenSSL | **Yes** |
 
 Both bundled copies **run** on a FIPS host — nothing fails — but their cryptography is outside
 the host's validated boundary. This is recorded as a **known limitation**, not a defect: PyPI

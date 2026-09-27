@@ -621,9 +621,10 @@ def execute(ctx, domain, plan):
             details.extend(problems)
             return ('failed', step, '%s failed at step "%s": %s. The backup could NOT be '
                     'fully restored, so the host may be in a mixed state: %s'
-                    % (domain, step, err.message, '; '.join(problems)), details)
+                    % (domain, step, err.message.rstrip('.'), '; '.join(problems)), details)
         return ('rolled_back', step, '%s failed at step "%s": %s. The previous configuration '
-                'was restored and checked byte for byte.' % (domain, step, err.message), details)
+                'was restored and checked byte for byte.' % (domain, step, err.message.rstrip('.')),
+                details)
     return 'ok', 'done', '%s applied and verified.' % domain, details
 
 
@@ -1103,7 +1104,7 @@ def main(argv=None):
         # Before the install step: nothing on the host was changed.
         state, step = 'failed', exc.step
         message = '%s was not applied (step "%s"): %s. Nothing on the host was changed.' % (
-            domain, exc.step, exc.message)
+            domain, exc.step, exc.message.rstrip('.'))
         details = exc.details
     except Exception as exc:
         state, step = 'failed', 'internal'

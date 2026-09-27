@@ -86,7 +86,21 @@ a_accepts_the_fips_set() {
 tm_case "accepts-ec-p256-p384-and-rsa-2048-3072-4096" "linux,openssl" a_accepts_the_fips_set
 
 a_refuses_the_rest() {
-    local got
+    local got n
+    if [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)" = 1 ]; then
+        # MEASURED on the STIG+FIPS QC host (2026-09-26): FIPS openssl refuses
+        # to MAKE an RSA-1024, secp256k1, Ed25519 or SHA-1-signed certificate,
+        # so the validator's refusal of each can only be exercised on a
+        # non-FIPS host (the --remote test host). Here the host's refusal is
+        # what is asserted — an openssl that made one would be the finding.
+        for n in "r1024 -newkey rsa:1024" "k1 -newkey ec -pkeyopt ec_paramgen_curve:secp256k1" \
+                 "ed -newkey ed25519" "s1 -newkey rsa:2048 -sha1"; do
+            # shellcheck disable=SC2086
+            _mk $n
+            [ -s "${TM_TMP}/${n%% *}.crt" ] && _tm_afail "FIPS openssl MADE a ${n%% *} certificate"
+        done
+        tm_note "FIPS host: the four weak shapes were refused by openssl itself"
+    else
     _mk r1024 -newkey rsa:1024
     got="$(_validate "${TM_TMP}/r1024.crt" "${TM_TMP}/r1024.key")"
     tm_assert_eq "REFUSED:unsupported key type: RSA 1024 (accepted: EC P-256, EC P-384, RSA 2048, RSA 3072, RSA 4096)" "$got" "RSA-1024"
@@ -99,6 +113,7 @@ a_refuses_the_rest() {
     _mk s1 -newkey rsa:2048 -sha1
     got="$(_validate "${TM_TMP}/s1.crt" "${TM_TMP}/s1.key")"
     tm_assert_eq "REFUSED:the certificate is signed with sha1WithRSAEncryption; SHA-1 and MD5 signatures are refused" "$got" "SHA-1"
+    fi
     _mk ok -newkey ec -pkeyopt ec_paramgen_curve:P-256
     got="$(_validate "${TM_TMP}/ok.crt" "${TM_TMP}/ok.key" "" "2031-01-01T00:00:00+00:00")"
     case "$got" in "REFUSED:the certificate expired on "*) ;; *) _tm_afail "an expired certificate: ${got}" ;; esac
