@@ -1,7 +1,16 @@
 // Frontend contract tests: execute the shipped component, with deterministic
 // fetch and time. No backend, npm, network, or installed browser is required.
 'use strict';
-const assert = require('node:assert/strict');
+const rawAssert = require('node:assert/strict');
+let assertions = 0;
+const assert = new Proxy(rawAssert, { get(target, key) {
+    return (...args) => { target[key](...args); assertions++; };
+} });
+// Real timer keeps Node alive even when an unresolved promise has no handles.
+const watchdog = setTimeout(() => {
+    console.error('FAIL: probe watchdog expired before completion');
+    process.exit(1);
+}, 5000);
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
@@ -23,13 +32,16 @@ const time = { source: 'chrony', servers: ['time.example.org'], synced: true, of
 const tls = { protocols: ['TLSv1.2', 'TLSv1.3'], ciphers: ['TEST-CIPHER'], fips_mode: true, cert: { subject: 'example.org', issuer: 'Example CA', not_after: '2027-01-01', key_type: 'EC P-256', sans: ['example.org'] }, chain_present: true };
 const json = (data, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => data });
 const plain = object => JSON.parse(JSON.stringify(object));
+let uploadBodies = [];
 let calls = [], csv = '', now = 0, nextId = 0;
 const timers = new Map();
 let handler = url => json(url === '/api/settings' ? loaded : url === '/api/audit/capacity' ? capacity : url === '/api/system/time' ? time : url === '/api/system/tls' ? tls : { state: 'idle', message: '', details: [] });
 const sandbox = {
     ClusterModal: {}, console, AbortController,
     fetch: async (url, options = {}) => {
-        calls.push({ url, options, at: now });
+        calls.push({ url, options: options.body?.fields
+            ? { ...options, body: { fields: { ...options.body.fields } } } : options, at: now });
+        if (options.body?.fields) uploadBodies.push(options.body);
         return handler(url, options);
     },
     setTimeout(fn, ms) { const id = ++nextId; timers.set(id, { at: now + ms, fn }); return id; },
@@ -58,7 +70,7 @@ async function flush() { for (let i = 0; i < 25; i++) await Promise.resolve(); }
 async function tick() {
     await flush();
     const next = [...timers.entries()].sort((a, b) => a[1].at - b[1].at)[0];
-    assert.ok(next, 'an unfinished operation must schedule a timer');
+    rawAssert.ok(next, 'an unfinished operation must schedule a timer');
     timers.delete(next[0]); now = next[1].at; next[1].fn();
     await flush();
 }
@@ -67,9 +79,9 @@ async function finish(promise) {
     promise.then(() => { done = true; }, e => { done = true; error = e; });
     await flush();
     for (let i = 0; !done && i < 100; i++) await tick();
-    assert.ok(done, 'operation must finish by its deadline');
+    rawAssert.ok(done, 'operation must finish by its deadline');
     if (error) throw error;
-    assert.equal(timers.size, 0, 'operation must clean up timers');
+    rawAssert.equal(timers.size, 0, 'operation must clean up timers');
 }
 async function ready() {
     const inst = instance();
@@ -106,7 +118,7 @@ async function main() {
             assert.equal(put.options.headers['Content-Type'], 'application/json');
             assert.match(inst.sectionMessages[section], /✓ Saved/);
         }
-        for (const [query, group] of [['time source', 'system'], ['rate limiting', 'security'], ['audit retention', 'logging']]) {
+        for (const [query, group] of [['NTP servers', 'system'], ['time source', 'system'], ['rate limiting', 'security'], ['audit retention', 'logging']]) {
             inst.railQuery = query;
             assert.ok(inst.railGroups.filter(g => inst.railMatch(g)).some(g => g.id === group));
         }
@@ -158,6 +170,18 @@ async function main() {
         inst.applyJobs.nginx.uncertain = false;
         await finish(inst.applyToHost('nginx'));
         assert.match(inst.applyJobs.nginx.message, /Audit logging is unavailable.*nothing was changed/);
+        for (const failure of ['audit', 'network']) {
+            handler = (url, options) => {
+                if (options.method === 'POST') return json({ state: 'queued' }, 202);
+                if (failure === 'network') throw new Error('offline');
+                return json({ error: 'audit_unavailable' }, 503);
+            };
+            await finish(inst.applyToHost('nginx'));
+            assert.equal(inst.applyJobs.nginx.message, 'Status unknown — the host may or may not have applied the change. Check again.');
+            assert.equal(inst.applyJobs.nginx.uncertain, true);
+            assert.equal(inst.applyJobs.nginx.state, 'unknown');
+            inst.applyJobs.nginx.uncertain = false;
+        }
         handler = () => { throw new Error('offline'); };
         await inst.saveHostSection('sessions');
         assert.match(inst.sectionMessages.sessions, /could not be reached/);
@@ -181,12 +205,14 @@ async function main() {
             inst.sectionSaving[domain === 'nginx' ? 'rate' : domain] = false;
             const pending = inst.applyToHost(domain);
             assert.equal(inst.applyJobs[domain].busy, true);
-            await inst.applyToHost(domain);
-            await finish(pending);
+            const duplicate = inst.applyToHost(domain);
+            assert.equal(calls.filter(c => c.options.method === 'POST').length, 1, 'double apply is blocked while POST is pending');
+            await finish(Promise.all([pending, duplicate]));
             const posts = calls.filter(c => c.options.method === 'POST');
             assert.equal(posts.length, 1, 'double apply is blocked');
             assert.equal(posts[0].url, '/api/system/apply/' + domain);
             assert.equal(posts[0].options.body, '{}');
+            assert.equal(posts[0].options.headers?.['Content-Type'], 'application/json', 'Apply POST must declare JSON');
             const polls = calls.filter(c => !c.options.method && c.url.endsWith('/apply/' + domain));
             assert.deepEqual(polls.map(c => c.at - posts[0].at), [2000, 4000]);
             assert.ok(polls.every(c => c.options.headers['X-TM-Background'] === '1'));
@@ -249,15 +275,17 @@ async function main() {
         assert.equal(inst.statusGlyph('ok'), '✓');
         S.beforeUnmount.call(inst);
     } else if (scenario === 'tls') {
-        for (const failure of [null, 'no-chain', 'invalid_cert', 'audit_unavailable', 'network']) {
+        for (const failure of [null, 'no-chain', 'invalid_cert', 'audit_unavailable', 'network', 'pem', 'unknown']) {
             const inst = await ready();
             let resets = 0;
-            inst.$refs = { certForm: { fields: { cert: { name: 'cert.pem' }, key: { name: 'secret.key' }, chain: { name: 'chain.pem' } }, reset() { resets++; this.fields = {}; } } };
+            const canary = 'PRIVATE_CANARY_92817';
+            const pem = '-----BEGIN PRIVATE KEY-----\n' + canary + '\n-----END PRIVATE KEY-----';
+            inst.$refs = { certForm: { fields: { cert: { name: 'cert.pem' }, key: { name: 'secret.key', contents: pem }, chain: { name: 'chain.pem' } }, reset() { resets++; this.fields = {}; } } };
             if (failure === 'no-chain') inst.$refs.certForm.fields.chain.name = '';
             handler = (url, options) => {
                 if (options.method === 'POST') {
-                    if (failure === 'network') throw new Error('offline');
-                    if (failure && failure !== 'no-chain') return json({ error: failure, reason: failure === 'invalid_cert' ? 'Certificate does not match key' : '' }, failure === 'invalid_cert' ? 400 : 503);
+                    if (failure === 'network') throw new Error(pem);
+                    if (failure && failure !== 'no-chain') return json({ error: failure === 'audit_unavailable' ? failure : 'invalid_cert', reason: failure === 'invalid_cert' ? 'key_mismatch' : failure === 'pem' ? pem : failure === 'unknown' ? 'UNTRUSTED error text' : '' }, failure === 'audit_unavailable' ? 503 : 400);
                     return json({ state: 'queued', domain: 'tls', job: 'cert1' }, 202);
                 }
                 return json(url === '/api/system/tls' ? tls : { state: 'ok', message: 'Certificate installed', details: ['Verified'] });
@@ -276,23 +304,61 @@ async function main() {
             if (failure === 'audit_unavailable') assert.match(inst.applyJobs.tls.message, /Audit logging is unavailable/);
             if (!failure || failure === 'no-chain') assert.equal(inst.applyJobs.tls.state, 'ok');
             assert.equal(inst.applyJobs.tls.busy, false);
+            assert.ok(!JSON.stringify(inst).includes(canary), 'PEM canary must be absent from all component state');
+            assert.deepEqual(Object.keys(uploadBodies.at(-1).fields), [], 'release multipart file references after submit');
+            assert.ok(!inst.applyJobs.tls.message.includes('UNTRUSTED'));
+            if (failure === 'pem' || failure === 'unknown') assert.equal(inst.applyJobs.tls.message, 'Certificate upload failed. Check the certificate and key, then try again.');
+        }
+        // Every domain filters hostile status message/details before storing them.
+        for (const domain of ['syslog', 'time', 'nginx', 'tls']) {
+            const inst = await ready();
+            for (const secret of ['-----BEGIN PRIVATE KEY-----CANARY', 'A'.repeat(65)]) {
+                handler = () => json({ state: 'ok', message: secret, details: ['Safe detail', secret] });
+                await finish(inst.runHostApply(domain));
+                assert.equal(inst.applyJobs[domain].message, '');
+                assert.deepEqual(plain(inst.applyJobs[domain].details), ['Safe detail']);
+            }
         }
     } else if (scenario === 'ppsm') {
         const inst = await ready();
-        inst.hostSettings.syslog_port = '9999'; // unsaved must not leak into PPSM
-        inst.downloadPpsm();
-        assert.match(csv, /"Logging","Syslog","10514","UDP","Outbound","Enabled; configured protocol: udp/);
-        assert.match(csv, /"Web","HTTP","80","TCP","Inbound","Disabled by http_redirect_enabled/);
-        assert.match(csv, /"Infra","NTP","123","UDP","Outbound"/);
-        assert.ok(!csv.includes('PLANNED'));
-        assert.ok(!csv.includes('9999'));
-        assert.match(csv, /Saved settings shown; host changes require Apply to host/);
-        handler = () => json({ ok: true });
-        inst.hostSettings.syslog_protocol = 'tls';
+        const applied = {
+            syslog: { ...groups.syslog, syslog_port: '20514', syslog_protocol: 'tcp' },
+            nginx: { http_redirect_enabled: 'true' }, time: { ntp_servers: 'live.example.org' },
+        };
+        handler = url => json({ applied: applied[url.split('/').at(-1)] });
+        inst.hostSettings.syslog_port = '9999';
+        await finish(inst.downloadPpsm());
+        assert.match(csv, /"Logging","Syslog","20514","TCP","Outbound","Enabled; applied protocol: tcp/);
+        assert.match(csv, /Enabled by applied http_redirect_enabled/);
+        assert.match(csv, /Applied NTP servers: live.example.org/);
+        assert.ok(!csv.includes('10514') && !csv.includes('9999') && !csv.includes('time.example.org'));
+        assert.equal(calls.filter(c => c.url.includes('/apply/')).length, 3);
+        handler = (url, options) => options.method === 'PUT' ? json({}) : json({ applied: applied[url.split('/').at(-1)] });
         await inst.saveHostSection('syslog');
-        inst.downloadPpsm();
-        assert.match(csv, /"Logging","Syslog over TLS","9999","TCP","Outbound","Enabled; configured protocol: tls/);
+        await finish(inst.downloadPpsm());
+        assert.ok(!csv.includes('9999'), 'saved settings do not claim to be applied');
+        applied.syslog = { ...groups.syslog, syslog_port: '9999', syslog_protocol: 'tls' };
+        applied.nginx.http_redirect_enabled = 'false';
+        await finish(inst.downloadPpsm());
+        assert.match(csv, /"Logging","Syslog over TLS","9999","TCP","Outbound","Enabled; applied protocol: tls/);
+        assert.match(csv, /Disabled by applied http_redirect_enabled/);
+        for (const failure of ['null', 'http', 'network', 'hung']) {
+            handler = () => {
+                if (failure === 'network') throw new Error('offline');
+                if (failure === 'hung') return new Promise(() => {});
+                return json({ applied: null }, failure === 'http' ? 503 : 200);
+            };
+            await finish(inst.downloadPpsm());
+            const note = failure === 'null' ? 'not yet applied' : 'state unknown';
+            for (const service of ['HTTP', 'NTP', 'Syslog', 'Syslog over TLS']) {
+                const row = csv.split('\n').find(row => row.includes('"' + service + '"'));
+                assert.ok(row.includes(note), service + ' explicitly reports ' + note);
+            }
+            assert.ok(!csv.includes('9999') && !csv.includes('live.example.org'));
+        }
     } else throw new Error('Unknown scenario: ' + scenario);
-    console.log('PASS ' + scenario);
+    const expected = { bindings: 93, validation: 269, errors: 14, apply: 45, timeout: 13, panels: 27, tls: 92, ppsm: 28 };
+    rawAssert.equal(assertions, expected[scenario], 'complete the exact scenario assertion count');
+    console.log('ALL ' + assertions + ' ASSERTIONS PASSED');
 }
-main().catch(e => { console.error(e.stack); process.exitCode = 1; });
+main().catch(e => { console.error(e.stack); process.exitCode = 1; }).finally(() => clearTimeout(watchdog));

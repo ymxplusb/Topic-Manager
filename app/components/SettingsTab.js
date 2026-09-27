@@ -26,6 +26,20 @@ const SETTINGS_V120_RANGES = {
     audit_max_rows: [10000, 50000000], audit_warn_pct: [50, 95],
 };
 
+// Discard possible PEM/base64 material before it can enter job state.
+function settingsJobText(value) {
+    return typeof value === 'string' && !/-----BEGIN|[A-Za-z0-9+/]{65,}/.test(value) ? value : '';
+}
+const SETTINGS_STATUS_UNKNOWN = 'Status unknown — the host may or may not have applied the change. Check again.';
+const SETTINGS_TLS_ERRORS = {
+    key_mismatch: 'Certificate does not match key.',
+    cert_key_mismatch: 'Certificate does not match key.',
+    invalid_cert: 'The certificate is invalid.',
+    invalid_key: 'The private key is invalid.',
+    encrypted_key: 'Use an unencrypted private key.',
+    invalid_chain: 'The certificate chain is invalid.',
+};
+
 function settingsHostValid(value) {
     if (!value || value.length > 253) return false;
     if (/^[A-Za-z0-9.-]+$/.test(value)) return true;
@@ -260,11 +274,14 @@ const SettingsTab = {
             document.body.style.paddingBottom = h;
         },
         // ── v1.2.0 host settings ────────────────────────────────────
-        async hostResponseError(response, fallback) {
+        async hostResponseError(response, fallback, context = 'save') {
             let data = {};
             try { data = await response.json(); } catch (e) { /* non-JSON proxy response */ }
+            if (context === 'poll') return SETTINGS_STATUS_UNKNOWN;
             if (response.status === 503 && data.error === 'audit_unavailable')
                 return 'Audit logging is unavailable. The action was blocked; nothing was changed. Restore audit logging before retrying.';
+            if (context === 'tls') return Object.prototype.hasOwnProperty.call(SETTINGS_TLS_ERRORS, data.reason)
+                ? SETTINGS_TLS_ERRORS[data.reason] : 'Certificate upload failed. Check the certificate and key, then try again.';
             if (data.field && data.reason) return data.field + ': ' + data.reason;
             return data.reason || data.error || fallback + ' (HTTP ' + response.status + ').';
         },
@@ -317,13 +334,22 @@ const SettingsTab = {
                 run.cancel = () => reject(new Error('Monitoring stopped.'));
                 expiry = setTimeout(() => {
                     run.controller.abort();
-                    reject(new Error('Monitoring timed out after 90 seconds. The host outcome is unknown. Check status before applying again.'));
+                    reject(Object.assign(new Error('Monitoring timed out after 90 seconds. The host outcome is unknown. Check status before applying again.'), { safe: true }));
                 }, 90000);
             });
             const request = async (url, opts) => {
-                const response = await fetch(url, { ...opts, signal: run.controller.signal, cache: 'no-store' });
+                let response;
+                try {
+                    response = await fetch(url, { ...opts, signal: run.controller.signal, cache: 'no-store' });
+                } finally {
+                    if (domain === 'tls' && opts.body) {
+                        ['cert', 'key', 'chain'].forEach(key => opts.body.delete(key));
+                        opts.body = null;
+                    }
+                }
                 if (!response.ok) {
-                    const error = new Error(await this.hostResponseError(response, 'Host request failed'));
+                    const error = new Error(await this.hostResponseError(response, 'Host request failed', opts.method === 'POST' ? domain : 'poll'));
+                    error.safe = true;
                     error.refused = opts.method === 'POST' && ([400, 401, 403].includes(response.status)
                         || error.message.startsWith('Audit logging is unavailable.'));
                     throw error;
@@ -348,7 +374,7 @@ const SettingsTab = {
                     if (this.hostDisposed || run.controller.signal.aborted) return;
                     const data = await request('/api/system/apply/' + domain, { headers: { 'X-TM-Background': '1' } });
                     if (this.hostDisposed || run.controller.signal.aborted) return;
-                    Object.assign(job, { state: data.state, message: data.message || '', details: data.details || [] });
+                    Object.assign(job, { state: data.state, message: settingsJobText(data.message), details: Array.isArray(data.details) ? data.details.map(settingsJobText).filter(Boolean) : [] });
                     if (['idle', 'ok', 'failed', 'rolled_back'].includes(data.state)) {
                         job.uncertain = false;
                         if (domain === 'time' || domain === 'tls') void this.loadHostPanel(domain);
@@ -363,8 +389,12 @@ const SettingsTab = {
             } catch (e) {
                 job.uncertain = !e.refused;
                 job.state = e.refused ? 'failed' : 'unknown';
-                job.message = e.message || 'Host outcome unknown. Check status before applying again.';
+                job.message = e.safe ? settingsJobText(e.message) : SETTINGS_STATUS_UNKNOWN;
             } finally {
+                if (domain === 'tls' && options?.body) {
+                    ['cert', 'key', 'chain'].forEach(key => options.body.delete(key));
+                    options.body = null;
+                }
                 options = null;
                 clearTimeout(expiry);
                 clearTimeout(run.timer);
@@ -497,24 +527,43 @@ const SettingsTab = {
         // the gate stops the release. Single-quoted literals: never an
         // apostrophe in a cell (hazards[csv-single-quoted-literals]). Always
         // keep the static file in sync with the default rows below.
-        downloadPpsm() {
-            // The static document describes defaults. Exports use SAVED values,
-            // never unsaved edits. The API does not expose applied configuration.
-            const config = { ...SETTINGS_V120_DEFAULTS, ...this.savedHostSettings };
-            const syslogPort = config.syslog_port;
-            const syslogTransport = config.syslog_protocol === 'udp' ? 'UDP' : 'TCP';
+        async downloadPpsm() {
+            // CC-1: only the host status endpoint describes applied configuration.
+            const live = Object.fromEntries(await Promise.all(['syslog', 'time', 'nginx'].map(async domain => {
+                const controller = new AbortController();
+                let timer;
+                try {
+                    const data = await Promise.race([
+                        (async () => {
+                            const response = await fetch('/api/system/apply/' + domain, {
+                                signal: controller.signal, cache: 'no-store', headers: { 'X-TM-Background': '1' },
+                            });
+                            if (!response.ok) throw new Error('Status unavailable');
+                            return response.json();
+                        })(),
+                        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Timeout')), 10000); }),
+                    ]);
+                    return [domain, data.applied === null ? { note: 'not yet applied' }
+                        : data.applied && typeof data.applied === 'object' ? { config: data.applied } : { note: 'state unknown' }];
+                } catch (e) { return [domain, { note: 'state unknown' }]; }
+                finally { clearTimeout(timer); controller.abort(); }
+            })));
+            const config = live.syslog.config || {};
+            const syslogPort = config.syslog_port || 'N/A';
+            const syslogTransport = live.syslog.note ? 'N/A' : config.syslog_protocol === 'udp' ? 'UDP' : 'TCP';
             const syslogState = config.syslog_enabled === 'true' ? 'Enabled' : 'Disabled';
+            const syslogDescription = live.syslog.note || syslogState + '; applied protocol: ' + config.syslog_protocol;
             const rows = [
                 ['Jarvis Topic Manager — Ports, Protocols and Services Management (PPSM)', '', '', '', '', ''],
                 ['Version', '1.1.0', '', '', '', ''],
                 ['Copyright', '(c) 2025-2026 James Rodman', '', '', '', ''],
-                ['Scope', 'Every port, protocol and service the Topic Manager host listens on or initiates. Ports marked operator-defined come from configuration. Saved settings shown; host changes require Apply to host. Static PPSM describes fresh-install defaults.', '', '', '', ''],
+                ['Scope', 'Every port, protocol and service the Topic Manager host listens on or initiates. Ports marked operator-defined come from configuration. Live applied settings shown; unavailable state is explicit. Static PPSM describes installer defaults.', '', '', '', ''],
                 ['Generated', new Date().toISOString().split('T')[0], '', '', '', ''],
                 ['', '', '', '', '', ''],
                 ['Section', 'Service/Component', 'Port', 'Protocol', 'Direction', 'Description'],
                 ['--- INBOUND (to the Topic Manager host) ---', '', '', '', '', ''],
                 ['Web', 'HTTPS', '443', 'TCP', 'Inbound', 'Topic Manager web UI and REST API. nginx TLS termination: TLS 1.2 and 1.3 only, FIPS-approved cipher suites (ECDHE with AES-GCM).'],
-                ['Web', 'HTTP', '80', 'TCP', 'Inbound', config.http_redirect_enabled === 'true' ? 'Redirect to HTTPS only (301). No content is served on this port. Enabled by http_redirect_enabled.' : 'Disabled by http_redirect_enabled. Apply removes the port 80 listener and firewall rule.'],
+                ['Web', 'HTTP', '80', 'TCP', 'Inbound', live.nginx.note || (live.nginx.config.http_redirect_enabled === 'true' ? 'Redirect to HTTPS only (301). No content is served on this port. Enabled by applied http_redirect_enabled.' : 'Disabled by applied http_redirect_enabled. Port 80 listener and firewall rule removed.')],
                 ['Admin', 'SSH', '22', 'TCP', 'Inbound', 'Operating-system administration of the host (key-based). Not used by the application.'],
                 ['--- INTERNAL LOOPBACK (not reachable off the host) ---', '', '', '', '', ''],
                 ['App', 'gunicorn (Flask)', '5001', 'TCP', 'Loopback', 'nginx to the application backend, bound to 127.0.0.1 only.'],
@@ -523,9 +572,9 @@ const SettingsTab = {
                 ['Auth', 'Directory (LDAPS)', '636', 'TCP', 'Outbound', 'Authentication and group-membership check against the directory named in auth.ldap_server. TLS certificate validation is enforced. Plain LDAP (389) is not used.'],
                 ['Kafka', 'Kafka brokers', 'operator-defined (commonly 9092, 9093, 9094)', 'TCP', 'Outbound', 'Kafka AdminClient to the brokers named in each cluster profile. Commonly 9092 PLAINTEXT and 9093/9094 SSL or SASL_SSL; the profiles decide.'],
                 ['Infra', 'DNS', '53', 'UDP/TCP', 'Outbound', 'Name resolution for the directory and Kafka broker host names.'],
-                ['Infra', 'NTP', '123', 'UDP', 'Outbound', 'Time synchronisation by the host time service. Required for TLS validity and audit timestamps.'],
-                ['Logging', 'Syslog', syslogPort, syslogTransport, 'Outbound', syslogState + '; configured protocol: ' + config.syslog_protocol + '. Remote forwarding of app audit and nginx logs. This row applies when udp or tcp is selected; port is syslog_port.'],
-                ['Logging', 'Syslog over TLS', syslogPort, 'TCP', 'Outbound', syslogState + '; configured protocol: ' + config.syslog_protocol + '. TLS remote forwarding of app audit and nginx logs. This row applies when tls is selected; port is syslog_port.'],
+                ['Infra', 'NTP', '123', 'UDP', 'Outbound', 'Time synchronisation by the host time service. Required for TLS validity and audit timestamps. ' + (live.time.note || (live.time.config.ntp_servers ? 'Applied NTP servers: ' + live.time.config.ntp_servers : 'Host configuration unchanged (empty applied ntp_servers).'))],
+                ['Logging', 'Syslog', syslogPort, syslogTransport, 'Outbound', syslogDescription + '. Remote forwarding of app audit and nginx logs. This row applies when udp or tcp is selected; port is syslog_port.'],
+                ['Logging', 'Syslog over TLS', syslogPort, live.syslog.note ? 'N/A' : 'TCP', 'Outbound', syslogDescription + '. TLS remote forwarding of app audit and nginx logs. This row applies when tls is selected; port is syslog_port.'],
                 ['PKI', 'OCSP / CRL', 'N/A', 'N/A', 'Outbound', 'NOT USED. Neither nginx nor the application fetches OCSP responses or CRLs; certificate revocation is not checked online.'],
                 ['--- OUTBOUND (online install and upgrade ONLY; none of these at runtime or on an air-gapped host) ---', '', '', '', '', ''],
                 ['Install', 'Ubuntu APT repositories', '80/443', 'TCP', 'Outbound', 'OS packages (nginx, python3-venv, polkitd). Port 80 unless the configured mirror is HTTPS.'],
@@ -1008,7 +1057,7 @@ function deriveSettingsRail(template) {
     const titleRe = /<div class="ssec-title"[^>]*>\s*(?:<span>)?([^<]+)/g;
     // Row labels are search terms too: "PPSM" names a row, not a card, and an
     // operator looking for the PPSM export types "ppsm".
-    const termRe = /<div class="srow-lbl">\s*([^<]+)/g;
+    const termRe = /<div class="srow-lbl">([\s\S]*?)<\/div>/g;
     const starts = [];
     let m;
     while ((m = paneRe.exec(template)) !== null) starts.push({ id: m[1], at: m.index });
@@ -1021,7 +1070,7 @@ function deriveSettingsRail(template) {
         while ((t = titleRe.exec(slice)) !== null) sections.push(settingsDecodeEntities(t[1]).trim());
         const terms = [];
         termRe.lastIndex = 0;
-        while ((t = termRe.exec(slice)) !== null) terms.push(settingsDecodeEntities(t[1]).trim());
+        while ((t = termRe.exec(slice)) !== null) terms.push(settingsDecodeEntities(t[1].replace(/<[^>]*>/g, ' ')).trim());
         return {
             id: pane.id,
             name: label ? settingsDecodeEntities(label[1]).trim() : pane.id,
