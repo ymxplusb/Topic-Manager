@@ -30,7 +30,11 @@ variables:
   # rather than present and skipping. Its exit code is the job verdict; the
   # publish job waits on it.
   TEST_SETUP: "apt-get update -qq && apt-get install -y -qq --no-install-recommends sudo nodejs jq curl && pip install --quiet -r requirements.txt"
-  TEST_COMMAND: "bash tests/run.sh --strict"
+  # REG-0007 (v1.2.0): the lock's completeness is verified ONLINE at release
+  # time. The test lane stubs the network for it (t25), so the gate runs here
+  # first with --require-online: offline, or with a closure it cannot verify,
+  # the tag does not publish.
+  TEST_COMMAND: "bash tools/check-requirements-lock.sh --require-online && bash tests/run.sh --strict"
 
   # No SonarQube here yet: this project has no SONAR_TOKEN or SONAR_HOST_URL CI
   # variable, and the template's scan job exits 2 - could not run, which is not

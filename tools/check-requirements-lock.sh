@@ -19,7 +19,18 @@
 # =============================================================================
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-[[ "${1:-}" == "--root" ]] && ROOT="${2:-}"
+REQUIRE_ONLINE=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --root) ROOT="${2:-}"; shift ;;
+        # REG-0007: the RELEASE-TIME requirement. Offline, the completeness of
+        # the closure is not verified; with this flag that is a failure (exit
+        # 3), not a warning. CI runs the gate with it (.gitlab-ci.yml).
+        --require-online) REQUIRE_ONLINE=true ;;
+        *) echo "check-requirements-lock: unknown option $1" >&2; exit 3 ;;
+    esac
+    shift
+done
 PY="${PYTHON:-python3}"
 command -v "$PY" >/dev/null 2>&1 || PY=python
 command -v "$PY" >/dev/null 2>&1 || { echo "check-requirements-lock: no python found" >&2; exit 3; }
@@ -28,14 +39,21 @@ command -v "$PY" >/dev/null 2>&1 || { echo "check-requirements-lock: no python f
 import os, re, sys
 root = sys.argv[1]
 def norm(n): return re.sub(r"[-_.]+", "-", n).lower()
+# A PEP 440 release, optionally with a pre/post/dev/local part — digits first,
+# no wildcard, no comma, no operator.
+VERSION = r"[0-9]+(?:\.[0-9]+)*(?:[-_.]?(?:a|b|rc|alpha|beta|c|pre|preview|post|rev|r|dev)[-_.]?[0-9]*)*(?:\+[A-Za-z0-9.]+)?"
 req = os.path.join(root, "requirements.txt"); lock = os.path.join(root, "requirements.lock")
 if not os.path.isfile(lock):
     print("FAIL: requirements.lock is missing — the installers use it with --require-hashes"); sys.exit(1)
 pins = {}
 for line in open(req, encoding="utf-8"):
     line = line.split("#")[0].strip()
-    if "==" in line:
-        n, v = line.split("==", 1); pins[norm(n)] = v.strip()
+    if not line:
+        continue
+    m = re.match(r"^([A-Za-z0-9._-]+)\s*==\s*(" + VERSION + r")$", line)
+    if not m:
+        print("FAIL: requirements.txt: not an exact ==<version> pin: %s" % line[:80]); sys.exit(1)
+    pins[norm(m.group(1))] = m.group(2)
 if not pins:
     print("FAIL: no == pins in requirements.txt"); sys.exit(1)
 text = open(lock, encoding="utf-8").read().replace("\r\n", "\n").replace("\\\n", " ")
@@ -44,7 +62,10 @@ for line in text.splitlines():
     line = line.split("#", 1)[0].strip() if not line.lstrip().startswith("--hash") else line.strip()
     if not line:
         continue
-    m = re.match(r"^([A-Za-z0-9._-]+)==([^\s]+)((?:\s+--hash=sha256:\S+)*)\s*$", line)
+    # REG-0007 (v1.2.0): EXACT ==<version> only. `==([^\s]+)` accepted a
+    # wildcard (==3.*) and a range glued on (==1.0,<2), both of which pip
+    # resolves to whatever is newest — not a lock.
+    m = re.match(r"^([A-Za-z0-9._-]+)==(" + VERSION + r")((?:\s+--hash=sha256:\S+)*)\s*$", line)
     if not m:
         print("FAIL: requirements.lock: not an exact pin with hashes: %s" % line[:80]); fail += 1; continue
     name, ver, hs = norm(m.group(1)), m.group(2), re.findall(r"--hash=sha256:(\S+)", m.group(3))
@@ -73,13 +94,18 @@ rc=$?
 # ── completeness (round 8, gatekeeper) ───────────────────────────────────────
 # The checks above prove STRUCTURE and AGREEMENT with the direct pins. They
 # cannot see a transitive package the lock simply lacks. That needs the
-# resolved set, which needs PyPI: resolved with the lock's own generator
-# (--check-set compares name==version, not the hash lists). Offline, say so —
-# never pass silently.
+# locked packages' declared dependencies, which needs PyPI: checked by the
+# lock's own generator (--check-set: REG-0006, every dependency of every locked
+# package is locked at a version that satisfies it — a valid OLDER compatible
+# lock passes). Offline, say so — never pass silently.
 GEN="${ROOT}/tools/gen-requirements-lock.py"
 [[ -f "$GEN" ]] || GEN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gen-requirements-lock.py"
 if ! command -v curl >/dev/null 2>&1 || ! curl -sfI --max-time 8 -o /dev/null https://pypi.org/simple/pip/; then
     echo "check-requirements-lock: lock completeness NOT verified (offline) — structure and agreement only."
+    if [[ $REQUIRE_ONLINE == true ]]; then
+        echo "check-requirements-lock: --require-online: an unverified closure is not a release — refusing to pass."
+        exit 3
+    fi
     exit 0
 fi
 out="$("$PY" "$GEN" --check-set --root "$(cygpath -m "$ROOT" 2>/dev/null || printf '%s' "$ROOT")" 2>&1)"

@@ -81,11 +81,83 @@ for rel, rx, what in SURFACES:
 # index.html 14 + TopBar.js 1 + AboutModal.js 1 (contract surfaces[TopBar]).
 # Adding or removing a cache-busted asset is a deliberate edit of this number.
 EXPECTED_TOKENS = 16
+
+
+def strip_js_comments(src):
+    """JavaScript with its comments removed and every string kept: '...',
+    "..." and `...` template literals (including ${...} substitutions, which
+    may nest their own strings and templates). REG-0010 (v1.2.0): a ?v= token
+    inside a COMMENT used to be counted as a live one."""
+    out, i, n = [], 0, len(src)
+    stack = []            # template-literal nesting: brace depth of each ${
+    while i < n:
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ''
+        if stack and stack[-1] == 0 and c == '}':
+            stack.pop(); out.append(c); i += 1          # back into the template
+            i = _template(src, i, out, stack)
+            continue
+        if c == '/' and nxt == '/':
+            j = src.find('\n', i)
+            i = n if j < 0 else j
+            continue
+        if c == '/' and nxt == '*':
+            j = src.find('*/', i + 2)
+            i = n if j < 0 else j + 2
+            out.append(' ')
+            continue
+        if c in ('"', "'"):
+            j = i + 1
+            while j < n and src[j] != c and src[j] != '\n':
+                j += 2 if src[j] == '\\' else 1
+            out.append(src[i:j + 1]); i = j + 1
+            continue
+        if c == '`':
+            out.append(c); i += 1
+            i = _template(src, i, out, stack)
+            continue
+        if stack:
+            if c == '{':
+                stack[-1] += 1
+            elif c == '}':
+                stack[-1] -= 1
+        out.append(c); i += 1
+    return ''.join(out)
+
+
+def _template(src, i, out, stack):
+    """Copy template text from i to its closing backtick or to a ${ (which
+    pushes a substitution). Returns the new index."""
+    n = len(src)
+    while i < n:
+        c = src[i]
+        if c == '\\':
+            out.append(src[i:i + 2]); i += 2; continue
+        if c == '`':
+            out.append(c); return i + 1
+        if c == '$' and i + 1 < n and src[i + 1] == '{':
+            out.append('${'); stack.append(0); return i + 2
+        out.append(c); i += 1
+    return i
+
+
+def strip_html_comments(src):
+    return re.sub(r'<!--.*?-->', ' ', src, flags=re.S)
+
+
+# REG-0010: EVERY shipped frontend file — index.html and all JS under app/,
+# app/main.js included — with comments stripped before a token is counted.
 tokens = {}
-for rel in ["index.html"] + ["app/components/" + f for f in sorted(os.listdir(os.path.join(root, "app/components"))) if f.endswith(".js")] \
-                          + ["app/components/modals/" + f for f in sorted(os.listdir(os.path.join(root, "app/components/modals"))) if f.endswith(".js")]:
+frontend = ["index.html"]
+for dirpath, _dirs, files in sorted(os.walk(os.path.join(root, "app"))):
+    for f in sorted(files):
+        if f.endswith(".js"):
+            frontend.append(os.path.relpath(os.path.join(dirpath, f), root).replace(os.sep, "/"))
+for rel in frontend:
     src = read(rel) or ""
-    for t in re.findall(r"\?v=([^\"'\s&#)>]*)", src):
+    src = strip_html_comments(src) if rel.endswith(".html") else strip_js_comments(src)
+    # A backtick ends a token too (a token at the end of a template literal).
+    for t in re.findall(r"\?v=([^\"'`\s&#)>]*)", src):
         tokens.setdefault(t, []).append(rel)
 count = sum(len(v) for v in tokens.values())
 nonnum = sorted(t for t in tokens if not re.fullmatch(r"\d+", t))

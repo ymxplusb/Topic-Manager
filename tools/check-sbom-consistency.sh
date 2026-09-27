@@ -124,13 +124,24 @@ def compare(label, rel, found):
     else:
         print("  OK   %-42s (%d pinned components agree)" % (rel, len(found)))
 
+# REG-0011 (v1.2.0): a component listed TWICE with different versions used to
+# be read into a dict, so the second row silently overwrote the first and one
+# of the two claims was never checked. Two rows that disagree is a failure.
+def record(found, rel, name, ver):
+    global failures
+    if name in found and found[name] != ver:
+        print("FAIL: %s lists %s twice, as %s and as %s" % (rel, name, found[name], ver))
+        failures += 1
+    found[name] = ver
+
+
 # ── AboutModal.js: { name: 'X', version: 'Y', ... } ─────────────────────────
 about = read("app/components/modals/AboutModal.js")
 found = None
 if about is not None:
     found = {}
     for m in re.finditer(r"name:\s*'([^']+)'\s*,\s*version:\s*'([^']+)'", about):
-        found[m.group(1).strip().lower()] = m.group(2).strip()
+        record(found, "app/components/modals/AboutModal.js", m.group(1).strip().lower(), m.group(2).strip())
 compare("About dialog", "app/components/modals/AboutModal.js", found)
 
 # ── SBOM.md: markdown table rows | Name | Version | ... ─────────────────────
@@ -161,7 +172,7 @@ if sbom is not None:
             continue
         name, ver = cells[0], cells[1]
         if re.match(r"^[0-9]+\.[0-9]", ver):
-            found[name.lower()] = ver
+            record(found, "SBOM.md", name.lower(), ver)
 compare("SBOM.md", "SBOM.md", found)
 
 # ── SBOM.md transitive rows vs requirements.lock (round 8, gatekeeper) ──────
@@ -177,7 +188,11 @@ if lock_src is None:
     print("FAIL: requirements.lock not found — the transitive SBOM rows have no source of truth")
     failures += 1
 else:
-    locked = {norm(n): v for n, v in re.findall(r"^([A-Za-z0-9._-]+)==([^\s\\]+)", lock_src.replace("\r\n", "\n"), re.M)}
+    # REG-0011: read the lock the way pip does — continuation lines joined,
+    # indentation and a missing final newline tolerated. `^name==` at column 0
+    # dropped an indented entry from this check.
+    lock_text = re.sub(r"\\\n", " ", lock_src.replace("\r\n", "\n"))
+    locked = {norm(n): v for n, v in re.findall(r"^[ \t]*([A-Za-z0-9._-]+)==([^\s\\;,]+)", lock_text, re.M)}
     direct = {norm(n) for n in truth}
     trans = {n: v for n, v in locked.items() if n not in direct}
     if not trans:

@@ -82,10 +82,19 @@ PATTERNS = [
     # link-local (fe8 to feb, /10) addresses: an address shape, >= 3 groups.
     # The labels and this comment do not spell an address, so this file
     # does not match itself.
-    ("private address (IPv6 unique-local)",   r"\bfd[0-9a-f]{2}(:[0-9a-f]{0,4}){2,7}"),
+    # REG-0009 (v1.2.0): the WHOLE unique-local range, the /7 (fc AND fd prefixes).
+    ("private address (IPv6 unique-local)",   r"\bf[cd][0-9a-f]{2}(:[0-9a-f]{0,4}){2,7}"),
     ("link-local address (IPv6)",             r"\bfe[89ab][0-9a-f](:[0-9a-f]{0,4}){2,7}"),
 ]
-RX = [(label, re.compile(p, re.I)) for label, p in PATTERNS]
+# REG-0009: re.ASCII, so word boundaries are ASCII-only. Decoded as latin-1,
+# a byte such as 0xE9 became a letter that \b counts as a WORD character, so
+# one stray byte before a 10/8 address removed the boundary and hid it.
+RX = [(label, re.compile(p, re.I | re.A)) for label, p in PATTERNS]
+
+# Known binary media, recognised by CONTENT (magic number), not by name: pixel
+# data read as text produces address-shaped noise. Everything else is scanned.
+MEDIA_MAGIC = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"BM",
+               b"\x00\x00\x01\x00", b"wOFF", b"wOF2")
 
 # Paths that are this repository's own process records: tracked, but
 # export-ignored and never shipped. In a BUNDLE they are forbidden outright.
@@ -105,10 +114,25 @@ def scan(rel, data):
     # so one stray byte hid every tie in it. It is now read byte-for-byte
     # (latin-1 maps every byte), and still matched. Third-party archives are
     # left out by the callers, never by decoding.
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        text = data.decode("latin-1")
+    if data.startswith(MEDIA_MAGIC):
+        return
+    text = None
+    # REG-0009: UTF-16 (a BOM, or the NUL-every-other-byte shape of ASCII
+    # text in UTF-16) is decoded as such; read as latin-1 its NULs split
+    # every token and nothing ever matched.
+    head = data[:256]
+    half = len(head) // 2
+    if head.startswith((b"\xff\xfe", b"\xfe\xff")):
+        text = data.decode("utf-16", "replace")
+    elif half >= 4 and head[1::2].count(0) >= half * 0.9 and head[0::2].count(0) == 0:
+        text = data.decode("utf-16-le", "replace")
+    elif half >= 4 and head[0::2].count(0) >= half * 0.9 and head[1::2].count(0) == 0:
+        text = data.decode("utf-16-be", "replace")
+    if text is None:
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = data.decode("latin-1")
     scanned += 1
     for n, line in enumerate(text.splitlines(), 1):
         for label, rx in RX:

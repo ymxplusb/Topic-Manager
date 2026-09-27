@@ -40,6 +40,26 @@ PY="${PYTHON:-python3}"
 LOCK="${REPO_ROOT}/requirements.lock"
 [[ -f "$LOCK" && -r "$LOCK" ]] || { echo "${RED}sca-check: ${LOCK} is missing or unreadable — the transitive packages cannot be checked; REFUSING to pass.${NC}" >&2; exit 3; }
 
+# REG-0005: read the lock BEFORE the network, pip's way (tools/lib/lockparse.py),
+# and refuse anything in it that is not an exact name==version.
+norm_name() { local n="${1,,}"; n="${n//_/-}"; printf '%s' "${n//./-}"; }
+LOCK_PINS=()
+LOCK_OUT="$("$PY" "${REPO_ROOT}/tools/lib/lockparse.py" "$LOCK" 2>&1)" \
+    || { echo "${RED}sca-check: ${LOCK} has a line pip would not read as a requirement — REFUSING to pass:${NC}" >&2
+         printf '%s\n' "$LOCK_OUT" | grep '^BAD' >&2; exit 3; }
+while IFS=$'\t' read -r _n _v _s; do
+    _s="${_s%$'\r'}"      # a Windows python prints CRLF
+    [[ -n "$_n" ]] || continue
+    if [[ "$_s" != exact ]]; then
+        echo "${RED}sca-check: ${LOCK}: ${_n} is not pinned exactly (${_s}) — REFUSING to pass.${NC}" >&2; exit 3
+    fi
+    LOCK_PINS+=("${_n} ${_v}")
+done <<<"$LOCK_OUT"
+if [[ "${1:-}" == "--list-pins" ]]; then
+    printf '%s\n' "${LOCK_PINS[@]}"; exit 0
+fi
+declare -A QUERIED=()
+
 # Fail loudly if OSV is unreachable. A gate that silently passes because the
 # vulnerability database could not be reached is not a gate.
 if ! curl -s --max-time 20 -o /dev/null -w '' \
@@ -156,6 +176,7 @@ while IFS= read -r line; do
         VULN=$((VULN+1)); continue
     fi
     query_osv PyPI "${line%%==*}" "${line##*==}"
+    QUERIED["$(norm_name "${line%%==*}")==${line##*==}"]=1
     PINS=$((PINS+1))
 done < "$REQ"
 
@@ -170,16 +191,22 @@ fi
 # direct pins were queried.
 if true; then     # the lock's presence was required at the top
     echo
-    echo "── Transitive pins (requirements.lock) ──────────────────────────"
+    echo "── Locked pins (requirements.lock) — what the installers install ─"
+    # REG-0005 (v1.2.0): the lock is parsed the way pip reads it
+    # (tools/lib/lockparse.py: continuation lines joined, indentation and a
+    # missing final newline tolerated), and EVERY locked package is queried at
+    # its LOCKED version — a direct package included. It used to be skipped
+    # when its name appeared in requirements.txt, so a lock that drifted to a
+    # vulnerable version of a direct package was never scanned. Only a
+    # (name, version) pair already queried above is skipped.
     LPINS=0
-    while IFS= read -r line; do
-        [[ "$line" =~ ^([A-Za-z0-9._-]+)==([^[:space:]\\]+) ]] || continue
-        n="${BASH_REMATCH[1]}"; v="${BASH_REMATCH[2]}"
-        grep -qiE "^${n}==" "$REQ" && continue      # already queried above
+    for pair in "${LOCK_PINS[@]}"; do
+        n="${pair%% *}"; v="${pair#* }"
+        [[ -n "${QUERIED[$(norm_name "$n")==$v]:-}" ]] && { LPINS=$((LPINS+1)); continue; }
         query_osv PyPI "$n" "$v"
         LPINS=$((LPINS+1))
-    done < <(tr -d '\r' < "$LOCK")
-    [[ $LPINS -gt 0 ]] || { echo "${RED}sca-check: requirements.lock parsed to no transitive pins — refusing to pass.${NC}" >&2; exit 3; }
+    done
+    [[ $LPINS -gt 0 ]] || { echo "${RED}sca-check: requirements.lock parsed to no pins — refusing to pass.${NC}" >&2; exit 3; }
 fi
 
 echo

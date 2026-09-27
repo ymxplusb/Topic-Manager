@@ -47,14 +47,18 @@ for a in "$@"; do
 done
 [ ${#files[@]} -gt 0 ] || { echo "check-pipefail-consumers: no .sh files to check" >&2; exit 2; }
 
-hits="$(awk '
-    { line = $0 }
-    line ~ /^[[:space:]]*#/ { next }
-    # A PIPE is a "|" that is not half of "||" (a || b is not a pipeline).
-    line ~ /(^|[^|])\|[[:space:]]*grep[^|]*[[:space:]](-[A-Za-z]*[qm]|--quiet|--silent|--max-count)/ \
-      || line ~ /(^|[^|])\|[[:space:]]*head([[:space:]]|$)/ \
-      || line ~ /(^|[^|])\|[[:space:]]*awk[^|]*[^A-Za-z_]exit([^A-Za-z_]|$)/ { printf "%s:%d: %s\n", FILENAME, FNR, line }
-' "${files[@]}")"
+# REG-0008 (v1.2.0): a real tokenizer (tools/lib/pipelint.py: shlex with the
+# shell's quoting and comment rules, backslash continuations joined, $(...)
+# and `...` analysed recursively, heredoc bodies skipped) replaces the
+# line regex, which missed `sed -n 1q`, `command grep`, a continued pipe and a
+# quoted "|" before -q, and flagged pipe-shaped text in strings.
+PY="${PYTHON:-python3}"
+"$PY" -c 'import shlex' >/dev/null 2>&1 || PY=python
+"$PY" -c 'import shlex' >/dev/null 2>&1 || { echo "check-pipefail-consumers: python is required" >&2; exit 2; }
+hits="$("$PY" "$(dirname "${BASH_SOURCE[0]}")/lib/pipelint.py" "${files[@]}")"
+prc=$?
+hits="${hits//$'\r'/}"
+[[ $prc -le 1 ]] || { echo "check-pipefail-consumers: the parser failed (exit ${prc})" >&2; exit 2; }
 
 if [ -n "$hits" ]; then
     printf '%s\n' "$hits"

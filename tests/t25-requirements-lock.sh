@@ -26,6 +26,13 @@ l_agrees() {
     # (l_completeness below drives that step with a stub resolver).
     mkdir -p "${TM_TMP}/nobin"; printf '#!/bin/sh\nexit 7\n' > "${TM_TMP}/nobin/curl"; chmod +x "${TM_TMP}/nobin/curl"
     PATH="${TM_TMP}/nobin:${PATH}" bash "$GATE" > "${TM_TMP}/out" 2>&1 || _tm_afail "the lock is inconsistent: $(cat "${TM_TMP}/out")"
+    # REG-0007: an offline pass is a pass of STRUCTURE only, and must say so.
+    tm_assert_grep "lock completeness NOT verified (offline)" "${TM_TMP}/out"         "offline, the gate passed without saying the closure was not verified"
+    local rc=0
+    PATH="${TM_TMP}/nobin:${PATH}" bash "$GATE" --require-online > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_rc 3 "$rc" "--require-online passed with no network (the release-time requirement): $(cat "${TM_TMP}/out")"
+    # .gitlab-ci.yml is export-ignored: absent from an archive (--remote, CI tarball).
+    [ ! -f "${TM_REPO_ROOT}/.gitlab-ci.yml" ]         || grep -q 'check-requirements-lock.sh --require-online' "${TM_REPO_ROOT}/.gitlab-ci.yml"         || _tm_afail "CI does not run the lock gate with --require-online"
 }
 tm_case "the-lock-agrees-with-requirements-txt" none l_agrees
 

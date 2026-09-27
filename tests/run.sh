@@ -141,6 +141,22 @@ for f in "${FILES[@]}"; do
         ANY_ERROR=1
         printf '  %sHARNESS ERROR%s in %s — it exited 0 and reported NO case\n' "$C_RED" "$C_OFF" "$(basename "$f")"
     fi
+    # REG-0013 (v1.2.0): every record this file added must be a RECOGNISED
+    # one — PASS/FAIL/SKIP, this file's own name, an id, five tab-separated
+    # fields — and there must be at least one. A garbage line used to be
+    # counted as "the file reported something" and then ignored by the tally,
+    # so one real record beside it masked it.
+    if [ "$after" -gt "$before" ]; then
+        bad_recs="$(sed -n "$((before + 1)),${after}p" "$TM_RESULTS" | awk -F'\t' -v me="$(basename "$f")" '
+            !(NF == 5 && ($1 == "PASS" || $1 == "FAIL" || $1 == "SKIP") && $2 == me && $3 ~ /^[A-Za-z0-9._-]+$/) { n++ }
+            END { print n + 0 }')"
+        good_recs=$(( after - before - bad_recs ))
+        if [ "$bad_recs" -gt 0 ] || [ "$good_recs" -lt 1 ]; then
+            ANY_ERROR=1
+            printf '  %sHARNESS ERROR%s in %s — %d unrecognised result record(s), %d recognised\n' \
+                "$C_RED" "$C_OFF" "$(basename "$f")" "$bad_recs" "$good_recs"
+        fi
+    fi
     case "$rc" in
         0) ;;
         1) ANY_FAIL=1 ;;

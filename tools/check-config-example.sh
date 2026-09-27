@@ -61,6 +61,14 @@ clu = load_mapping(clu_path)
 # write config.yaml. It is checked separately below, and config.yaml.example
 # carrying a clusters: block is now itself a failure — two files claiming to
 # hold the cluster list is exactly the shadowing this split exists to prevent.
+def scalar_value(v):
+    """A non-empty scalar: a non-blank string, a number or a boolean. Never
+    None, a list or a mapping (REG-0012)."""
+    if isinstance(v, bool) or isinstance(v, (int, float)):
+        return True
+    return isinstance(v, str) and bool(v.strip())
+
+
 REQUIRED = {
     "server":   ["host", "port", "secret_key"],
     "auth":     ["ldap_server", "ldap_domain", "ldap_base_dn", "required_group"],
@@ -79,8 +87,17 @@ for section, keys in REQUIRED.items():
             missing.append("%s.%s" % (section, k))
         # Round 8 (gatekeeper): `port:` with no value parsed to None and
         # passed. A required key must carry a value (a placeholder counts).
-        elif cfg[section][k] is None or (isinstance(cfg[section][k], str) and not cfg[section][k].strip()):
-            missing.append("%s.%s (present but EMPTY)" % (section, k))
+        # REG-0012 (v1.2.0): and that value must be a SCALAR — `port: []` or
+        # `secret_key: {}` passed as "present". auth.required_group is the one
+        # key that may be an EMPTY STRING: tm/auth.py documents "" as a choice
+        # (any directory account); it must still be a string.
+        else:
+            v = cfg[section][k]
+            if (section, k) == ("auth", "required_group"):
+                if not isinstance(v, str):
+                    missing.append("auth.required_group (must be a string; \"\" allows any directory account)")
+            elif not scalar_value(v):
+                missing.append("%s.%s (present but EMPTY or not a single value: %r)" % (section, k, v))
 
 # v1.2.0: session.max_concurrent SEEDS Settings > Sessions on a fresh
 # install (install.sh writes config.yaml from this example), so it must be the
@@ -106,6 +123,9 @@ else:
         for k in ("id", "name", "bootstrap_servers", "security_protocol"):
             if k not in c:
                 missing.append("clusters[%d].%s" % (i, k))
+            elif not scalar_value(c[k]):
+                # REG-0012: `bootstrap_servers:` (null) or [] passed as present.
+                missing.append("clusters[%d].%s (present but EMPTY or not a single value: %r)" % (i, k, c[k]))
         # A duplicate id makes get_cluster_by_id arbitrary and a duplicate name
         # makes the two indistinguishable to the operator choosing one.
         if c.get("id") in seen_ids:

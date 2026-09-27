@@ -422,6 +422,12 @@ tm_assert_nonempty() { [ -n "$1" ] || _tm_afail "${2:-expected non-empty}"; }
 # tm_case <id> <requires-csv> <function>
 tm_case() {
     local id="$1" reqs="$2" fn="$3" missing out rc
+    # REG-0013 (v1.2.0): the requirement list is read with `read`, which
+    # stops at the first NEWLINE — "none<newline>linux" ran as "none" and the
+    # case ran where Linux was missing. The id and the list are also written
+    # into a tab-separated record. Both are refused unless they are plain.
+    [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || tm_die "case id '${id}' is not [A-Za-z0-9._-]+"
+    [[ -z "$reqs" || "$reqs" =~ ^[a-z]+(,[a-z]+)*$ ]] || tm_die "case ${id}: requirement list '${reqs}' is not name[,name...]"
     # tm_unmet runs in a subshell, so its tm_die on an unknown requirement
     # (a typo such as "nodee") only ended the SUBSHELL: the message was printed
     # and the case then RAN as if it had no requirement (round 8, gatekeeper).

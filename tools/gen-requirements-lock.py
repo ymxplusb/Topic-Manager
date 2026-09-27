@@ -87,37 +87,95 @@ def render(pins):
 
 
 def lock_set():
-    """The name==version set requirements.lock carries (names normalised)."""
+    """The name==version set requirements.lock carries (names normalised),
+    read the way pip reads it (tools/lib/lockparse.py)."""
     import re
-    text = open(LOCK, encoding='utf-8').read().replace('\r\n', '\n')
-    out = set()
-    for line in text.splitlines():
-        m = re.match(r'^([A-Za-z0-9._-]+)==([^\s\\]+)', line)
-        if m:
-            out.add((re.sub(r'[-_.]+', '-', m.group(1)).lower(), m.group(2)))
-    return out
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib'))
+    import lockparse
+    pins, bad = lockparse.parse(open(LOCK, encoding='utf-8').read())
+    if bad:
+        raise SystemExit('requirements.lock has a line that is not a requirement: %s' % bad[0][:80])
+    return {(re.sub(r'[-_.]+', '-', n).lower(), v) for n, v, _s in pins}
+
+
+#: The environment the lock is FOR (the target host), so a dependency behind a
+#: marker ("; sys_platform == 'win32'", "; python_version < '3.8'") is judged
+#: as the target would judge it, not as this workstation would.
+TARGET_ENV = {'python_version': '3.12', 'python_full_version': '3.12.3', 'os_name': 'posix',
+              'sys_platform': 'linux', 'platform_system': 'Linux', 'platform_machine': 'x86_64',
+              'platform_python_implementation': 'CPython', 'implementation_name': 'cpython',
+              'implementation_version': '3.12.3', 'platform_release': '', 'platform_version': ''}
+
+
+def requires_dist(name, version):
+    """The declared dependencies of name==version. From PyPI's JSON API, or —
+    for the tests — from the JSON file named by TM_LOCK_METADATA
+    ({"name==version": [requirement strings]})."""
+    src = os.environ.get('TM_LOCK_METADATA')
+    if src:
+        import re
+        norm = lambda k: re.sub(r'[-_.]+', '-', k).lower()
+        meta = {norm(k): v for k, v in json.load(open(src, encoding='utf-8')).items()}
+        key = norm('%s==%s' % (name, version))
+        if key not in meta:
+            raise LookupError('no metadata for %s' % key)
+        return meta[key] or []
+    url = 'https://pypi.org/pypi/%s/%s/json' % (name, version)
+    with urllib.request.urlopen(url, timeout=30) as r:
+        return json.load(r)['info'].get('requires_dist') or []
+
+
+def check_closure():
+    """REG-0006 (v1.2.0): the lock is SELF-CONSISTENT and COMPLETE — every
+    dependency of every locked package (markers evaluated for the target) is
+    itself locked, at a version its specifier accepts. It used to compare the
+    lock with a FRESH newest resolution, so a valid, older, compatible lock
+    (the usual state of a release branch) was reported as incomplete.
+    Returns the list of problems."""
+    import re
+    from pip._vendor.packaging.requirements import Requirement
+    from pip._vendor.packaging.version import Version
+    norm = lambda n: re.sub(r'[-_.]+', '-', n).lower()
+    locked = {n: v for n, v in lock_set()}
+    wanted_extras = {}
+    for line in open(REQ, encoding='utf-8'):
+        line = line.split('#', 1)[0].strip()
+        if line:
+            r = Requirement(line)
+            wanted_extras.setdefault(norm(r.name), set()).update(r.extras)
+    problems = []
+    for name, version in sorted(locked.items()):
+        extras = wanted_extras.get(name, set()) | {''}
+        for spec in requires_dist(name, version):
+            r = Requirement(spec)
+            if r.marker is not None and not any(
+                    r.marker.evaluate(dict(TARGET_ENV, extra=e)) for e in extras):
+                continue
+            dep = norm(r.name)
+            if dep not in locked:
+                problems.append('MISSING from requirements.lock: %s (%s==%s requires %s)'
+                                % (dep, name, version, spec))
+            elif r.specifier and not r.specifier.contains(Version(locked[dep]), prereleases=True):
+                problems.append('INCOMPATIBLE: %s==%s is locked, but %s==%s requires %s'
+                                % (dep, locked[dep], name, version, spec))
+            wanted_extras.setdefault(dep, set()).update(r.extras)
+    return problems
 
 
 def main():
     if '--check-set' in sys.argv:
-        # Round 8 (gatekeeper): does the lock cover the WHOLE resolved set?
-        # Compares name==version only (not the wheel-hash lists, which grow
-        # when PyPI adds a wheel for an existing version). Needs PyPI.
-        import re
         try:
-            want = {(re.sub(r'[-_.]+', '-', n).lower(), v) for n, v in resolve()}
-        except Exception as e:  # no network, pip failure: cannot say
-            print('could not resolve requirements.txt: %s' % e)
+            problems = check_closure()
+        except SystemExit:
+            raise
+        except Exception as e:  # no network, no metadata: cannot say
+            print('could not read the dependency metadata: %s: %s' % (type(e).__name__, e))
             sys.exit(3)
-        have = lock_set()
-        missing, extra = sorted(want - have), sorted(have - want)
-        for n, v in missing:
-            print('MISSING from requirements.lock: %s==%s (resolved from requirements.txt)' % (n, v))
-        for n, v in extra:
-            print('NOT in the resolved set: %s==%s' % (n, v))
-        if missing or extra:
+        for p in problems:
+            print(p)
+        if problems:
             sys.exit(1)
-        print('requirements.lock covers the resolved set (%d packages)' % len(want))
+        print('requirements.lock is a complete, self-consistent closure (%d packages)' % len(lock_set()))
         return
     text = render(resolve())
     if '--check' in sys.argv:
