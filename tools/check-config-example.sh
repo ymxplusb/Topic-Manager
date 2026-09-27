@@ -97,7 +97,7 @@ for section, keys in REQUIRED.items():
                 if not isinstance(v, str):
                     missing.append("auth.required_group (must be a string; \"\" allows any directory account)")
             elif not scalar_value(v):
-                missing.append("%s.%s (present but EMPTY or not a single value: %r)" % (section, k, v))
+                missing.append("%s.%s (present but %s)" % (section, k, "EMPTY" if v is None or isinstance(v, str) else "not a single value: %r" % (v,)))
 
 # v1.2.0: session.max_concurrent SEEDS Settings > Sessions on a fresh
 # install (install.sh writes config.yaml from this example), so it must be the
@@ -125,7 +125,7 @@ else:
                 missing.append("clusters[%d].%s" % (i, k))
             elif not scalar_value(c[k]):
                 # REG-0012: `bootstrap_servers:` (null) or [] passed as present.
-                missing.append("clusters[%d].%s (present but EMPTY or not a single value: %r)" % (i, k, c[k]))
+                missing.append("clusters[%d].%s (present but %s)" % (i, k, "EMPTY" if c[k] is None or isinstance(c[k], str) else "not a single value: %r" % (c[k],)))
         # A duplicate id makes get_cluster_by_id arbitrary and a duplicate name
         # makes the two indistinguishable to the operator choosing one.
         if c.get("id") in seen_ids:
