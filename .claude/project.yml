@@ -294,6 +294,15 @@ gates:
       planned, OCSP/CRL not used; no 389; no site tie). Proven RED on 7
       one-sided drifts (incl. an apostrophe in a JS cell) and 5 consistent
       edits to both copies.
+  - name: pipefail-consumers
+    cmd: "bash tools/check-pipefail-consumers.sh"
+    verified: 2026-09-27
+    note: >-
+      No early-exit consumer (grep -q/-m/-l/-L, head, awk exit, sed q) at a pipe
+      under pipefail, in tests/ AND the product scripts (install.sh,
+      install/*.sh, install/libexec/*, prepare-offline.sh) — REG-0004. A shell
+      tokenizer (tools/lib/pipelint.py), not a line regex (REG-0008). Proven RED
+      on the real install.sh pkg_installed line put back; t00 and t41 hold it.
   - name: env-neutral
     cmd: "bash tools/check-env-neutral.sh   # --bundle <tgz> for an offline bundle"
     verified: 2026-09-26
@@ -329,6 +338,10 @@ gates:
       gate holds it to requirements.txt and refuses unhashed/malformed/duplicate
       entries. After changing a pin: regenerate, commit, re-run sca (which now
       queries the transitive pins too). Red-proofed in t25.
+  # v1.2.0 (REG-0005..0013): sca queries every LOCKED version; requirements-lock
+  # checks a self-consistent closure and CI runs it with --require-online;
+  # version-surfaces scans every app/ JS with comments stripped; sbom holds the
+  # About dialog's infrastructure rows to SBOM.md. Reproductions in t41.
   - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-09-26, note: "t00-t27 (28 files). Round 8 (gatekeeper): the runner refuses zero files, a default set that is not every tests/t*.sh, a file that reports no case, and an unknown requirement (all exit 2); --strict counts its OWN tally (TM_RESULTS_OUT is only a copy); no `| grep -q` / `| grep -m` / `| head` / awk-exit consumer at the end of a pipe in tests/ (tools/check-pipefail-consumers.sh, run by t00) after a SIGPIPE race false-failed t24 in 2 of 3 fresh remote runs. Round 2, 2026-09-26: Linux host via --remote --strict (ships git archive HEAD) 210+ pass / 0 fail, only the 'needs node' cases skip (node absent there; the workstation run covers them). Mutation controls M01-M107 (tests/mutate.sh --remote): all killed except 4 documented equivalents. Round 3, 2026-09-26 (offline apt policy): --remote --strict 229 pass / 0 fail / 20 skip (all needs node); M01-M142 --remote: 136 killed, 0 survived, 6 documented equivalents (M14, M45, M87, M103, M141, M142). Round 4: --remote --strict and M01-M167, see WO-0003 builder.round4. t23's real-apt cases need the 'apt' requirement and its prompt cases 'pty' (both Linux only; they SKIP on the workstation). Workstation-only artefact: t12's route case can fail under Git Bash (MSYS path conversion); passes on Linux and CI." }
 
 gate_verification:

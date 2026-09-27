@@ -121,7 +121,7 @@ tm_case "reg0008-pipefail-lint-tokenises-quotes-comments-continuations" none g_p
 g_env_neutral() {
     local d="${TM_TMP}/scan"; mkdir -p "$d"
     local oct="10.2" ; oct="${oct}0.30.40"                     # a 10/8 address, built at run time
-    local ula="fc"; ula="${ula}12:3456:789a::1"                # an fc00::/7 address
+    local ula="fc"; ula="${ula}12:3456:789a::1"                # a unique-local address, fc prefix
     printf 'x\xe9%s y\n' "$oct" > "$d/latin1.txt"
     _run bash "$R/tools/check-env-neutral.sh" --dir "$d"
     [ "$RC" -ne 0 ] || _tm_afail "a 10/8 address after a latin-1 byte was not seen: ${OUT}"
@@ -133,6 +133,13 @@ g_env_neutral() {
     printf 'addr %s\n' "$ula" > "$d/v6.txt"
     _run bash "$R/tools/check-env-neutral.sh" --dir "$d"
     [ "$RC" -ne 0 ] || _tm_afail "an fc-prefix unique-local IPv6 address was not seen: ${OUT}"
+    local fe="fe"; fe="${fe}80::1ff:fe23:4567:890a"
+    printf 'addr %s\n' "$fe" > "$d/v6.txt"
+    _run bash "$R/tools/check-env-neutral.sh" --dir "$d"
+    [ "$RC" -ne 0 ] || _tm_afail "a link-local IPv6 address was not seen: ${OUT}"
+    printf 'the unique-local range is %s and link-local %s\n' "fc00::/7" "fe80::/10" > "$d/v6.txt"
+    _run bash "$R/tools/check-env-neutral.sh" --dir "$d"
+    tm_assert_rc 0 "$RC" "a range written in prefix notation (documentation) was read as an address: ${OUT}"
     rm -f "$d"/*
     printf '\x89PNG\r\n\x1a\n pixels %s pixels\n' "$oct" > "$d/image.bin"
     printf 'plain text, nothing site-specific\n' > "$d/readme.txt"
@@ -182,6 +189,18 @@ g_sbom() {
     grep -q 'lists flask twice' <<<"$OUT" || _tm_afail "the duplicate is not named: ${OUT}"
 }
 tm_case "reg0011-sbom-indented-lock-lines-and-duplicate-rows" none g_sbom
+
+g_sbom_infra() {
+    # v1.2.0: the About dialog's infrastructure rows and SBOM.md's are held to
+    # each other (rsyslog, rsyslog-openssl and chrony joined both).
+    _tree tools/check-sbom-consistency.sh requirements.txt requirements.lock SBOM.md NOTICES.md app/components/modals/AboutModal.js install/upgrade-full.sh
+    sed -i "s/{ name: 'chrony',          version: '4.5',/{ name: 'chrony',          version: '4.4',/" "$FX/app/components/modals/AboutModal.js"
+    grep -q "'chrony',          version: '4.4'" "$FX/app/components/modals/AboutModal.js" || tm_die "fixture did not apply"
+    _run bash "$FX/tools/check-sbom-consistency.sh"
+    [ "$RC" -ne 0 ] || _tm_afail "the About dialog's chrony drifted from SBOM.md and passed: ${OUT}"
+    grep -q 'chrony  *About dialog 4.4, SBOM.md 4.5' <<<"$OUT" || _tm_afail "the drift is not named: ${OUT}"
+}
+tm_case "sbom-infrastructure-rows-agree-with-the-about-dialog" none g_sbom_infra
 
 # ── REG-0012: required values are non-empty scalars; required_group "" is valid
 g_config_example() {

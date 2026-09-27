@@ -83,8 +83,10 @@ PATTERNS = [
     # The labels and this comment do not spell an address, so this file
     # does not match itself.
     # REG-0009 (v1.2.0): the WHOLE unique-local range, the /7 (fc AND fd prefixes).
-    ("private address (IPv6 unique-local)",   r"\bf[cd][0-9a-f]{2}(:[0-9a-f]{0,4}){2,7}"),
-    ("link-local address (IPv6)",             r"\bfe[89ab][0-9a-f](:[0-9a-f]{0,4}){2,7}"),
+    # An ADDRESS ends in a hex group; a range written in prefix notation (the
+    # prefix, "::", then "/" and a length) is documentation, not an address.
+    ("private address (IPv6 unique-local)",   r"\bf[cd][0-9a-f]{2}(:[0-9a-f]{0,4}){1,6}:[0-9a-f]{1,4}\b(?!/)"),
+    ("link-local address (IPv6)",             r"\bfe[89ab][0-9a-f](:[0-9a-f]{0,4}){1,6}:[0-9a-f]{1,4}\b(?!/)"),
 ]
 # REG-0009: re.ASCII, so word boundaries are ASCII-only. Decoded as latin-1,
 # a byte such as 0xE9 became a letter that \b counts as a WORD character, so

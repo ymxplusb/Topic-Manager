@@ -261,6 +261,7 @@ s_pipefail_lint_covers_product_scripts() {
     for f in install.sh install/upgrade-full.sh prepare-offline.sh install/libexec/tm-apply; do
         rm -rf "$fake"; mkdir -p "$fake/tools" "$fake/tests" "$fake/install/libexec"
         cp "${TM_REPO_ROOT}/tools/check-pipefail-consumers.sh" "$fake/tools/"
+        cp -R "${TM_REPO_ROOT}/tools/lib" "$fake/tools/lib"
         cp "${TM_REPO_ROOT}/install.sh" "${TM_REPO_ROOT}/prepare-offline.sh" "$fake/"
         cp "${TM_REPO_ROOT}/install/upgrade-full.sh" "$fake/install/"
         cp "${TM_REPO_ROOT}/install/libexec/tm-apply" "$fake/install/libexec/"

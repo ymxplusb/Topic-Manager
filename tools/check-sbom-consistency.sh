@@ -232,6 +232,48 @@ if notices is not None:
                 found[key] = ver
 compare("NOTICES.md", "NOTICES.md", found)
 
+# ── Infrastructure rows: AboutModal `infra:` vs SBOM.md "## Infrastructure" ──
+# v1.2.0: these rows have no source of truth in requirements.txt (they are
+# measured on the host), so the two copies are held to EACH OTHER: the same
+# components, the same leading version. rsyslog, rsyslog-openssl and chrony
+# joined both copies in v1.2.0 and nothing compared them.
+def lead_version(v):
+    m = re.search(r"[0-9]+(?:\.[0-9]+)*", v or "")
+    return m.group(0) if m else None
+ab_infra = {}
+m = re.search(r"infra:\s*\[(.*?)\]", about or "", re.S)
+if m:
+    for n, v in re.findall(r"name:\s*'([^']+)'\s*,\s*version:\s*'([^']+)'", m.group(1)):
+        ab_infra[n.strip().lower()] = lead_version(v)
+sb_infra = {}
+sec = re.search(r"^## Infrastructure\s*$(.*?)(?=^##|\Z)", sbom or "", re.S | re.M)   # up to the next heading, ### included
+if sec:
+    for line in sec.group(1).splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")] if line.strip().startswith("|") else []
+        if len(cells) < 2 or cells[0].lower() == "component" or set(cells[0]) <= set("-: "):
+            continue
+        name = re.sub(r"\s*\(.*$", "", cells[0]).strip().lower()
+        sb_infra[name] = lead_version(cells[1])
+if not ab_infra or not sb_infra:
+    print("FAIL: infrastructure rows could not be read (AboutModal infra: %d, SBOM.md Infrastructure: %d)"
+          % (len(ab_infra), len(sb_infra)))
+    failures += 1
+else:
+    ibad = []
+    for n in sorted(set(ab_infra) | set(sb_infra)):
+        if n not in sb_infra:
+            ibad.append("    %-18s in the About dialog, NOT in SBOM.md Infrastructure" % n)
+        elif n not in ab_infra:
+            ibad.append("    %-18s in SBOM.md Infrastructure, NOT in the About dialog" % n)
+        elif ab_infra[n] != sb_infra[n]:
+            ibad.append("    %-18s About dialog %s, SBOM.md %s" % (n, ab_infra[n], sb_infra[n]))
+    if ibad:
+        print("FAIL: the infrastructure rows of the About dialog and SBOM.md disagree:")
+        print("\n".join(ibad))
+        failures += len(ibad)
+    else:
+        print("  OK   %-42s (%d infrastructure components agree)" % ("AboutModal infra == SBOM.md", len(ab_infra)))
+
 print()
 if failures:
     print("check-sbom-consistency: %d disagreement(s) with requirements.txt." % failures)
