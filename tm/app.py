@@ -5,7 +5,8 @@ from flask import Flask
 from flask.sessions import SecureCookieSessionInterface
 from werkzeug.middleware.proxy_fix import ProxyFix
 from .config import config_path, load_config, DEFAULT_SESSION_TIMEOUT_MINUTES
-from .models import init_db
+from .models import init_db, get_db
+from . import settings_schema
 
 # gunicorn binds 127.0.0.1:5001 and nginx is the only thing that talks to it,
 # so request.remote_addr is 127.0.0.1 for EVERY request. Nothing read nginx's
@@ -76,6 +77,15 @@ def create_app(config_path_arg=None):
 
     _setup_logging(cfg, app)
     init_db(cfg)
+    # v1.2.0: the concurrent-session limit lives in Settings. config.yaml's
+    # session.max_concurrent seeds it once, on the first start against a
+    # database that has no value, and a later disagreement is logged here at
+    # every start (owner ruling: Settings wins).
+    db = get_db(cfg)
+    try:
+        settings_schema.seed_session_limit(cfg, db)
+    finally:
+        db.close()
 
     from .routes import bp
     app.register_blueprint(bp)

@@ -104,6 +104,10 @@ def init_db(cfg):
         )
     ''')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user)')
+    # v1.2.0: retention prunes by age (tm/audit_retention.py). Without an index
+    # on ts every prune and every capacity read is a full scan of a table that
+    # is allowed to hold five million rows by default.
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)')
     db.commit()
     db.close()
 

@@ -1,11 +1,15 @@
+import io
 import math
 import os
 import re
 import logging
 from functools import wraps
 from flask import Blueprint, request, jsonify, session, current_app, make_response
+from werkzeug.formparser import parse_form_data
 
-from . import auth, kafka_client, audit, service_control
+from . import auth, kafka_client, audit, service_control, settings_schema
+from . import apply as apply_mod
+from . import audit_retention, hoststatus, tls_check
 from . import clusters as cluster_store
 from .models import (get_db, create_session, validate_session, touch_session,
                      delete_session, count_active_sessions, cleanup_expired_sessions)
@@ -60,8 +64,51 @@ _LOGOUT_REASONS = {
 }
 
 
-def _max_sessions():
-    return _cfg().get('session', {}).get('max_concurrent', 0)
+def _max_sessions(db):
+    # v1.2.0: Settings > Security > Sessions, not config.yaml. config.yaml
+    # seeds the setting once (tm/settings_schema.seed_session_limit); after
+    # that the stored value wins. Owner ruling 2026-09-26.
+    return settings_schema.int_setting(
+        settings_schema.read_admin(db, [settings_schema.SESSION_KEY]),
+        settings_schema.SESSION_KEY)
+
+
+# ── audit fail-closed (v1.2.0, owner ruling 2026-09-26) ───────────────────
+# An action whose audit record cannot be written does not happen. Routes that
+# change something that cannot be taken back (Kafka, the cluster store, the
+# host) PROVE the audit trail is writable before they act (audit_gate), and
+# refuse with 503 when it is not. If the record still fails AFTER the change —
+# the database broke in between — the response says the change WAS made, and
+# the record itself has gone to syslog at CRIT as AUDIT_WRITE_FAILED.
+
+def _audit_unavailable():
+    return jsonify({
+        'error': 'audit_unavailable',
+        'message': ('The audit trail cannot be written, so nothing was changed. '
+                    'An administrator must check the audit database '
+                    '(see AUDIT_WRITE_FAILED in the host syslog).'),
+    }), 503
+
+
+def _audit_failed_after(what):
+    return jsonify({
+        'error': 'audit_write_failed',
+        'message': ('%s WAS made, but its audit record could not be written to '
+                    'the audit database. The record was sent to the host syslog '
+                    'as AUDIT_WRITE_FAILED (CRIT). Check the audit database before '
+                    'making any further change.' % what),
+    }), 500
+
+
+def audit_gate(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        try:
+            audit.require_writable(_cfg())
+        except audit.AuditUnavailable:
+            return _audit_unavailable()
+        return f(*args, **kwargs)
+    return decorated
 
 
 _CONTROL_CHARS = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]')
@@ -132,7 +179,7 @@ def require_auth(f):
             # user stopped appearing, rather than leaving a silent gap.
             audit.log_action(_cfg(), session.get('user', {}).get('username', '?'),
                              'SESSION_EXPIRED', request.remote_addr or 'unknown',
-                             'session no longer valid', '')
+                             'session no longer valid', '', best_effort=True)
             session.clear()
             return jsonify({'error': 'Session expired'}), 401
 
@@ -191,16 +238,22 @@ def login():
         # string in a shared export is not something to rely on one control for.
         audit.log_action(_cfg(), _log_safe(username) or '(empty)', 'LOGIN_FAILED',
                          request.remote_addr or 'unknown',
-                         'reason=%s' % str(result)[:120], '')
+                         'reason=%s' % str(result)[:120], '', best_effort=True)
         return jsonify({'error': result}), 401
 
     cfg = _cfg()
+    # A sign-in is an audited action like any other: no session is created
+    # that the audit trail cannot record.
+    try:
+        audit.require_writable(cfg)
+    except audit.AuditUnavailable:
+        return _audit_unavailable()
     db  = get_db(cfg)
 
     # Clean up expired sessions before checking the count
     cleanup_expired_sessions(db)
 
-    max_s = _max_sessions()
+    max_s = _max_sessions(db)
     # Count and insert under ONE write lock (round 2, sec-review): with four
     # workers, two logins at the limit could both count N-1 and both insert.
     # BEGIN IMMEDIATE takes the lock before the count; create_session's
@@ -214,7 +267,8 @@ def login():
             log.warning('Concurrent session limit (%d) reached for user %s', max_s, result['username'])
             audit.log_action(cfg, result['username'], 'LOGIN_REFUSED',
                              request.remote_addr or 'unknown',
-                             'concurrent session limit reached (%d/%d)' % (active, max_s), '')
+                             'concurrent session limit reached (%d/%d)' % (active, max_s), '',
+                             best_effort=True)
             return jsonify({
                 'error': f'Concurrent session limit reached ({active}/{max_s}). '
                          f'Sign out from another session first.'
@@ -222,21 +276,29 @@ def login():
 
     sid = create_session(db, result['username'], _timeout(), request.remote_addr)
     db.close()
+    # Authentication events belong in the audit trail, not only the app log:
+    # the app log is not exported, not shown in the Audit tab, and rotates out
+    # after 14 days. NIST AU-2 treats logon/logoff as auditable events.
+    # request.remote_addr is meaningful as of v1.0.4 (ProxyFix, one hop) —
+    # before that every row would have recorded 127.0.0.1.
+    try:
+        audit.log_action(cfg, result['username'], 'LOGIN',
+                         request.remote_addr or 'unknown',
+                         'bind=%s' % ('service' if _cfg().get('auth', {}).get('ldap_bind_dn')
+                                      else 'direct-user'), '')
+    except audit.AuditUnavailable:
+        # The session row exists but has not been handed out: remove it, and
+        # the sign-in did not happen.
+        db = get_db(cfg)
+        delete_session(db, sid)
+        db.close()
+        return _audit_unavailable()
 
     session.permanent = True
     session['sid']  = sid
     session['user'] = result
 
     log.info('Login success: user=%s ip=%s', result['username'], request.remote_addr)
-    # Authentication events belong in the audit trail, not only the app log:
-    # the app log is not exported, not shown in the Audit tab, and rotates out
-    # after 14 days. NIST AU-2 treats logon/logoff as auditable events.
-    # request.remote_addr is meaningful as of v1.0.4 (ProxyFix, one hop) —
-    # before that every row would have recorded 127.0.0.1.
-    audit.log_action(cfg, result['username'], 'LOGIN',
-                     request.remote_addr or 'unknown',
-                     'bind=%s' % ('service' if _cfg().get('auth', {}).get('ldap_bind_dn')
-                                  else 'direct-user'), '')
     # The browser arms its own idle timer from THIS value. It is not sent so
     # the client can decide policy - the server still enforces `expires_at` -
     # but so that the countdown a person watches is the same number the
@@ -270,8 +332,10 @@ def logout():
     log.info('Logout: user=%s reason=%s', user, reason or 'explicit')
     # Audited BEFORE session.clear(), because the username is read from the
     # session and clearing it first would record '?' for every logout.
+    # best_effort: a sign-out is never refused. A failed record is reported
+    # at CRIT (AUDIT_WRITE_FAILED) with the whole row.
     audit.log_action(_cfg(), user, 'LOGOUT',
-                     request.remote_addr or 'unknown', detail, '')
+                     request.remote_addr or 'unknown', detail, '', best_effort=True)
     session.clear()
     return jsonify({'ok': True})
 
@@ -331,6 +395,7 @@ def _only_one_active(clusters, active_id):
 
 @bp.route('/clusters', methods=['POST'])
 @require_auth
+@audit_gate
 def create_cluster():
     data, err = _parse_json_body()
     if err:
@@ -348,15 +413,19 @@ def create_cluster():
     _persist(updated)
 
     user = session['user']['username']
-    audit.log_action(_cfg(), user, 'CLUSTER_CREATE', cluster['id'],
-                     'after: %s' % cluster_store.audit_detail(cluster),
-                     cluster['id'])
+    try:
+        audit.log_action(_cfg(), user, 'CLUSTER_CREATE', cluster['id'],
+                         'after: %s' % cluster_store.audit_detail(cluster),
+                         cluster['id'])
+    except audit.AuditUnavailable:
+        return _audit_failed_after('The cluster profile %s' % cluster['id'])
     log.info('CLUSTER_CREATE id=%s user=%s', cluster['id'], user)
     return jsonify({'ok': True, 'cluster': cluster_store.public_view(cluster)}), 201
 
 
 @bp.route('/clusters/<cluster_id>', methods=['PUT'])
 @require_auth
+@audit_gate
 def update_cluster(cluster_id):
     data, err = _parse_json_body()
     if err:
@@ -387,17 +456,21 @@ def update_cluster(cluster_id):
     _persist(updated)
 
     user = session['user']['username']
-    audit.log_action(_cfg(), user, 'CLUSTER_UPDATE', cluster_id,
-                     'before: %s | after: %s'
-                     % (cluster_store.audit_detail(previous),
-                        cluster_store.audit_detail(cluster)),
-                     cluster_id)
+    try:
+        audit.log_action(_cfg(), user, 'CLUSTER_UPDATE', cluster_id,
+                         'before: %s | after: %s'
+                         % (cluster_store.audit_detail(previous),
+                            cluster_store.audit_detail(cluster)),
+                         cluster_id)
+    except audit.AuditUnavailable:
+        return _audit_failed_after('The change to cluster profile %s' % cluster_id)
     log.info('CLUSTER_UPDATE id=%s user=%s', cluster_id, user)
     return jsonify({'ok': True, 'cluster': cluster_store.public_view(cluster)})
 
 
 @bp.route('/clusters/<cluster_id>', methods=['DELETE'])
 @require_auth
+@audit_gate
 def delete_cluster(cluster_id):
     existing = _cfg().get('clusters', [])
     previous = get_cluster_by_id({'clusters': existing}, cluster_id)
@@ -416,9 +489,12 @@ def delete_cluster(cluster_id):
         cluster_store.discard_cert(previous.get(field))
 
     user = session['user']['username']
-    audit.log_action(_cfg(), user, 'CLUSTER_DELETE', cluster_id,
-                     'before: %s' % cluster_store.audit_detail(previous),
-                     cluster_id)
+    try:
+        audit.log_action(_cfg(), user, 'CLUSTER_DELETE', cluster_id,
+                         'before: %s' % cluster_store.audit_detail(previous),
+                         cluster_id)
+    except audit.AuditUnavailable:
+        return _audit_failed_after('The deletion of cluster profile %s' % cluster_id)
     log.info('CLUSTER_DELETE id=%s user=%s', cluster_id, user)
     return jsonify({'ok': True})
 
@@ -448,6 +524,7 @@ def set_active_cluster():
 # this handler and no response would ever reach the browser.
 @bp.route('/service/restart', methods=['POST'])
 @require_auth
+@audit_gate
 def restart_service():
     data, err = _parse_json_body()
     if err:
@@ -468,7 +545,7 @@ def restart_service():
         detail = ('refused: a restart was requested less than %ds ago; %ds remaining'
                   % (service_control.RESTART_MIN_INTERVAL_S, wait))
         audit.log_action(cfg, user, 'SERVICE_RESTART_THROTTLED',
-                         service_control.SERVICE_UNIT, detail)
+                         service_control.SERVICE_UNIT, detail, best_effort=True)
         log.warning('SERVICE_RESTART throttled for user=%s: %s', user, detail)
         resp = jsonify({
             'error': ('Another restart was requested less than %ds ago. Wait %ds and try '
@@ -484,20 +561,24 @@ def restart_service():
     ok, detail = service_control.nginx_config_test()
     if not ok:
         audit.log_action(cfg, user, 'SERVICE_RESTART_REFUSED',
-                         service_control.NGINX_UNIT, detail)
+                         service_control.NGINX_UNIT, detail, best_effort=True)
         log.warning('SERVICE_RESTART refused for user=%s: %s', user, detail)
         return jsonify({'error': detail}), 409
 
     # Logged BEFORE anything is touched. The worker is about to be killed, so
     # an entry written afterwards is an entry that may never be written.
-    audit.log_action(cfg, user, 'SERVICE_RESTART',
-                     '%s + %s' % (service_control.NGINX_UNIT,
-                                  service_control.SERVICE_UNIT),
-                     'nginx=%s, topic-manager=restart; %s' % (nginx_action, detail))
+    try:
+        audit.log_action(cfg, user, 'SERVICE_RESTART',
+                         '%s + %s' % (service_control.NGINX_UNIT,
+                                      service_control.SERVICE_UNIT),
+                         'nginx=%s, topic-manager=restart; %s' % (nginx_action, detail))
+    except audit.AuditUnavailable:
+        return _audit_unavailable()
     log.warning('SERVICE_RESTART user=%s nginx=%s', user, nginx_action)
 
     def _record(message):
-        audit.log_action(cfg, user, 'SERVICE_RESTART_STEP', 'systemd', message)
+        audit.log_action(cfg, user, 'SERVICE_RESTART_STEP', 'systemd', message,
+                         best_effort=True)
 
     service_control.restart_detached(hard_nginx, _record)
     return jsonify({
@@ -533,6 +614,7 @@ def list_topics():
 
 @bp.route('/topics', methods=['POST'])
 @require_auth
+@audit_gate
 def create_topic():
     data, err = _parse_json_body()
     if err:
@@ -577,9 +659,12 @@ def create_topic():
         return jsonify({'error': str(exc)}), 502
 
     user = session['user']['username']
-    audit.log_action(_cfg(), user, 'CREATE', name,
-                     f'partitions={partitions}, rf={rf}, config={config}',
-                     cluster.get('id', ''))
+    try:
+        audit.log_action(_cfg(), user, 'CREATE', name,
+                         f'partitions={partitions}, rf={rf}, config={config}',
+                         cluster.get('id', ''))
+    except audit.AuditUnavailable:
+        return _audit_failed_after('The creation of topic %s' % name)
     log.info('CREATE topic=%s user=%s', name, user)
     return jsonify({'ok': True, 'name': name}), 201
 
@@ -596,6 +681,7 @@ def get_topic_config(name):
 
 @bp.route('/topics/<path:name>/config', methods=['PUT'])
 @require_auth
+@audit_gate
 def update_topic_config(name):
     data, err = _parse_json_body()
     if err:
@@ -614,13 +700,17 @@ def update_topic_config(name):
         return jsonify({'error': str(exc)}), 502
 
     user = session['user']['username']
-    audit.log_action(_cfg(), user, 'UPDATE_CONFIG', name, str(updates), cluster.get('id', ''))
+    try:
+        audit.log_action(_cfg(), user, 'UPDATE_CONFIG', name, str(updates), cluster.get('id', ''))
+    except audit.AuditUnavailable:
+        return _audit_failed_after('The configuration change to topic %s' % name)
     log.info('UPDATE_CONFIG topic=%s user=%s', name, user)
     return jsonify({'ok': True})
 
 
 @bp.route('/topics/<path:name>', methods=['DELETE'])
 @require_auth
+@audit_gate
 def delete_topic(name):
     cluster = _cluster()
     try:
@@ -629,7 +719,10 @@ def delete_topic(name):
         return jsonify({'error': str(exc)}), 502
 
     user = session['user']['username']
-    audit.log_action(_cfg(), user, 'DELETE', name, 'confirmed by user', cluster.get('id', ''))
+    try:
+        audit.log_action(_cfg(), user, 'DELETE', name, 'confirmed by user', cluster.get('id', ''))
+    except audit.AuditUnavailable:
+        return _audit_failed_after('The deletion of topic %s' % name)
     log.info('DELETE topic=%s user=%s', name, user)
     return jsonify({'ok': True})
 
@@ -673,8 +766,15 @@ def get_version():
 # ── app settings ──────────────────────────────────────────────────
 # Public subset (banner + DoW) readable without auth so the login page
 # and app shell can apply them before the user is authenticated.
-_PUBLIC_KEYS = {'banner_enabled', 'banner_text', 'banner_bg', 'banner_fg', 'dow_enabled'}
-_ALL_KEYS    = _PUBLIC_KEYS  # extend here if admin-only settings are added later
+#
+# FROZEN, and _ALL_KEYS is a NEW set built from it (v1.2.0). Until then
+# `_ALL_KEYS = _PUBLIC_KEYS` bound the SAME object, so the first
+# `_ALL_KEYS.add(...)` or `|=` for an admin setting would have published it on
+# the unauthenticated route below — the syslog collector, the NTP servers, the
+# rate limits. A frozenset cannot be extended in place at all.
+_PUBLIC_KEYS = frozenset({'banner_enabled', 'banner_text', 'banner_bg', 'banner_fg',
+                          'dow_enabled'})
+_ALL_KEYS    = _PUBLIC_KEYS | settings_schema.ADMIN_KEYS
 
 _DEFAULTS = {
     'banner_enabled': 'false',
@@ -682,6 +782,7 @@ _DEFAULTS = {
     'banner_bg':      'green',
     'banner_fg':      'white',
     'dow_enabled':    'false',
+    **settings_schema.ADMIN_DEFAULTS,
 }
 
 
@@ -723,7 +824,19 @@ def update_settings():
         return jsonify({'error': 'Expected a JSON object of setting: value pairs'}), 400
     cfg = _cfg()
     user = session['user']['username']
-    accepted = {k: str(v) for k, v in data.items() if k in _ALL_KEYS}
+    # v1.2.0: every administrator setting passes its validator BEFORE anything
+    # is written, and one bad value refuses the whole request — a half-applied
+    # PUT would leave Settings showing a mix the operator never chose.
+    accepted = {}
+    for k, v in data.items():
+        if k in settings_schema.ADMIN_KEYS:
+            try:
+                accepted[k] = settings_schema.normalise(k, v)
+            except settings_schema.InvalidSetting as exc:
+                return jsonify({'error': 'invalid', 'field': exc.field,
+                                'reason': exc.reason}), 400
+        elif k in _PUBLIC_KEYS:
+            accepted[k] = str(v)
     ignored = sorted(str(k) for k in data if k not in _ALL_KEYS)
     # v1.1.0: this route changes what EVERY user sees (the classification
     # banner, the consent notice) and wrote no audit record at all.
@@ -741,8 +854,12 @@ def update_settings():
                        (key, value))
         changed = sorted(k for k, v in accepted.items() if before.get(k) != v)
         detail = _settings_audit_detail(before, accepted, changed, ignored)
-        audit.log_action(cfg, user, 'SETTINGS_UPDATE', 'app_settings', detail, '', db=db)
+        record = audit.log_action(cfg, user, 'SETTINGS_UPDATE', 'app_settings', detail, '',
+                                  db=db)
         db.commit()
+    except audit.AuditUnavailable:
+        db.rollback()
+        return _audit_unavailable()
     except Exception:
         db.rollback()
         log.exception('SETTINGS_UPDATE by user=%s was NOT applied: the change and '
@@ -751,16 +868,20 @@ def update_settings():
                                  'audit record, so nothing was changed.'}), 500
     finally:
         db.close()
+    audit.emit(record)
     log.info('SETTINGS_UPDATE user=%s %s', _log_safe(user), _log_safe(detail, 200))
     return jsonify({'ok': True, 'changed': changed})
 
 
 #: Settings whose VALUES the audit record may show, old -> new. Display and
-#: consent settings only: what the banner says and what colour it is are
-#: exactly what an auditor needs to see. Any other key — including every key
-#: added later unless it is added here on purpose — is recorded by NAME only.
+#: consent settings: what the banner says and what colour it is are exactly
+#: what an auditor needs to see. v1.2.0 adds the administrator settings ON
+#: PURPOSE: none is a secret (host names, ports, numbers, true/false), every
+#: one has passed a charset validator, and "who pointed the audit trail at
+#: which collector" is the question an auditor asks. Any key added later is
+#: recorded by NAME only unless it is added here deliberately.
 _AUDIT_VALUE_KEYS = frozenset({'banner_enabled', 'banner_text', 'banner_bg',
-                               'banner_fg', 'dow_enabled'})
+                               'banner_fg', 'dow_enabled'}) | settings_schema.ADMIN_KEYS
 
 
 def _settings_audit_detail(before, accepted, changed, ignored):
@@ -777,3 +898,152 @@ def _settings_audit_detail(before, accepted, changed, ignored):
         detail += '; ignored unknown key(s): %s' % ', '.join(
             _log_safe(repr(k), 40) for k in ignored[:10])
     return detail[:500]
+
+
+# ── v1.2.0: apply to host, host status, audit capacity, TLS ───────────────
+# Every route below is behind require_auth; none is public. The privileged
+# half is install/libexec/tm-apply (root), reached ONLY through the fixed
+# one-shot units tm/service_control.APPLY_UNITS — see tm/apply.py.
+
+def _start_staged(cfg, domain, job, user):
+    """Audit the request and start the unit. The request is audited BEFORE the
+    helper can run: if that record cannot be written the staging is withdrawn
+    and nothing changes."""
+    try:
+        audit.log_action(cfg, user, 'SYSTEM_APPLY_REQUESTED', domain, 'job=%s' % job)
+    except audit.AuditUnavailable:
+        apply_mod.discard_stage(cfg, domain)
+        return _audit_unavailable()
+    ok, detail = service_control.start_apply_unit(domain)
+    if not ok:
+        apply_mod.record_start_failure(cfg, domain, job, detail)
+        log.warning('SYSTEM_APPLY %s job=%s could not start: %s', domain, job, detail)
+        return jsonify({'error': 'apply_unit_failed', 'domain': domain, 'job': job,
+                        'message': detail}), 502
+    log.info('SYSTEM_APPLY_REQUESTED domain=%s job=%s user=%s', domain, job, _log_safe(user))
+    return jsonify({'domain': domain, 'job': job, 'state': 'queued'}), 202
+
+
+def _refuse_if_busy(cfg, domain):
+    allowed, remaining = apply_mod.claim_slot(cfg, domain)
+    if not allowed:
+        wait = max(1, int(math.ceil(remaining)))
+        resp = jsonify({'error': 'apply_throttled', 'retry_after': wait,
+                        'message': 'An apply for %s was requested less than %ds ago.'
+                                   % (domain, apply_mod.APPLY_MIN_INTERVAL_S)})
+        resp.headers['Retry-After'] = str(wait)
+        return resp, 429
+    if apply_mod.status(cfg, domain)['state'] in ('queued', 'running'):
+        return jsonify({'error': 'apply_in_progress', 'domain': domain,
+                        'message': 'An apply for %s is already queued or running.' % domain}), 409
+    return None
+
+
+@bp.route('/system/apply/<domain>', methods=['POST'])
+@require_auth
+@audit_gate
+def system_apply(domain):
+    if domain not in apply_mod.APPLY_DOMAINS:
+        return jsonify({'error': 'unknown_domain', 'domain': _log_safe(domain, 32)}), 404
+    data, err = _parse_json_body()
+    if err:
+        return err
+    cfg = _cfg()
+    user = session['user']['username']
+    busy = _refuse_if_busy(cfg, domain)
+    if busy:
+        return busy
+    db = get_db(cfg)
+    try:
+        values = apply_mod.domain_settings(db, domain)
+    finally:
+        db.close()
+    problems = settings_schema.check_domain(domain, values)
+    if problems:
+        field, _, reason = problems[0].partition(': ')
+        return jsonify({'error': 'invalid', 'field': field, 'reason': reason or problems[0]}), 400
+    job = apply_mod.write_stage(cfg, domain, values, user)
+    return _start_staged(cfg, domain, job, user)
+
+
+@bp.route('/system/apply/<domain>', methods=['GET'])
+@require_auth
+def system_apply_status(domain):
+    if domain not in apply_mod.STATUS_DOMAINS:
+        return jsonify({'error': 'unknown_domain', 'domain': _log_safe(domain, 32)}), 404
+    cfg = _cfg()
+    apply_mod.audit_result(cfg, domain)
+    return jsonify(apply_mod.status(cfg, domain))
+
+
+@bp.route('/system/time', methods=['GET'])
+@require_auth
+def system_time():
+    return jsonify(hoststatus.time_status())
+
+
+@bp.route('/audit/capacity', methods=['GET'])
+@require_auth
+def audit_capacity():
+    return jsonify(audit_retention.capacity(_cfg()))
+
+
+@bp.route('/system/tls', methods=['GET'])
+@require_auth
+def system_tls():
+    return jsonify(hoststatus.tls_status())
+
+
+#: The largest multipart body the certificate upload accepts: three PEM fields
+#: of at most tls_check.MAX_PEM_BYTES each, plus the multipart framing.
+_TLS_UPLOAD_MAX = 3 * tls_check.MAX_PEM_BYTES + 8 * 1024
+
+
+def _memory_stream(*_args, **_kwargs):
+    # THE PRIVATE KEY NEVER TOUCHES /tmp. Werkzeug's default spools a large
+    # upload part to a temporary file; this parser keeps every part in memory,
+    # and the body is capped above so memory is bounded too.
+    return io.BytesIO()
+
+
+@bp.route('/system/tls/cert', methods=['POST'])
+@require_auth
+@audit_gate
+def system_tls_cert():
+    length = request.content_length
+    if length is None:
+        return jsonify({'error': 'invalid_cert',
+                        'reason': 'the upload must carry a Content-Length'}), 411
+    if length > _TLS_UPLOAD_MAX:
+        return jsonify({'error': 'invalid_cert',
+                        'reason': 'the upload is larger than %d bytes' % _TLS_UPLOAD_MAX}), 413
+    if request.mimetype != 'multipart/form-data':
+        return jsonify({'error': 'invalid_cert',
+                        'reason': 'send multipart/form-data with cert, key and optional chain'}), 415
+    _stream, _form, files = parse_form_data(request.environ, stream_factory=_memory_stream,
+                                            max_content_length=_TLS_UPLOAD_MAX)
+
+    def _part(name):
+        f = files.get(name)
+        return f.read(tls_check.MAX_PEM_BYTES + 1) if f else b''
+
+    cert, key, chain = _part('cert'), _part('key'), _part('chain')
+    try:
+        info = tls_check.validate(cert, key, chain or None)
+    except tls_check.CertInvalid as exc:
+        # The reason names what is wrong with the upload and never quotes it.
+        return jsonify({'error': 'invalid_cert', 'reason': str(exc)}), 400
+    cfg = _cfg()
+    user = session['user']['username']
+    busy = _refuse_if_busy(cfg, 'tls')
+    if busy:
+        return busy
+    staged = {'crt': cert, 'key': key}
+    if chain.strip():
+        staged['chain'] = chain
+    summary = {'subject': info['subject'], 'issuer': info['issuer'],
+               'not_after': info['not_after'], 'key_type': info['key_type'],
+               'chain_count': info['chain_count']}
+    job = apply_mod.write_stage(cfg, 'tls', {'certificate': summary}, user, files=staged)
+    del key, staged
+    return _start_staged(cfg, 'tls', job, user)

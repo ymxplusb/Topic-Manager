@@ -35,6 +35,17 @@ tm_install_sh() { echo "${TM_INSTALL_SH:-${TM_REPO_ROOT}/install.sh}"; }
 # prepare-offline.sh, a third script under test as of round 4 (the bundle's
 # lockstep-sibling expansion). Same contract.
 tm_prepare_sh() { echo "${TM_PREPARE_SH:-${TM_REPO_ROOT}/prepare-offline.sh}"; }
+# v1.2.0: more files under test, same contract — tests/mutate.sh points each at
+# a MUTATED COPY outside the repo and the tracked file is never touched.
+#   tm_py_root        the directory holding the tm/ package a Python case
+#                     imports (a copy of tm/ with one module mutated)
+#   tm_apply_helper   install/libexec/tm-apply, the root helper
+#   tm_nginx_site     nginx/topic-manager.conf
+#   tm_loginview_js   app/components/LoginView.js (the 429 handling only)
+tm_py_root()      { echo "${TM_PY_ROOT:-${TM_REPO_ROOT}}"; }
+tm_apply_helper() { echo "${TM_APPLY_HELPER:-${TM_REPO_ROOT}/install/libexec/tm-apply}"; }
+tm_nginx_site()   { echo "${TM_NGINX_SITE:-${TM_REPO_ROOT}/nginx/topic-manager.conf}"; }
+tm_loginview_js() { echo "${TM_LOGINVIEW_JS:-${TM_REPO_ROOT}/app/components/LoginView.js}"; }
 
 # ─── output ──────────────────────────────────────────────────────────────────
 if [ -t 1 ] && [ -z "${TM_NO_COLOUR:-}" ]; then
@@ -190,8 +201,18 @@ tm_python() {
 tm_probe_tmapp() {
     local py; py="$(tm_python)"
     [ -n "$py" ] || return 1
-    PYTHONPATH="$TM_REPO_ROOT" PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH="$(tm_py_root)" PYTHONDONTWRITEBYTECODE=1 \
         "$py" -c "import tm.routes" >/dev/null 2>&1
+}
+
+# tm_probe_linux -> 0 on Linux: the root apply helper (fcntl, pwd, O_NOFOLLOW
+# relative opens, memfd_create) and the audit syslog socket (AF_UNIX
+# datagrams) exist nowhere else. MEASURED by importing what they use.
+tm_probe_linux() {
+    local py; py="$(tm_python)"
+    [ -n "$py" ] || return 1
+    [ "$(uname -s 2>/dev/null)" = Linux ] || return 1
+    "$py" -c "import fcntl, pwd, os, socket; os.memfd_create; socket.AF_UNIX" >/dev/null 2>&1
 }
 
 # tm_open_traversal <path> — mktemp -d makes 0700 directories, so a fake root
@@ -303,6 +324,10 @@ tm_unmet() {
             # service runs under is present. A case that needs it must SKIP
             # loudly here, never pass vacuously.
             tmapp) tm_probe_tmapp || out="${out}${out:+, }an environment where tm.app imports (ldap3, confluent-kafka)" ;;
+            # The root helper, memfd and AF_UNIX syslog datagrams (v1.2.0).
+            linux) tm_probe_linux || out="${out}${out:+, }Linux (fcntl, pwd, memfd_create, AF_UNIX)" ;;
+            # A real openssl on PATH (the TLS validation is the host CLI's).
+            openssl) command -v openssl >/dev/null 2>&1 || out="${out}${out:+, }openssl" ;;
             *)     tm_die "unknown requirement '${r}'" ;;
         esac
     done

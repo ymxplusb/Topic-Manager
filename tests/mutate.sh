@@ -41,12 +41,28 @@ declare -A TARGET_PATH=(
   [upgrade]="${TM_UPGRADE_SH:-${TM_REPO_ROOT}/install/upgrade-full.sh}"
   [install]="${TM_INSTALL_SH:-${TM_REPO_ROOT}/install.sh}"
   [prepare]="${TM_PREPARE_SH:-${TM_REPO_ROOT}/prepare-offline.sh}"
+  [helper]="${TM_REPO_ROOT}/install/libexec/tm-apply"
+  [site]="${TM_REPO_ROOT}/nginx/topic-manager.conf"
+  [loginview]="${TM_REPO_ROOT}/app/components/LoginView.js"
 )
 declare -A TARGET_ENV=(
   [upgrade]="TM_UPGRADE_SH"
   [install]="TM_INSTALL_SH"
   [prepare]="TM_PREPARE_SH"
+  [helper]="TM_APPLY_HELPER"
+  [site]="TM_NGINX_SITE"
+  [loginview]="TM_LOGINVIEW_JS"
 )
+# v1.2.0: a Python module is named TARGET|py:<module> (tm/<module>.py). The
+# harness copies the whole tm/ package into the scratch directory, mutates the
+# one module THERE, and points TM_PY_ROOT at the copy, so an import of any
+# tm.* in a covering case picks up the mutant. The module name is checked
+# against the tree: mutations.txt cannot name an arbitrary path.
+for _py in "${TM_REPO_ROOT}"/tm/*.py; do
+    _mod="$(basename "$_py" .py)"
+    TARGET_PATH["py:${_mod}"]="$_py"
+    TARGET_ENV["py:${_mod}"]="TM_PY_ROOT"
+done
 TARGET="${TARGET_PATH[upgrade]}"
 
 if [ -t 1 ] && [ -z "${TM_NO_COLOUR:-}" ]; then
@@ -227,6 +243,19 @@ for id in "${IDS[@]}"; do
     fi
     mutant="${SCRATCH}/${id}-$(basename "$tpath")"
     n="$(_mutate_copy "$tpath" "${SCRATCH}/${id}.anchor" "${SCRATCH}/${id}.replace" "$mutant")"
+    envval="$mutant"
+    case "$tkey" in
+        py:*)
+            # The package copy the covering cases import; the mutant replaces
+            # its one module. PYTHONDONTWRITEBYTECODE is set by run.sh's callers
+            # and the copy is fresh per control, so no stale .pyc can serve the
+            # unmutated module.
+            envval="${SCRATCH}/${id}-pyroot"
+            rm -rf "$envval"; mkdir -p "$envval"
+            cp -R "${TM_REPO_ROOT}/tm" "${envval}/tm"
+            rm -rf "${envval}/tm/__pycache__"
+            [ "$n" = "1" ] && cp "$mutant" "${envval}/tm/$(basename "$tpath")" ;;
+    esac
     if [ "$n" != "1" ]; then
         ABORTED=$((ABORTED+1))
         printf '  %-5s %s%-10s%s %s\n' "$id" "$C_RED" "ABORTED" "$C_OFF" "$desc" | tee -a "$REPORT"
@@ -238,7 +267,7 @@ for id in "${IDS[@]}"; do
     files=()
     for t in $tests; do files+=("${TM_TESTS_DIR}/${t}"); done
     res="${SCRATCH}/${id}.results"
-    env "${tenv}=${mutant}" TM_RESULTS_OUT="$res" TM_NO_COLOUR=1 \
+    env "${tenv}=${envval}" PYTHONDONTWRITEBYTECODE=1 TM_RESULTS_OUT="$res" TM_NO_COLOUR=1 \
         bash "${TM_TESTS_DIR}/run.sh" "${files[@]}" > "${SCRATCH}/${id}.log" 2>&1
     rc=$?
     nf=$(grep -c '^FAIL' "$res" 2>/dev/null || true); nf=${nf:-0}

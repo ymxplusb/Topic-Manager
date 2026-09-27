@@ -57,9 +57,20 @@ SERVICE_UNIT = 'topic-manager.service'
 NGINX_UNIT = 'nginx.service'
 NGINX_TEST_UNIT = 'topic-manager-nginx-test.service'
 
+# v1.2.0: "Apply to host". One fixed Type=oneshot unit per domain, each
+# running the root helper /usr/libexec/topic-manager/tm-apply with that domain
+# as its only argument. The app may START them and nothing else; see
+# install/polkit/50-topic-manager.rules and tm/apply.py.
+APPLY_UNITS = {
+    'syslog': 'topic-manager-apply-syslog.service',
+    'time':   'topic-manager-apply-time.service',
+    'nginx':  'topic-manager-apply-nginx.service',
+    'tls':    'topic-manager-apply-tls.service',
+}
+
 # Exactly the units the polkit rule authorises. Kept here as well so a route
 # cannot ask for a unit the rule would refuse and get an opaque polkit error.
-ALLOWED_UNITS = (SERVICE_UNIT, NGINX_UNIT, NGINX_TEST_UNIT)
+ALLOWED_UNITS = (SERVICE_UNIT, NGINX_UNIT, NGINX_TEST_UNIT) + tuple(APPLY_UNITS.values())
 
 _TIMEOUT = 30           # seconds, per systemctl invocation
 _FLUSH_DELAY = 0.75     # seconds; let gunicorn finish writing the 202
@@ -161,6 +172,38 @@ def nginx_config_test():
     return False, ('nginx -t did not pass (systemctl exit %d): %s. '
                    'Run `sudo nginx -t` on the host for the full diagnostic.'
                    % (rc, detail))
+
+
+def apply_unit(domain):
+    if domain not in APPLY_UNITS:
+        raise ValueError('%s is not an apply domain' % domain)
+    return APPLY_UNITS[domain]
+
+
+def start_apply_unit(domain):
+    """
+    Queue the root apply helper for `domain` and return at once
+    (`systemctl start --no-block`): the helper tests, reloads and verifies,
+    which can take longer than a request should wait. The browser polls GET
+    /api/system/apply/<domain>, which reads the helper's own result file.
+
+    Returns (ok, detail). A refusal here (polkit, a missing unit) means the
+    helper never ran.
+    """
+    rc, out = _unit_action('start', apply_unit(domain), extra=('--no-block',))
+    if rc == 0:
+        return True, '%s queued' % apply_unit(domain)
+    return False, ('could not start %s (systemctl exit %d): %s'
+                   % (apply_unit(domain), rc, out or 'no output'))
+
+
+def apply_unit_state(domain):
+    """`systemctl is-active` for the domain's unit: 'activating' while the
+    helper runs, 'inactive'/'failed' after, 'unknown' when it cannot be asked.
+    Reading a unit's state needs no authorisation."""
+    rc, out = _run([_systemctl(), 'is-active', apply_unit(domain)])
+    word = (out or '').strip().splitlines()
+    return word[-1].strip() if word else 'unknown'
 
 
 def _restart_sequence(hard_nginx, on_result):
