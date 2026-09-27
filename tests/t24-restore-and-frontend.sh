@@ -75,7 +75,7 @@ r_store_refuses_symlink() {
 tm_case "restore-refuses-a-symlinked-store" symlinks r_store_refuses_symlink
 
 r_restore_calls_it() {
-    tm_extract_func "$UP" restore_from_backup | grep -q '^    restore_cluster_store "\$BD"$' \
+    grep -q '^    restore_cluster_store "\$BD"$' <<<"$(tm_extract_func "$UP" restore_from_backup)" \
         || _tm_afail "restore_from_backup (--restore and the automatic rollback) does not restore the cluster store"
 }
 tm_case "restore-from-backup-calls-restore-cluster-store" none r_restore_calls_it

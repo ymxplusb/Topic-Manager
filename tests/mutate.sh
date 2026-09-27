@@ -248,7 +248,7 @@ for id in "${IDS[@]}"; do
         ABORTED=$((ABORTED+1))
         printf '  %-5s %s%-10s%s %s\n' "$id" "$C_RED" "ABORTED" "$C_OFF" "$desc" | tee -a "$REPORT"
         printf '        the mutated copy broke an extraction anchor — no verdict is available\n' | tee -a "$REPORT"
-        sed 's/^/        /' "${SCRATCH}/${id}.log" | grep -i 'harness error' | head -3 | tee -a "$REPORT"
+        sed 's/^/        /' "${SCRATCH}/${id}.log" | grep -i 'harness error' | sed -n 1,3p | tee -a "$REPORT"
     elif [ "$nf" -gt 0 ]; then
         KILLED=$((KILLED+1))
         printf '  %-5s %s%-10s%s %s  (%d case%s)\n' "$id" "$C_GRN" "RED" "$C_OFF" "$desc" "$nf" "$([ "$nf" -eq 1 ] || echo s)" | tee -a "$REPORT"

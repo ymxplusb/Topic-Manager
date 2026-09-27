@@ -145,18 +145,19 @@ tm_case "a-path-that-is-not-a-directory-is-refused" none s_refuses_a_plain_file
 # left on one of those paths is a guard that is simply not there, and no
 # behavioural case in this file would notice.
 s_app_writable_dirs_go_through_the_guard() {
-    local f v base lit
+    local f v base lit hits
     for f in "$INSTALL_SH" "$UP"; do
         base="$(basename "$f")"
         for v in CLUSTERS_DIR CERT_DIR; do
             # The literal text "$CLUSTERS_DIR", quotes and all.
             lit="\"\$${v}\""
-            if ! grep -F -- "$lit" "$f" | grep -qE '^[[:space:]]*safe_install_dir [0-7]{3} '; then
+            hits="$(grep -F -- "$lit" "$f")"
+            if ! grep -qE '^[[:space:]]*safe_install_dir [0-7]{3} ' <<<"$hits"; then
                 _tm_afail "${base} does not create \$${v} through safe_install_dir.
         That directory is app-owned, or has an app-owned parent, so install -d
         on it is an arbitrary chown+chmod the moment it is a symlink"
             fi
-            if grep -F -- "$lit" "$f" | grep -qE '^[[:space:]]*install -d '; then
+            if grep -qE '^[[:space:]]*install -d ' <<<"$hits"; then
                 _tm_afail "${base} still has a BARE install -d creating \$${v}.
         The guard exists and this call site bypasses it"
             fi
@@ -187,11 +188,11 @@ s_staging_is_root_owned_on_both_branches() {
         "assert_root_owned_path is called ${n} time(s) in Phase 5, not twice.
         BOTH branches stage a tree that root then executes; the offline branch
         has always been checked and the online one was not"
-    if printf '%s\n' "$phase5" | grep -qE 'WORK_DIR="/tmp'; then
+    if grep -qE 'WORK_DIR="/tmp' <<<"$phase5"; then
         _tm_afail "Phase 5 stages the source tree under /tmp again. A predictable
         name in a world-writable directory decides what root executes"
     fi
-    printf '%s\n' "$phase5" | grep -q 'mktemp -d' || _tm_afail \
+    grep -q 'mktemp -d' <<<"$phase5" || _tm_afail \
         "the online branch no longer creates its staging directory with mktemp -d.
         A fixed name can be pre-created by whoever gets there first, and
         mkdir -p on an existing directory leaves its ownership alone"

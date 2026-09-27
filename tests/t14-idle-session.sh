@@ -114,9 +114,9 @@ else:
     print("OK")
 PYEOF
 )"
-    printf '%s\n' "$out" | grep -q '^OK$' \
+    grep -q '^OK$' <<<"$out" \
         || _tm_afail "the session-extension guard is missing or bypassed: ${out}"
-    tm_note "$(printf '%s' "$out" | head -1)"
+    tm_note "$(sed -n 1p <<<"$out")"
     return 0
 }
 
@@ -247,7 +247,7 @@ case_upgrade_warns_when_config_outranks_the_default() {
         "the check does not say WHY the upgrade will not change it"
 
     # It must not be a blocker: an operator's own setting is not a defect.
-    grep -n "session idle timeout is" "$up" | grep -q "row WARN" \
+    grep -q "row WARN" <<<"$(grep -n "session idle timeout is" "$up")" \
         || _tm_afail "the timeout divergence must be a WARN, not a BLOCK or a bare note"
 
     tmp="$(mktemp -d)"

@@ -67,7 +67,7 @@ c_no_literals() {
     _css > "${TM_TMP}/css"
     tm_assert_eq "0" "$(_field "${TM_TMP}/css" literals_outside_tokens)" \
         "a colour literal is set outside the token blocks, so one theme will
-        not reach it: $(grep '^literal=' "${TM_TMP}/css" | head -3)"
+        not reach it: $(grep '^literal=' "${TM_TMP}/css" | sed -n 1,3p)"
     tm_assert_eq "2" "$(_field "${TM_TMP}/css" banner_default_literals)" \
         "the classification-banner default is not where it was. The banners are
         EXEMPT from the theme — their colours come from Settings"

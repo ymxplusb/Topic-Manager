@@ -102,7 +102,7 @@ PYEOF
     local f s
     for f in $FIXTURES; do
         s="$(_shell_answer "$UP" "${TM_TMP}/fx/${f}.yaml")"
-        tm_assert_eq "${f}=${s}" "$(printf '%s\n' "$out" | grep -m1 "^${f}=")" \
+        tm_assert_eq "${f}=${s}" "$(grep "^${f}=" <<<"$out" | sed -n 1p)" \
             "tm/auth.py and the scripts disagree about ${f}"
     done
 }
@@ -169,12 +169,12 @@ _block_from() {
 # was changed". Every mutating step's first line must come after the check.
 d_install_checks_before_any_change() {
     local check first=999999 n pat
-    check="$(grep -n 'LDAP_MISSING="$(ldap_config_missing' "$INSTALL_SH" | head -1 | cut -d: -f1)"
+    check="$(grep -n 'LDAP_MISSING="$(ldap_config_missing' "$INSTALL_SH" | sed -n 1p | cut -d: -f1)"
     tm_assert_nonempty "$check" "install.sh no longer checks an existing config.yaml for the directory keys"
     for pat in '^    DEBIAN_FRONTEND=noninteractive apt-get update' '^    apt_install_from_bundle ' \
                '^    useradd ' '^safe_install_dir ' '^"\$PYTHON" -m venv' '^rsync -a --delete' \
                '^    systemctl stop '; do
-        n="$(grep -nE "$pat" "$INSTALL_SH" | head -1 | cut -d: -f1)"
+        n="$(grep -nE "$pat" "$INSTALL_SH" | sed -n 1p | cut -d: -f1)"
         tm_assert_nonempty "$n" "anchor for a mutating step not found: ${pat}"
         [ "$n" -lt "$first" ] && first="$n"
     done

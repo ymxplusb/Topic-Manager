@@ -42,8 +42,22 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+DEFAULT_SET=false
 if [ "${#FILES[@]}" -eq 0 ]; then
-    while IFS= read -r f; do FILES+=("$f"); done < <(ls "${TM_TESTS_DIR}"/t[0-9]*.sh | sort)
+    DEFAULT_SET=true
+    while IFS= read -r f; do FILES+=("$f"); done < <(ls "${TM_TESTS_DIR}"/t[0-9]*.sh 2>/dev/null | sort)
+fi
+# Round 8 (gatekeeper): a run of NOTHING passed. The default set must be every
+# tests/t*.sh in the tree and at least one file; the tally below then requires
+# every file to have reported at least one case.
+if [ "${#FILES[@]}" -eq 0 ]; then
+    echo "run.sh: no test files to run — refusing to report a pass for nothing" >&2; exit 2
+fi
+if [ "$DEFAULT_SET" = true ]; then
+    TREE_N="$(find "$TM_TESTS_DIR" -maxdepth 1 -type f -name 't*.sh' | wc -l | tr -d ' ')"
+    if [ "$TREE_N" -ne "${#FILES[@]}" ]; then
+        echo "run.sh: the tree has ${TREE_N} tests/t*.sh file(s) but ${#FILES[@]} were selected to run" >&2; exit 2
+    fi
 fi
 
 if [ -t 1 ] && [ -z "${TM_NO_COLOUR:-}" ]; then
@@ -104,19 +118,29 @@ fi
 # ─── run ─────────────────────────────────────────────────────────────────────
 # TM_RESULTS_OUT lets tests/mutate.sh read the per-case verdicts, so a mutation
 # can be told apart from a mutation whose covering cases were all SKIPPED.
-TM_RESULTS="${TM_RESULTS_OUT:-$(mktemp "${TMPDIR:-/tmp}/tm-results.XXXXXX")}"
-: > "$TM_RESULTS"
+# Round 8 (gatekeeper): the verdict used to be counted FROM that file, so
+# TM_RESULTS_OUT=/dev/null counted 0 failures and 0 skips and bypassed
+# --strict. The runner now always tallies into its OWN file and only COPIES it
+# to TM_RESULTS_OUT at the end.
+TM_RESULTS="$(mktemp "${TMPDIR:-/tmp}/tm-results.XXXXXX")" || { echo "run.sh: mktemp failed" >&2; exit 2; }
 export TM_RESULTS
-[ -n "${TM_RESULTS_OUT:-}" ] || trap 'rm -f "$TM_RESULTS"' EXIT
+trap 'rm -f "$TM_RESULTS"' EXIT
 
 echo "${C_BLD}Topic Manager test suite${C_OFF}"
 echo "  script under test: $(basename "${TM_UPGRADE_SH:-${TM_REPO_ROOT}/install/upgrade-full.sh}")"
 echo "  files:             ${#FILES[@]}"
 
-ANY_FAIL=0; ANY_ERROR=0
+ANY_FAIL=0; ANY_ERROR=0; RAN=0
 for f in "${FILES[@]}"; do
+    before="$(wc -l < "$TM_RESULTS" | tr -d ' ')"
     bash "$f"
     rc=$?
+    RAN=$((RAN+1))
+    after="$(wc -l < "$TM_RESULTS" | tr -d ' ')"
+    if [ "$rc" -eq 0 ] && [ "$after" -le "$before" ]; then
+        ANY_ERROR=1
+        printf '  %sHARNESS ERROR%s in %s — it exited 0 and reported NO case\n' "$C_RED" "$C_OFF" "$(basename "$f")"
+    fi
     case "$rc" in
         0) ;;
         1) ANY_FAIL=1 ;;
@@ -158,6 +182,11 @@ if [ "$S" -gt 0 ]; then
 fi
 echo "${C_BLD}══════════════════════════════════════════════════════════════${C_OFF}"
 
+[ -z "${TM_RESULTS_OUT:-}" ] || cp -- "$TM_RESULTS" "$TM_RESULTS_OUT" 2>/dev/null || true
+if [ "$RAN" -ne "${#FILES[@]}" ] || [ $((P + F + S)) -lt "$RAN" ]; then
+    echo "  ${C_RED}run.sh: ${RAN} of ${#FILES[@]} file(s) ran and $((P + F + S)) case(s) were counted — no verdict${C_OFF}"
+    exit 2
+fi
 if [ "$ANY_ERROR" -eq 1 ]; then exit 2; fi
 if [ "$F" -gt 0 ] || [ "$ANY_FAIL" -eq 1 ]; then exit 1; fi
 if [ "$STRICT" = true ] && [ "$S" -gt 0 ]; then

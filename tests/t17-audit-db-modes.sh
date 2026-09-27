@@ -101,7 +101,7 @@ e_identical() {
         || _tm_afail "install.sh and upgrade-full.sh carry DIFFERENT copies of
         enforce_audit_db_modes. One definition, two call sites — a fix to one copy
         is a fix to one of the two routes onto a host:
-        $(diff "${TM_TMP}/up.fn" "${TM_TMP}/in.fn" | head -10)"
+        $(diff "${TM_TMP}/up.fn" "${TM_TMP}/in.fn" | sed -n 1,10p)"
 }
 tm_case "both-scripts-carry-the-same-enforce-function" none e_identical
 
@@ -223,12 +223,12 @@ tm_case "phase10-on-a-v1.0.x-baseline-ends-0600-0700" modes,chown p_phase10_ends
 # ─── where it is called, and in what order ───────────────────────────────────
 # The behaviour is proven above; these prove the scripts still CALL it, and
 # call it AFTER the thing that would otherwise undo it.
-_line() { grep -nF -- "$2" "$1" | head -1 | cut -d: -f1; }
+_line() { grep -nF -- "$2" "$1" | sed -n 1p | cut -d: -f1; }
 o_upgrade_order() {
     local replay cpdb enforce
     replay="$(_line "$UP" 'success "Re-applied recorded ownership/mode')"
     cpdb="$(_line "$UP" 'cp -a "${BACKUP_DIR}/data/tm.consistent.db" "${APP_HOME}/data/tm.db"')"
-    enforce="$(grep -n '^enforce_audit_db_modes$' "$UP" | head -1 | cut -d: -f1)"
+    enforce="$(grep -n '^enforce_audit_db_modes$' "$UP" | sed -n 1p | cut -d: -f1)"
     tm_assert_nonempty "$replay"  "anchor: the Phase 10 replay loop was not found"
     tm_assert_nonempty "$cpdb"    "anchor: the Phase 10 tm.db restore was not found"
     tm_assert_nonempty "$enforce" "Phase 10 no longer calls enforce_audit_db_modes — the
@@ -242,8 +242,8 @@ tm_case "upgrade-enforces-after-the-replay-and-the-restore" none o_upgrade_order
 o_restore_calls_it() {
     tm_extract_func "$UP" restore_from_backup > "${TM_TMP}/rfb"
     local loop call
-    loop="$(grep -n 'done < <(baseline_stream "$PERM_BASELINE")' "${TM_TMP}/rfb" | head -1 | cut -d: -f1)"
-    call="$(grep -n '^    enforce_audit_db_modes$' "${TM_TMP}/rfb" | head -1 | cut -d: -f1)"
+    loop="$(grep -n 'done < <(baseline_stream "$PERM_BASELINE")' "${TM_TMP}/rfb" | sed -n 1p | cut -d: -f1)"
+    call="$(grep -n '^    enforce_audit_db_modes$' "${TM_TMP}/rfb" | sed -n 1p | cut -d: -f1)"
     tm_assert_nonempty "$call" "restore_from_backup does not re-mode the audit
         database, so --restore and the automatic rollback put 0644 back"
     [ -n "$loop" ] && [ "$call" -gt "$loop" ] \
@@ -256,7 +256,7 @@ o_install() {
         || _tm_afail "install.sh no longer creates data/ 0700"
     local chownl call
     chownl="$(_line "$INSTALL_SH" 'chown -R "$APP_USER:$APP_USER" "$LOG_DIR" "$DATA_DIR"')"
-    call="$(grep -n '^enforce_audit_db_modes$' "$INSTALL_SH" | head -1 | cut -d: -f1)"
+    call="$(grep -n '^enforce_audit_db_modes$' "$INSTALL_SH" | sed -n 1p | cut -d: -f1)"
     tm_assert_nonempty "$call" "install.sh does not call enforce_audit_db_modes — a
         reinstall over a v1.0.x host leaves tm.db 0644"
     [ "$call" -gt "$chownl" ] || _tm_afail "install.sh enforces before its own recursive chown"

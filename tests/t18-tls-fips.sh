@@ -145,7 +145,7 @@ m_rewrites_stock() {
         tm_assert_rc 0 "$RC" "$(basename "$s"): the edit failed: $(cat "${TM_TMP}/out")"
         grep -Eq '^[[:space:]]*ssl_protocols TLSv1\.2 TLSv1\.3; # managed by Topic Manager' "${TM_TMP}/nginx.conf" \
             || _tm_afail "$(basename "$s"): ssl_protocols was not rewritten: $(grep ssl_protocols "${TM_TMP}/nginx.conf")"
-        grep -E '^[[:space:]]*ssl_protocols' "${TM_TMP}/nginx.conf" | grep -Eq 'TLSv1([^.]|$)|TLSv1\.1' \
+        grep -Eq 'TLSv1([^.]|$)|TLSv1\.1' <<<"$(grep -E '^[[:space:]]*ssl_protocols' "${TM_TMP}/nginx.conf")" \
             && _tm_afail "$(basename "$s"): TLSv1/TLSv1.1 is still enabled at the http level"
         tm_assert_grep "# ssl_protocols TLSv1;" "${TM_TMP}/nginx.conf" "$(basename "$s"): a COMMENTED line was rewritten"
         cmp -s "${TM_TMP}/orig.conf" "${TM_TMP}/nginx.conf.bak" \
@@ -267,7 +267,7 @@ m_wired_in() {
         || _tm_afail "the upgrade no longer manages nginx.conf's ssl_protocols"
     grep -qF 'cp -a /etc/nginx/nginx.conf "${BACKUP_DIR}/system/nginx.conf"' "$UP" \
         || _tm_afail "the upgrade's restore point does not hold nginx.conf, which it now edits"
-    tm_extract_func "$UP" restore_from_backup | grep -qF '"${BD}/system/nginx.conf" /etc/nginx/nginx.conf' \
+    grep -qF '"${BD}/system/nginx.conf" /etc/nginx/nginx.conf' <<<"$(tm_extract_func "$UP" restore_from_backup)" \
         || _tm_afail "restore_from_backup does not put nginx.conf back"
     grep -qE '^manage_nginx_ssl_protocols /etc/nginx/nginx.conf ' "$INSTALL_SH" \
         || _tm_afail "install.sh does not manage nginx.conf's ssl_protocols"

@@ -87,7 +87,7 @@ n_export_ignore() {
     command -v git >/dev/null 2>&1 || tm_die "git is required"
     local a
     for a in .claude/project.yml .work/WO-0001.json; do
-        git -C "$TM_REPO_ROOT" check-attr export-ignore "$a" | grep -q ': set$' \
+        grep -q ': set$' <<<"$(git -C "$TM_REPO_ROOT" check-attr export-ignore "$a")" \
             || _tm_afail "${a} is not export-ignored — git archive (the bundle, the CI release tarball) would ship it"
     done
 }

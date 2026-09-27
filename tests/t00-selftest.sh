@@ -162,4 +162,83 @@ s_harness_error_propagates() {
 }
 tm_case "runner-exits-2-on-a-broken-extraction" none s_harness_error_propagates
 
+
+# ── round 8 (gatekeeper): the runner cannot pass on nothing ──────────────────
+s_strict_ignores_results_out() {
+    # TM_RESULTS_OUT=/dev/null used to be the file the verdict was COUNTED
+    # from: 0 fails, 0 skips, --strict bypassed.
+    _mk_fixture "$TM_TMP/t99-fake5.sh" modes 'tm_assert_eq a b "unreachable"'
+    local rc=0
+    _runner TM_FORCE_NO_MODES=1 TM_RESULTS_OUT=/dev/null -- --strict "$TM_TMP/t99-fake5.sh" >"$TM_TMP/r5" 2>&1 || rc=$?
+    tm_assert_rc 1 "$rc" "TM_RESULTS_OUT=/dev/null bypassed --strict"
+    tm_assert_grep '1 skipped' "$TM_TMP/r5" "the runner did not count the skip itself"
+}
+tm_case "runner-strict-counts-its-own-tally" none s_strict_ignores_results_out
+
+s_unknown_requirement_fails() {
+    _mk_fixture "$TM_TMP/t99-fake6.sh" nodee 'true'
+    local rc=0
+    _runner -- "$TM_TMP/t99-fake6.sh" >"$TM_TMP/r6" 2>&1 || rc=$?
+    tm_assert_rc 2 "$rc" "a typo'd requirement printed HARNESS ERROR and then the run passed"
+    tm_assert_nogrep '1 passed' "$TM_TMP/r6" "the case with an unknown requirement was run and counted as a pass"
+}
+tm_case "runner-fails-on-an-unknown-requirement" none s_unknown_requirement_fails
+
+_copy_runner() {   # _copy_runner <dir> — run.sh and lib/ alone, in a scratch tests/ dir
+    mkdir -p "$1/tests/lib"
+    cp "${TM_TESTS_DIR}/run.sh" "$1/tests/"
+    cp "${TM_TESTS_DIR}/lib/"* "$1/tests/lib/"
+}
+s_zero_files_is_not_a_pass() {
+    _copy_runner "$TM_TMP/empty"
+    local rc=0
+    env -u TM_RESULTS -u TM_TMP -u TM_TESTS_DIR -u TM_REPO_ROOT TM_NO_COLOUR=1 \
+        bash "$TM_TMP/empty/tests/run.sh" >"$TM_TMP/r7" 2>&1 || rc=$?
+    tm_assert_rc 2 "$rc" "a suite with ZERO test files reported: $(cat "$TM_TMP/r7")"
+}
+tm_case "runner-refuses-a-suite-with-no-files" none s_zero_files_is_not_a_pass
+
+s_file_without_cases() {
+    printf '%s\n' 'set -uo pipefail' '. "${TM_TESTS_DIR}/lib/harness.sh"' 'tm_header "no cases"' 'tm_finish' > "$TM_TMP/t99-fake8.sh"
+    local rc=0
+    _runner -- "$TM_TMP/t99-fake8.sh" >"$TM_TMP/r8" 2>&1 || rc=$?
+    tm_assert_rc 2 "$rc" "a test file that ran NO case was accepted"
+}
+tm_case "runner-refuses-a-file-with-no-cases" none s_file_without_cases
+
+s_default_set_is_the_tree() {
+    _copy_runner "$TM_TMP/tree"
+    _mk_fixture "$TM_TMP/tree/tests/t01-ok.sh" none 'true'
+    _mk_fixture "$TM_TMP/tree/tests/tx-not-selected.sh" none 'true'
+    local rc=0
+    env -u TM_RESULTS -u TM_TMP -u TM_TESTS_DIR -u TM_REPO_ROOT TM_NO_COLOUR=1 \
+        bash "$TM_TMP/tree/tests/run.sh" >"$TM_TMP/r9" 2>&1 || rc=$?
+    tm_assert_rc 2 "$rc" "a tests/t*.sh file the default run did not select went unnoticed"
+}
+tm_case "runner-default-set-is-every-test-file" none s_default_set_is_the_tree
+
+# ── round 8 (gatekeeper B1): no early-exit consumer at the end of a pipe ─────
+s_pipefail_lint_green_on_tree() {
+    local out rc=0
+    out="$(bash "${TM_REPO_ROOT}/tools/check-pipefail-consumers.sh" "${TM_TESTS_DIR}" 2>&1)" || rc=$?
+    tm_assert_rc 0 "$rc" "the test suite has an early-exit consumer under pipefail: ${out}"
+}
+tm_case "no-grep-q-or-head-at-the-end-of-a-pipe" none s_pipefail_lint_green_on_tree
+
+s_pipefail_lint_goes_red() {
+    # The shapes are assembled with a variable pipe character so that this
+    # file itself does not contain them (the lint scans it too).
+    local shape rc P='|'
+    for shape in "tm_extract_func \"\$UP\" f ${P} grep -q x" "x ${P} grep -E -q y" "x ${P} head -1" \
+                 "x ${P} grep -m1 y" "x ${P} awk '{exit}'"; do
+        printf '%s\n' "$shape" > "$TM_TMP/lint.sh"
+        rc=0; bash "${TM_REPO_ROOT}/tools/check-pipefail-consumers.sh" "$TM_TMP/lint.sh" >/dev/null 2>&1 || rc=$?
+        tm_assert_rc 1 "$rc" "the lint did not flag: ${shape}"
+    done
+    printf '%s\n' "# x ${P} grep -q y" 'grep -q y <<<"$x"' "x ${P} sed -n 1p" > "$TM_TMP/lint.sh"
+    rc=0; bash "${TM_REPO_ROOT}/tools/check-pipefail-consumers.sh" "$TM_TMP/lint.sh" >/dev/null 2>&1 || rc=$?
+    tm_assert_rc 0 "$rc" "the lint flagged a safe shape"
+}
+tm_case "the-pipefail-lint-goes-red-on-each-shape" none s_pipefail_lint_goes_red
+
 tm_finish

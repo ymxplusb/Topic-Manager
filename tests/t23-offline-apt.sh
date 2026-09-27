@@ -173,7 +173,7 @@ a_fips_by_version() {
     tm_assert_eq -1 "$(_fips_stanza openssh-server)" "a lower-case 'fips' version was not recognised as FIPS"
     tm_assert_eq "" "$(_fips_stanza python3.12)" "a non-FIPS package was pinned away from the bundle, so it could never be upgraded"
     tm_assert_eq "" "$(_fips_stanza libgnutls30t64)" "a package that is NOT installed (config-files only) was treated as installed"
-    awk '/^Package: libssl3t64$/ { getline; print; exit }' "${TM_TMP}/seen.prefs" | grep -qx 'Pin: origin ""' \
+    grep -qx 'Pin: origin ""' <<<"$(awk '/^Package: libssl3t64$/ { getline; print; exit }' "${TM_TMP}/seen.prefs")" \
         || _tm_afail "the FIPS pin does not target the bundle's copy (origin \"\"): $(cat "${TM_TMP}/seen.prefs")"
 }
 tm_case "an-installed-fips-version-pins-the-bundle-copy-at-minus-1" none a_fips_by_version
@@ -257,8 +257,8 @@ a_plan_summary() {
     tm_assert_grep "NEW (1): python3.12-venv=3.12.3-1ubuntu0.17;" "${TM_TMP}/out" "the plan does not name what is NEWLY installed"
     tm_assert_grep "UPGRADE (1): python3.12=3.12.3-1ubuntu0.17 (from 3.12.3-1ubuntu0.13)" "${TM_TMP}/out" "the plan does not name what is UPGRADED"
     local ln_plan ln_inst
-    ln_plan="$(grep -n 'Offline package plan' "${TM_TMP}/out" | head -1 | cut -d: -f1)"
-    ln_inst="$(grep -n 'APT-INSTALL-RAN' "${TM_TMP}/out" | head -1 | cut -d: -f1)"
+    ln_plan="$(grep -n 'Offline package plan' "${TM_TMP}/out" | sed -n 1p | cut -d: -f1)"
+    ln_inst="$(grep -n 'APT-INSTALL-RAN' "${TM_TMP}/out" | sed -n 1p | cut -d: -f1)"
     [ -n "$ln_plan" ] && [ -n "$ln_inst" ] && [ "$ln_plan" -lt "$ln_inst" ] \
         || _tm_afail "the plan was not printed BEFORE the install ran: $(cat "${TM_TMP}/out")"
     grep -q -- ' -s install .*python3-venv' "${TM_TMP}/calls" || _tm_afail "the plan was not simulated with the same request"

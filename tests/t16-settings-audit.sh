@@ -108,7 +108,7 @@ _run() {   # _run '<json array of payloads>' [mode]
         TM_CLUSTERS_DIR="${TM_TMP}/clusters.d" TM_CLUSTER_CERT_DIR="${TM_TMP}/cluster-certs" \
         "$PY" "${TM_TMP}/probe.py" "$1" 2>&1 | tr -d '\r'
 }
-_field() { printf '%s\n' "$1" | grep -m1 "^${2}=" | cut -d= -f2- ; }
+_field() { grep "^${2}=" <<<"$1" | sed -n 1p | cut -d= -f2- ; }
 
 a_update_is_audited() {
     _setup
