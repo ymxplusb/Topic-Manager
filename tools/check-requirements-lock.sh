@@ -67,3 +67,26 @@ if fail:
 print("check-requirements-lock: %d packages locked (%d direct pins agree), every one hash-pinned."
       % (len(entries), len(pins)))
 PYCHK
+rc=$?
+[[ $rc -eq 0 ]] || exit "$rc"
+
+# ── completeness (round 8, gatekeeper) ───────────────────────────────────────
+# The checks above prove STRUCTURE and AGREEMENT with the direct pins. They
+# cannot see a transitive package the lock simply lacks. That needs the
+# resolved set, which needs PyPI: resolved with the lock's own generator
+# (--check-set compares name==version, not the hash lists). Offline, say so —
+# never pass silently.
+GEN="${ROOT}/tools/gen-requirements-lock.py"
+[[ -f "$GEN" ]] || GEN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gen-requirements-lock.py"
+if ! command -v curl >/dev/null 2>&1 || ! curl -sfI --max-time 8 -o /dev/null https://pypi.org/simple/pip/; then
+    echo "check-requirements-lock: lock completeness NOT verified (offline) — structure and agreement only."
+    exit 0
+fi
+out="$("$PY" "$GEN" --check-set --root "$(cygpath -m "$ROOT" 2>/dev/null || printf '%s' "$ROOT")" 2>&1)"
+crc=$?
+out="$(grep -v '^\[notice\]' <<<"$out" | sed '/^$/d')"
+case "$crc" in
+    0) echo "check-requirements-lock: ${out##*$'\n'}" ;;
+    1) printf '%s\n' "$out"; echo "check-requirements-lock: the lock does not cover the resolved set — regenerate it."; exit 1 ;;
+    *) printf '%s\n' "$out"; echo "check-requirements-lock: lock completeness NOT verified (resolution failed, exit ${crc}) — refusing to pass."; exit 3 ;;
+esac

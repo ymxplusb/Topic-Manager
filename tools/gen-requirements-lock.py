@@ -34,6 +34,8 @@ import tempfile
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if '--root' in sys.argv:          # the tree to read (tools/check-requirements-lock.sh --root)
+    ROOT = sys.argv[sys.argv.index('--root') + 1]
 REQ = os.path.join(ROOT, 'requirements.txt')
 LOCK = os.path.join(ROOT, 'requirements.lock')
 PLATFORMS = ['manylinux_2_34_x86_64', 'manylinux_2_28_x86_64',
@@ -84,7 +86,39 @@ def render(pins):
     return '\n'.join(out) + '\n'
 
 
+def lock_set():
+    """The name==version set requirements.lock carries (names normalised)."""
+    import re
+    text = open(LOCK, encoding='utf-8').read().replace('\r\n', '\n')
+    out = set()
+    for line in text.splitlines():
+        m = re.match(r'^([A-Za-z0-9._-]+)==([^\s\\]+)', line)
+        if m:
+            out.add((re.sub(r'[-_.]+', '-', m.group(1)).lower(), m.group(2)))
+    return out
+
+
 def main():
+    if '--check-set' in sys.argv:
+        # Round 8 (gatekeeper): does the lock cover the WHOLE resolved set?
+        # Compares name==version only (not the wheel-hash lists, which grow
+        # when PyPI adds a wheel for an existing version). Needs PyPI.
+        import re
+        try:
+            want = {(re.sub(r'[-_.]+', '-', n).lower(), v) for n, v in resolve()}
+        except Exception as e:  # no network, pip failure: cannot say
+            print('could not resolve requirements.txt: %s' % e)
+            sys.exit(3)
+        have = lock_set()
+        missing, extra = sorted(want - have), sorted(have - want)
+        for n, v in missing:
+            print('MISSING from requirements.lock: %s==%s (resolved from requirements.txt)' % (n, v))
+        for n, v in extra:
+            print('NOT in the resolved set: %s==%s' % (n, v))
+        if missing or extra:
+            sys.exit(1)
+        print('requirements.lock covers the resolved set (%d packages)' % len(want))
+        return
     text = render(resolve())
     if '--check' in sys.argv:
         cur = open(LOCK, encoding='utf-8').read() if os.path.exists(LOCK) else ''

@@ -31,7 +31,14 @@ REPORT_ONLY=false
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; NC=$'\033[0m'
 
 command -v curl >/dev/null || { echo "sca-check: curl is required" >&2; exit 3; }
+PY="${PYTHON:-python3}"
+"$PY" -c 'import json' >/dev/null 2>&1 || PY=python
+"$PY" -c 'import json' >/dev/null 2>&1 || { echo "sca-check: python is required to read OSV answers" >&2; exit 3; }
 [[ -f "$REQ" ]] || { echo "sca-check: ${REQ} not found" >&2; exit 3; }
+# Round 8 (gatekeeper): with requirements.lock missing the gate used to scan
+# only the direct pins and pass. The lock is what the installers install.
+LOCK="${REPO_ROOT}/requirements.lock"
+[[ -f "$LOCK" && -r "$LOCK" ]] || { echo "${RED}sca-check: ${LOCK} is missing or unreadable — the transitive packages cannot be checked; REFUSING to pass.${NC}" >&2; exit 3; }
 
 # Fail loudly if OSV is unreachable. A gate that silently passes because the
 # vulnerability database could not be reached is not a gate.
@@ -68,6 +75,29 @@ package_exists() {
     esac
 }
 
+# osv_verdict <OSV /v1/query response> — prints CLEAN for `{}` or an empty
+# "vulns" list, "VULN <id> <id>..." when "vulns" holds ANY entry (an entry
+# with no id still counts, as "(no-id)"), and BAD for anything that is not a
+# JSON object of that shape.
+osv_verdict() {
+    "$PY" -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print("BAD"); sys.exit(0)
+if not isinstance(d, dict) or any(k not in ("vulns", "next_page_token") for k in d):
+    print("BAD"); sys.exit(0)
+v = d.get("vulns", [])
+if not isinstance(v, list):
+    print("BAD"); sys.exit(0)
+if not v:
+    print("CLEAN"); sys.exit(0)
+ids = sorted({(x.get("id") if isinstance(x, dict) else None) or "(no-id)" for x in v})
+print("VULN " + " ".join(ids))
+' <<<"$1" 2>/dev/null || echo BAD
+}
+
 query_osv() {  # query_osv <ecosystem> <name> <version>
     local eco="$1" name="$2" ver="$3" resp rc ids
     resp="$(curl -sS --max-time 25 -X POST \
@@ -85,21 +115,20 @@ query_osv() {  # query_osv <ecosystem> <name> <version>
         printf '  %-22s %-12s %bSKIPPED%b  (empty response from OSV)\n' "$name" "$ver" "$YELLOW" "$NC"
         SKIPPED=$((SKIPPED+1)); return 0
     fi
-    # Shape check. A well-formed OSV answer is either `{}` (nothing known) or an
-    # object carrying "vulns". Anything else — an error object, an HTML error
-    # page, a half-received body — must not be read as clean.
-    local trimmed; trimmed="$(tr -d '[:space:]' <<<"$resp")"
-    if [[ "$trimmed" != "{}" ]] && ! grep -q '"vulns"' <<<"$resp"; then
-        printf '  %-22s %-12s %bSKIPPED%b  (unrecognised OSV response shape)\n' "$name" "$ver" "$YELLOW" "$NC"
-        SKIPPED=$((SKIPPED+1)); return 0
-    fi
-
-    ids="$(grep -o '"\(CVE\|GHSA\|PYSEC\|GO\|OSV\|RUSTSEC\|MAL\)-[A-Za-z0-9._-]*"' <<<"$resp" \
-           | tr -d '"' | sort -u | tr '\n' ' ')"
-    if [[ -n "$ids" ]]; then
-        printf '  %-22s %-12s %bVULNERABLE%b  %s\n' "$name" "$ver" "$RED" "$NC" "$ids"
-        VULN=$((VULN+1)); return 0
-    fi
+    # Parsed as JSON (round 8, gatekeeper): the verdict used to grep for IDs
+    # with a KNOWN PREFIX (CVE, GHSA, PYSEC, ...), so an advisory whose ID
+    # prefix was not on that list — BIT-, a new database — was reported CLEAN.
+    # Now ANY entry in "vulns" is a finding, whatever its ID.
+    local verdict; verdict="$(osv_verdict "$resp")"
+    case "$verdict" in
+        CLEAN) ;;
+        VULN*)
+            printf '  %-22s %-12s %bVULNERABLE%b  %s\n' "$name" "$ver" "$RED" "$NC" "${verdict#VULN }"
+            VULN=$((VULN+1)); return 0 ;;
+        *)  # an error object, an HTML page, a half-received body: never clean
+            printf '  %-22s %-12s %bSKIPPED%b  (unrecognised OSV response shape)\n' "$name" "$ver" "$YELLOW" "$NC"
+            SKIPPED=$((SKIPPED+1)); return 0 ;;
+    esac
 
     # Clean per OSV — but only trust that if the package genuinely exists.
     package_exists "$eco" "$name" "$ver"
@@ -139,8 +168,7 @@ fi
 # package the installers actually install (Jinja2, MarkupSafe, cffi, ...);
 # a vulnerable dependency of a dependency was invisible while only the seven
 # direct pins were queried.
-LOCK="${REPO_ROOT}/requirements.lock"
-if [[ -f "$LOCK" ]]; then
+if true; then     # the lock's presence was required at the top
     echo
     echo "── Transitive pins (requirements.lock) ──────────────────────────"
     LPINS=0

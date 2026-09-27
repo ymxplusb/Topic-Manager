@@ -78,6 +78,12 @@ PATTERNS = [
     # ... secret-store paths and the personal code namespace.
     ("secret-store path",      r"\b(creds|secret|kv)/(apps|data|hooks|metadata|infra)/"),
     ("personal namespace",     "james" + r"\.rodman/"),
+    # Round 8 (gatekeeper): IPv6 unique-local (the fd prefix, /8) and
+    # link-local (fe8 to feb, /10) addresses: an address shape, >= 3 groups.
+    # The labels and this comment do not spell an address, so this file
+    # does not match itself.
+    ("private address (IPv6 unique-local)",   r"\bfd[0-9a-f]{2}(:[0-9a-f]{0,4}){2,7}"),
+    ("link-local address (IPv6)",             r"\bfe[89ab][0-9a-f](:[0-9a-f]{0,4}){2,7}"),
 ]
 RX = [(label, re.compile(p, re.I)) for label, p in PATTERNS]
 
@@ -87,15 +93,22 @@ INTERNAL = (".claude/", ".work/", ".gitlab-ci.yml")
 FORBIDDEN_IN_BUNDLE = re.compile(
     r"(^|/)(\.claude|\.work|\.git|\.github)(/|$)|(^|/)docs/SonarQube-Report-[^/]*$|(^|/)\.gitlab-ci\.yml$")
 
+# Third-party archives (wheels, .debs, compressed indexes): not ours to scan,
+# and their compressed bytes are noise when read as text.
+ARCHIVES = (".whl", ".deb", ".tar.gz", ".tgz", ".zip", ".gz")
 findings = []
 scanned = 0
 
 def scan(rel, data):
     global scanned
+    # Round 8 (gatekeeper): a file that is not valid UTF-8 used to be SKIPPED,
+    # so one stray byte hid every tie in it. It is now read byte-for-byte
+    # (latin-1 maps every byte), and still matched. Third-party archives are
+    # left out by the callers, never by decoding.
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
-        return                      # images, icons, wheels, .debs
+        text = data.decode("latin-1")
     scanned += 1
     for n, line in enumerate(text.splitlines(), 1):
         for label, rx in RX:
@@ -108,7 +121,7 @@ if mode == "repo":
         if rel.startswith(INTERNAL):
             continue
         path = os.path.join(target, rel)
-        if os.path.isfile(path):
+        if os.path.isfile(path) and not rel.endswith(ARCHIVES):
             scan(rel, open(path, "rb").read())
 elif mode == "dir":
     for dirpath, dirnames, filenames in os.walk(target):
@@ -116,18 +129,26 @@ elif mode == "dir":
         for f in filenames:
             path = os.path.join(dirpath, f)
             rel = os.path.relpath(path, target).replace(os.sep, "/")
-            scan(rel, open(path, "rb").read())
+            if not rel.endswith(ARCHIVES):
+                scan(rel, open(path, "rb").read())
 else:
     with tarfile.open(target, "r:*") as tf:
         for m in tf.getmembers():
-            name = m.name.lstrip("./")
+            # Round 8 (gatekeeper): lstrip("./") stripped the DOT of a leading
+            # ".work/" too, so a FLAT bundle (no top-level directory) carrying
+            # .work/ passed. Only a literal "./" prefix is removed now, and the
+            # rule matches the component at any depth.
+            name = m.name
+            while name.startswith("./"):
+                name = name[2:]
+            name = name.lstrip("/")
             inner = name.split("/", 1)[1] if "/" in name else name
-            if FORBIDDEN_IN_BUNDLE.search(inner) or FORBIDDEN_IN_BUNDLE.search(name):
+            if FORBIDDEN_IN_BUNDLE.search(name):
                 findings.append("%s: internal or process file inside the bundle" % name)
                 continue
             if m.isfile():
                 data = tf.extractfile(m).read()
-                if inner.endswith((".whl", ".deb", ".tar.gz", ".zip")):
+                if inner.endswith(ARCHIVES):
                     continue        # third-party archives: not ours to scan
                 scan(name, data)
 

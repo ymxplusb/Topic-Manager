@@ -179,4 +179,35 @@ p_leaky_bundle_is_deleted() {
 }
 tm_case "a-bundle-that-leaks-is-deleted-not-shipped" none p_leaky_bundle_is_deleted
 
+
+# Round 8 (gatekeeper): IPv6 private/link-local addresses, a file that is not
+# valid UTF-8 (it used to be skipped), and a FLAT bundle carrying .work/.
+n_round8_blind_spots() {
+    local d="${TM_TMP}/r8" P
+    mkdir -p "$d/clean" "$d/ula" "$d/ll" "$d/bin"
+    printf 'nothing to see\n' > "$d/clean/a.txt"
+    bash "$GATE" --dir "$d/clean" > "${TM_TMP}/out" 2>&1 || _tm_afail "a clean directory failed: $(cat "${TM_TMP}/out")"
+    P='fd12:3456'; printf 'broker at %s:789a::1\n' "$P" > "$d/ula/a.txt"
+    bash "$GATE" --dir "$d/ula" > "${TM_TMP}/out" 2>&1 && _tm_afail "an IPv6 unique-local address passed"
+    tm_assert_grep "IPv6 unique-local" "${TM_TMP}/out" "the ULA address was not named"
+    P='fe80:'; printf 'gateway %s:1ff:fe23:4567:890a\n' "$P" > "$d/ll/a.txt"
+    bash "$GATE" --dir "$d/ll" > "${TM_TMP}/out" 2>&1 && _tm_afail "an IPv6 link-local address passed"
+    tm_assert_grep "link-local address" "${TM_TMP}/out" "the link-local address was not named"
+    P='192.168'; printf 'ok \377\376 then %s.7.9\n' "$P" > "$d/bin/a.dat"
+    bash "$GATE" --dir "$d/bin" > "${TM_TMP}/out" 2>&1 && _tm_afail "a tie inside a file that is not valid UTF-8 passed (it was skipped)"
+    tm_assert_grep "a.dat:1: private address" "${TM_TMP}/out" "the non-UTF-8 file was not scanned"
+}
+tm_case "ipv6-private-and-non-utf8-ties-are-caught" none n_round8_blind_spots
+
+n_flat_bundle() {
+    local d="${TM_TMP}/flat"
+    mkdir -p "$d/.work"
+    printf '{}\n' > "$d/.work/WO-0001.json"; printf 'readme\n' > "$d/README.md"
+    ( cd "$d" && tar czf "${TM_TMP}/flat.tgz" .work README.md ) || tm_die "could not build the flat bundle"
+    bash "$GATE" --bundle "${TM_TMP}/flat.tgz" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "a FLAT bundle (no top-level directory) carrying .work/ passed"
+    tm_assert_grep ".work/WO-0001.json: internal or process file" "${TM_TMP}/out" "the flat .work/ was not named"
+}
+tm_case "a-flat-bundle-carrying-work-is-refused" none n_flat_bundle
+
 tm_finish

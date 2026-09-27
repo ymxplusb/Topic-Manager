@@ -66,8 +66,11 @@ surfaces:
       token on the same image. Every ?v= in the repo MUST move together:
       index.html (14), TopBar.js (1), AboutModal.js (1) = 16 tokens, ONE
       distinct value, derived from VERSION as major*1000+minor*100+patch
-      (1.1.0 -> 1100). tools/check-version-surfaces.sh enforces both. (The
-      v1.1.0 brief said 18 tokens; 16 were measured.)
+      (1.1.0 -> 1100). tools/check-version-surfaces.sh ENFORCES all of it
+      since round 8: EXACTLY 16 tokens (EXPECTED_TOKENS; adding or removing
+      a cache-busted asset is a deliberate edit of that number), every token
+      digits only, one value. (The v1.1.0 brief said 18 tokens; 16 were
+      measured.)
   - path: index.html
     note: "cache-bust token ?v=NNNN on every script/style — MUST increment per release"
   - path: docs/INSTALL.md
@@ -88,11 +91,13 @@ surfaces:
       one of them. Found 2026-09-02 (v1.0.5): the list named 6 of the 10
       actions then in the code — SERVICE_RESTART_THROTTLED, CREATE, DELETE and
       UPDATE_CONFIG were absent, so a compliance reader was given an
-      undercount. It now lists all 15. Re-derive the set with the AST, never
-      with grep: the action is the THIRD POSITIONAL ARG and sits on the line
-      AFTER log_action( at most call sites, so a line-oriented grep sees 6 of
-      15 and a multi-line regex truncated CLUSTER_CREATE to "STER_CREATE"
-      while still returning a count of 15 — a right total made of a wrong set.
+      undercount. It now lists all 16 (re-derived with the AST below on
+      2026-09-26, round 8; SETTINGS_UPDATE was the 16th). Re-derive the set
+      with the AST, never with grep: the action is the THIRD POSITIONAL ARG
+      and sits on the line AFTER log_action( at most call sites, so a
+      line-oriented grep saw 6 of 15 and a multi-line regex truncated
+      CLUSTER_CREATE to "STER_CREATE" while still returning a count of 15 — a
+      right total made of a wrong set.
       Both were tried on 2026-09-02 and both were wrong. Use:
       python3 -c "import ast;t=ast.parse(open('tm/routes.py').read());
       print(sorted({n.args[2].value for n in ast.walk(t)
@@ -223,8 +228,10 @@ gates:
       syntax error ships straight to the browser as a blank page.
   - name: config-example
     cmd: "bash tools/check-config-example.sh"
-    verified: 2026-08-30
+    verified: 2026-09-26
     note: >-
+      ROUND 8: a required key present with no value (`port:`) or an empty
+      string fails; it passed.
       Asserts the example carries every section and key the app actually reads,
       and that its secret_key is still a placeholder. REPLACED the old
       `yaml.safe_load(...)` gate, which gatekeeper proved passes on a ZERO-BYTE
@@ -241,8 +248,11 @@ gates:
       bash -n still exited 0. Was prose in gate_verification; now a real gate.
   - name: sbom-consistency
     cmd: "bash tools/check-sbom-consistency.sh"
-    verified: 2026-08-30
+    verified: 2026-09-26
     note: >-
+      ROUND 8: SBOM.md's transitive rows are held to requirements.lock (every
+      locked package not in requirements.txt must be visible at the locked
+      version); they were read and ignored.
       The same dependency facts live in FOUR places — requirements.txt (the
       source of truth), SBOM.md, NOTICES.md and the About dialog's table in
       app/components/modals/AboutModal.js. Nothing forced them to agree and all
@@ -255,9 +265,12 @@ gates:
       reading that as current produced six false failures on the first run.
   - name: sca
     cmd: "bash tools/sca-check.sh"
-    verified: 2026-08-30
+    verified: 2026-09-26
     requires_network: "api.osv.dev"
     note: >-
+      ROUND 8: OSV answers are parsed as JSON and ANY vulns entry is a
+      finding, whatever its ID prefix (a prefix allowlist reported unknown
+      prefixes CLEAN); a missing or unreadable requirements.lock is exit 3.
       Queries OSV.dev for every == pin in requirements.txt plus the Vue pin in
       install/upgrade-full.sh. Exits 1 on any advisory, 2 if any package could
       not be checked, 3 if OSV is unreachable — it will not report a pass it did
@@ -282,6 +295,9 @@ gates:
     cmd: "bash tools/check-env-neutral.sh   # --bundle <tgz> for an offline bundle"
     verified: 2026-09-26
     note: >-
+      ROUND 8: non-UTF-8 files are scanned byte-for-byte (they were skipped);
+      IPv6 unique-local and link-local addresses are ties; a FLAT bundle with
+      .work/ at its root is refused (lstrip("./") had eaten the dot).
       No site host names, private addresses, account names, CA name or
       workstation paths in the tracked tree (minus .claude/ and .work/, which
       are export-ignored and never ship). In --bundle mode also refuses
@@ -294,18 +310,23 @@ gates:
       Every surface in surfaces: (incl. tm/VERSION, the PPSM pair, headers,
       README/INSTALL/SBOM, the newest CHANGELOG section) equals VERSION, and
       all 16 ?v= tokens equal the derived token. Its first run reported 13
-      stale surfaces against VERSION 1.0.11. Red-proofed in t22.
+      stale surfaces against VERSION 1.0.11. Red-proofed in t22 — since
+      round 8 also on a REMOVED token and a non-numeric one.
   - name: requirements-lock
     cmd: "bash tools/check-requirements-lock.sh"
     verified: 2026-09-26
     note: >-
+      ROUND 8: with PyPI reachable it also runs gen-requirements-lock.py
+      --check-set (the resolved name==version set must equal the lock's);
+      offline it prints "lock completeness NOT verified (offline)" and checks
+      structure and agreement only — it never passes silently.
       requirements.lock (tools/gen-requirements-lock.py) pins every Python
       package incl. transitive ones with the sha256 of every published wheel;
       every installer uses it with --require-hashes --only-binary :all:. The
       gate holds it to requirements.txt and refuses unhashed/malformed/duplicate
       entries. After changing a pin: regenerate, commit, re-run sca (which now
       queries the transitive pins too). Red-proofed in t25.
-  - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-09-26, note: "t00-t25. Round 2, 2026-09-26: Linux host via --remote --strict (ships git archive HEAD) 210+ pass / 0 fail, only the 'needs node' cases skip (node absent there; the workstation run covers them). Mutation controls M01-M107 (tests/mutate.sh --remote): all killed except 4 documented equivalents. Round 3, 2026-09-26 (offline apt policy): --remote --strict 229 pass / 0 fail / 20 skip (all needs node); M01-M142 --remote: 136 killed, 0 survived, 6 documented equivalents (M14, M45, M87, M103, M141, M142). Round 4: --remote --strict and M01-M167, see WO-0003 builder.round4. t23's real-apt cases need the 'apt' requirement and its prompt cases 'pty' (both Linux only; they SKIP on the workstation). Workstation-only artefact: t12's route case can fail under Git Bash (MSYS path conversion); passes on Linux and CI." }
+  - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-09-26, note: "t00-t27 (28 files). Round 8 (gatekeeper): the runner refuses zero files, a default set that is not every tests/t*.sh, a file that reports no case, and an unknown requirement (all exit 2); --strict counts its OWN tally (TM_RESULTS_OUT is only a copy); no `| grep -q` / `| grep -m` / `| head` / awk-exit consumer at the end of a pipe in tests/ (tools/check-pipefail-consumers.sh, run by t00) after a SIGPIPE race false-failed t24 in 2 of 3 fresh remote runs. Round 2, 2026-09-26: Linux host via --remote --strict (ships git archive HEAD) 210+ pass / 0 fail, only the 'needs node' cases skip (node absent there; the workstation run covers them). Mutation controls M01-M107 (tests/mutate.sh --remote): all killed except 4 documented equivalents. Round 3, 2026-09-26 (offline apt policy): --remote --strict 229 pass / 0 fail / 20 skip (all needs node); M01-M142 --remote: 136 killed, 0 survived, 6 documented equivalents (M14, M45, M87, M103, M141, M142). Round 4: --remote --strict and M01-M167, see WO-0003 builder.round4. t23's real-apt cases need the 'apt' requirement and its prompt cases 'pty' (both Linux only; they SKIP on the workstation). Workstation-only artefact: t12's route case can fail under Git Bash (MSYS path conversion); passes on Linux and CI." }
 
 gate_verification:
   - "A gate must assert its own COVERAGE, not just agreement. Guarding on
@@ -589,7 +610,7 @@ hazards:
 
   - id: no-ci-no-tests
     note: >-
-      SUPERSEDED: CI on tags and a test suite (t00-t22) now exist. What
+      SUPERSEDED: CI on tags and a test suite (t00-t27) now exist. What
       remains true: nothing renders the frontend or runs install.sh on a clean
       host automatically — render proof and a from-scratch install are still
       manual, and the Linux-only mode cases need --remote.
@@ -700,7 +721,7 @@ principles:
      A principle that carries a number is a principle with a shelf life. The
      number lives in promote.prod.running_version and NOWHERE else; this
      principle states only the check: curl -sk https://192.168.202.90/api/health"
-  - "CI runs on tags only (ci-templates); the test suite is tests/ (t00-t22). Never report that CI passed or that tests
+  - "CI runs on tags only (ci-templates); the test suite is tests/ (t00-t27, 28 files). Never report that CI passed or that tests
      are green without saying exactly which declared gates ran, where (workstation, --remote Linux host, CI) and what skipped."
   - "Every authenticated user is a Kafka admin by design. There is no role
      separation — 'authenticated' and 'can delete any topic' are the same thing."

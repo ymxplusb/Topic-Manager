@@ -164,6 +164,39 @@ if sbom is not None:
             found[name.lower()] = ver
 compare("SBOM.md", "SBOM.md", found)
 
+# ── SBOM.md transitive rows vs requirements.lock (round 8, gatekeeper) ──────
+# The rows of "Transitive Python dependencies (requirements.lock)" were read
+# and then ignored ("extra components are fine"), so a transitive version in
+# the SBOM could say anything. requirements.lock is their source of truth:
+# every package it carries that requirements.txt does not must be VISIBLE in
+# SBOM.md at the locked version.
+def norm(n):
+    return re.sub(r"[-_.]+", "-", n).lower()
+lock_src = read("requirements.lock")
+if lock_src is None:
+    print("FAIL: requirements.lock not found — the transitive SBOM rows have no source of truth")
+    failures += 1
+else:
+    locked = {norm(n): v for n, v in re.findall(r"^([A-Za-z0-9._-]+)==([^\s\\]+)", lock_src.replace("\r\n", "\n"), re.M)}
+    direct = {norm(n) for n in truth}
+    trans = {n: v for n, v in locked.items() if n not in direct}
+    if not trans:
+        print("FAIL: requirements.lock lists no transitive package — the gate examined nothing")
+        failures += 1
+    sb = {norm(n): v for n, v in (found or {}).items()}
+    tbad = []
+    for n, v in sorted(trans.items()):
+        if n not in sb:
+            tbad.append("    %-18s NOT in SBOM.md (locked %s)" % (n, v))
+        elif sb[n] != v:
+            tbad.append("    %-18s SBOM.md says %-10s requirements.lock says %s" % (n, sb[n], v))
+    if tbad:
+        print("FAIL: SBOM.md transitive rows disagree with requirements.lock:")
+        print("\n".join(tbad))
+        failures += len(tbad)
+    elif trans:
+        print("  OK   %-42s (%d transitive packages agree with requirements.lock)" % ("SBOM.md", len(trans)))
+
 # ── NOTICES.md: "## Name" followed by "Version: X" ─────────────────────────
 notices = read("NOTICES.md")
 found = None

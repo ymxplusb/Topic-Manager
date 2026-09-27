@@ -69,4 +69,27 @@ v_fallback_literal() {
 }
 tm_case "a-version-literal-in-the-main-js-fallback-is-caught" none v_fallback_literal
 
+
+# Round 8 (gatekeeper): removing one ?v= token passed, and a non-numeric token
+# passed. The count must be exactly the contract's 16 and every token digits.
+v_token_removed() {
+    _copy
+    sed -i 's/jarvis-mark\.png?v=[0-9]*/jarvis-mark.png/' "${TM_TMP}/copy/app/components/TopBar.js"
+    cmp -s "${TM_REPO_ROOT}/app/components/TopBar.js" "${TM_TMP}/copy/app/components/TopBar.js" && tm_die "the fixture changed nothing"
+    bash "$GATE" --root "${TM_TMP}/copy" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "15 of 16 cache tokens passed — an asset lost its cache-bust"
+    tm_assert_grep "expected exactly 16" "${TM_TMP}/out" "the gate failed, but not on the token count"
+}
+tm_case "a-removed-cache-token-is-caught" none v_token_removed
+
+v_token_nonnumeric() {
+    _copy
+    sed -i 's/jarvis-mark\.png?v=[0-9]*/jarvis-mark.png?v=abc/' "${TM_TMP}/copy/app/components/TopBar.js"
+    cmp -s "${TM_REPO_ROOT}/app/components/TopBar.js" "${TM_TMP}/copy/app/components/TopBar.js" && tm_die "the fixture changed nothing"
+    bash "$GATE" --root "${TM_TMP}/copy" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "a non-numeric ?v=abc token passed"
+    tm_assert_grep "non-numeric" "${TM_TMP}/out" "the gate failed, but not on the non-numeric token"
+}
+tm_case "a-non-numeric-cache-token-is-caught" none v_token_nonnumeric
+
 tm_finish

@@ -20,7 +20,12 @@ GATE="${TM_REPO_ROOT}/tools/check-requirements-lock.sh"
 [ -f "$GATE" ] || tm_die "tools/check-requirements-lock.sh is missing"
 
 l_agrees() {
-    bash "$GATE" > "${TM_TMP}/out" 2>&1 || _tm_afail "the lock is inconsistent: $(cat "${TM_TMP}/out")"
+    # Structure and agreement, deterministically: curl is stubbed to fail, so
+    # the gate's network-dependent completeness step reports itself NOT
+    # verified instead of depending on this host's PyPI access and pip
+    # (l_completeness below drives that step with a stub resolver).
+    mkdir -p "${TM_TMP}/nobin"; printf '#!/bin/sh\nexit 7\n' > "${TM_TMP}/nobin/curl"; chmod +x "${TM_TMP}/nobin/curl"
+    PATH="${TM_TMP}/nobin:${PATH}" bash "$GATE" > "${TM_TMP}/out" 2>&1 || _tm_afail "the lock is inconsistent: $(cat "${TM_TMP}/out")"
 }
 tm_case "the-lock-agrees-with-requirements-txt" none l_agrees
 
@@ -86,5 +91,108 @@ l_upgrade_refuses_a_drifted_lock() {
     return 0
 }
 tm_case "the-upgrade-refuses-a-lock-that-disagrees-with-the-pins" none l_upgrade_refuses_a_drifted_lock
+
+
+# ─── round 8 (gatekeeper): lock hashes, lock completeness, SCA, SBOM ─────────
+_offline() { mkdir -p "${TM_TMP}/nobin"; printf '#!/bin/sh\nexit 7\n' > "${TM_TMP}/nobin/curl"; chmod +x "${TM_TMP}/nobin/curl"; }
+
+l_transitive_hash_format() {
+    local bad
+    for bad in upper short; do
+        _copy
+        case "$bad" in
+            upper) awk '/^MarkupSafe==/{m=1} m && /--hash=sha256:/{sub(/sha256:[0-9a-f]/, "sha256:A"); m=0} {print}' \
+                       "${TM_REPO_ROOT}/requirements.lock" > "${TM_TMP}/c/requirements.lock" ;;
+            short) awk '/^MarkupSafe==/{m=1} m && /--hash=sha256:/{sub(/sha256:[0-9a-f]/, "sha256:"); m=0} {print}' \
+                       "${TM_REPO_ROOT}/requirements.lock" > "${TM_TMP}/c/requirements.lock" ;;
+        esac
+        cmp -s "${TM_REPO_ROOT}/requirements.lock" "${TM_TMP}/c/requirements.lock" && tm_die "the ${bad} fixture changed nothing"
+        PATH="${TM_TMP}/nobin:${PATH}" bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 \
+            && _tm_afail "a TRANSITIVE entry with a ${bad} sha256 passed"
+        tm_assert_grep "markupsafe has a malformed hash" "${TM_TMP}/out" "the ${bad} hash on a transitive entry was not named"
+    done
+}
+_offline_wrap() { _offline; l_transitive_hash_format; }
+tm_case "a-malformed-hash-on-a-transitive-entry-is-caught" none _offline_wrap
+
+l_completeness() {
+    _offline; _copy
+    # Offline: say so, never pass silently.
+    PATH="${TM_TMP}/nobin:${PATH}" bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 \
+        || _tm_afail "the offline gate failed on a good lock: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "lock completeness NOT verified (offline)" "${TM_TMP}/out" "offline, the gate passed without saying completeness was not verified"
+    # Online: the resolved set is compared. A stub resolver stands in for PyPI
+    # and reports a package the lock lacks — the gate must go red.
+    mkdir -p "${TM_TMP}/on" "${TM_TMP}/c/tools"
+    printf '#!/bin/sh\nexit 0\n' > "${TM_TMP}/on/curl"; chmod +x "${TM_TMP}/on/curl"
+    printf '%s\n' 'import sys' 'print("MISSING from requirements.lock: newdep==1.0 (resolved from requirements.txt)")' 'sys.exit(1)' \
+        > "${TM_TMP}/c/tools/gen-requirements-lock.py"
+    PATH="${TM_TMP}/on:${PATH}" bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "a lock missing a resolved package passed"
+    tm_assert_grep "does not cover the resolved set" "${TM_TMP}/out" "the gate failed, but not on completeness"
+    printf '%s\n' 'import sys' 'print("could not resolve")' 'sys.exit(3)' > "${TM_TMP}/c/tools/gen-requirements-lock.py"
+    PATH="${TM_TMP}/on:${PATH}" bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "a resolution that failed was reported as a pass"
+    printf '%s\n' 'print("requirements.lock covers the resolved set (15 packages)")' > "${TM_TMP}/c/tools/gen-requirements-lock.py"
+    PATH="${TM_TMP}/on:${PATH}" bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 \
+        || _tm_afail "a complete lock failed online: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "covers the resolved set" "${TM_TMP}/out" "the completeness result was not printed"
+}
+tm_case "lock-completeness-is-checked-or-said-to-be-unchecked" none l_completeness
+
+SCA="${TM_REPO_ROOT}/tools/sca-check.sh"
+s_osv_any_vuln_is_a_finding() {
+    {
+        echo 'PY="${PYTHON:-python3}"; "$PY" -c "import json" >/dev/null 2>&1 || PY=python'
+        tm_extract_func "$SCA" osv_verdict
+        echo 'osv_verdict "$1"'
+    } > "${TM_TMP}/v.sh"
+    local got
+    got="$(bash "${TM_TMP}/v.sh" '{}')";  tm_assert_eq "CLEAN" "$got" "an empty OSV answer"
+    got="$(bash "${TM_TMP}/v.sh" '{"vulns": []}')"; tm_assert_eq "CLEAN" "$got" "an empty vulns list"
+    got="$(bash "${TM_TMP}/v.sh" '{"vulns": [{"id": "BIT-flask-2026-1"}]}')"
+    tm_assert_eq "VULN BIT-flask-2026-1" "$got" "an advisory with an unlisted ID prefix was not a finding"
+    got="$(bash "${TM_TMP}/v.sh" '{"vulns": [{"summary": "no id"}]}')"
+    tm_assert_eq "VULN (no-id)" "$got" "an advisory with no id was not a finding"
+    got="$(bash "${TM_TMP}/v.sh" '<html>502</html>')"; tm_assert_eq "BAD" "$got" "an HTML error page"
+    got="$(bash "${TM_TMP}/v.sh" '{"message": "rate limited"}')"; tm_assert_eq "BAD" "$got" "an error object"
+}
+tm_case "sca-any-osv-advisory-is-a-finding-whatever-its-prefix" none s_osv_any_vuln_is_a_finding
+
+s_sca_needs_the_lock() {
+    mkdir -p "${TM_TMP}/s/tools"
+    cp "$SCA" "${TM_TMP}/s/tools/"; cp "${TM_REPO_ROOT}/requirements.txt" "${TM_TMP}/s/"
+    local rc=0
+    bash "${TM_TMP}/s/tools/sca-check.sh" > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_rc 3 "$rc" "with requirements.lock missing SCA did not refuse: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "requirements.lock is missing or unreadable" "${TM_TMP}/out" "the refusal does not say why"
+}
+tm_case "sca-refuses-without-requirements-lock" none s_sca_needs_the_lock
+
+_sbom_copy() {
+    local r="${TM_TMP}/sb"
+    mkdir -p "$r/tools" "$r/install" "$r/app/components/modals"
+    cp "${TM_REPO_ROOT}/tools/check-sbom-consistency.sh" "$r/tools/"
+    cp "${TM_REPO_ROOT}"/requirements.txt "${TM_REPO_ROOT}"/requirements.lock "${TM_REPO_ROOT}"/SBOM.md "${TM_REPO_ROOT}"/NOTICES.md "$r/"
+    cp "${TM_REPO_ROOT}/install/upgrade-full.sh" "$r/install/"
+    cp "${TM_REPO_ROOT}/app/components/modals/AboutModal.js" "$r/app/components/modals/"
+}
+b_sbom_transitive() {
+    _sbom_copy
+    bash "${TM_TMP}/sb/tools/check-sbom-consistency.sh" > "${TM_TMP}/out" 2>&1 \
+        || _tm_afail "the unmodified copy fails: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "transitive packages agree with requirements.lock" "${TM_TMP}/out" "the transitive rows were not checked"
+    sed -i 's/^| MarkupSafe | 3\.0\.3 |/| MarkupSafe | 2.1.5 |/' "${TM_TMP}/sb/SBOM.md"
+    cmp -s "${TM_REPO_ROOT}/SBOM.md" "${TM_TMP}/sb/SBOM.md" && tm_die "the drift fixture changed nothing"
+    bash "${TM_TMP}/sb/tools/check-sbom-consistency.sh" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "a transitive SBOM row at the wrong version passed"
+    tm_assert_grep "markupsafe" "${TM_TMP}/out" "the wrong transitive row was not named"
+    _sbom_copy
+    sed -i '/^| pyasn1 | /d' "${TM_TMP}/sb/SBOM.md"
+    bash "${TM_TMP}/sb/tools/check-sbom-consistency.sh" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "a locked transitive package MISSING from SBOM.md passed"
+    tm_assert_grep "pyasn1             NOT in SBOM.md" "${TM_TMP}/out" "the missing transitive row was not named"
+}
+tm_case "sbom-transitive-rows-are-held-to-the-lock" none b_sbom_transitive
 
 tm_finish

@@ -375,4 +375,27 @@ PYEOF
 }
 tm_case "install-writes-a-complete-neutral-config" none c_config_written
 
+
+# Round 8 (gatekeeper): tools/check-config-example.sh passed `port:` with no
+# value. A required key must carry one.
+c_example_required_values() {
+    local r="${TM_TMP}/cx"
+    mkdir -p "$r/tools" "$r/config"
+    cp "${TM_REPO_ROOT}/tools/check-config-example.sh" "$r/tools/"
+    cp "${TM_REPO_ROOT}"/config/config.yaml.example "${TM_REPO_ROOT}"/config/clusters.yaml.example "$r/config/"
+    bash "$r/tools/check-config-example.sh" > "${TM_TMP}/out" 2>&1 \
+        || _tm_afail "the unmodified example fails: $(cat "${TM_TMP}/out")"
+    sed -i 's/^  port: [0-9][0-9]*$/  port:/' "$r/config/config.yaml.example"
+    cmp -s "${TM_REPO_ROOT}/config/config.yaml.example" "$r/config/config.yaml.example" && tm_die "the fixture changed nothing"
+    bash "$r/tools/check-config-example.sh" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "server.port with NO value passed the config-example gate"
+    tm_assert_grep "server.port (present but EMPTY)" "${TM_TMP}/out" "the empty key was not named"
+    cp "${TM_REPO_ROOT}/config/config.yaml.example" "$r/config/"
+    sed -i 's/^  ldap_domain: .*$/  ldap_domain: ""/' "$r/config/config.yaml.example"
+    bash "$r/tools/check-config-example.sh" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "auth.ldap_domain set to an empty string passed"
+    tm_assert_grep "auth.ldap_domain (present but EMPTY)" "${TM_TMP}/out" "the empty string was not named"
+}
+tm_case "config-example-required-keys-must-have-values" none c_example_required_values
+
 tm_finish

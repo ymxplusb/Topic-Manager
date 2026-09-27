@@ -76,6 +76,10 @@ for section, keys in REQUIRED.items():
     for k in keys:
         if k not in cfg[section]:
             missing.append("%s.%s" % (section, k))
+        # Round 8 (gatekeeper): `port:` with no value parsed to None and
+        # passed. A required key must carry a value (a placeholder counts).
+        elif cfg[section][k] is None or (isinstance(cfg[section][k], str) and not cfg[section][k].strip()):
+            missing.append("%s.%s (present but EMPTY)" % (section, k))
 
 if "clusters" in cfg:
     missing.append("clusters MUST NOT be in config.yaml.example any more "
