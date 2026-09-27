@@ -178,7 +178,8 @@ STUB
 a_bundle_allow_remove() {
     _bundle_plan 'Remv systemd-timesyncd [255.4]\nInst chrony (4.5-1 bundle [amd64])\n' "systemd-timesyncd"
     tm_assert_rc 0 "$BP_RC" "the ALLOWED removal was refused: $(cat "${TM_TMP}/bp.out")"
-    grep -E '^apt-get .* install -y ' "${TM_TMP}/calls" | grep -q -- '--no-remove' \
+    grep -E '^apt-get .* install -y ' "${TM_TMP}/calls" > "${TM_TMP}/inst.calls" || true
+    grep -q -- '--no-remove' "${TM_TMP}/inst.calls" \
         && _tm_afail "the real install still passed --no-remove, so apt would abort the allowed removal"
     grep -qE '^apt-get .* install -y ' "${TM_TMP}/calls" || _tm_afail "the plan was never carried out"
     _bundle_plan 'Remv systemd-timesyncd [255.4]\nRemv vim [9]\nInst chrony (4.5-1 bundle [amd64])\n' "systemd-timesyncd"
@@ -186,7 +187,8 @@ a_bundle_allow_remove() {
     tm_assert_grep "vim [9]: would be REMOVED" "${TM_TMP}/bp.out" "the unallowed removal is not named"
     _bundle_plan 'Remv systemd-timesyncd [255.4]\nInst chrony (4.5-1 bundle [amd64])\n' ""
     tm_assert_rc 1 "$BP_RC" "with nothing allowed, a removal was carried out (the round-3 policy is never remove)"
-    grep -E '^apt-get .* -s install ' "${TM_TMP}/calls" | grep -q -- '--no-remove' \
+    grep -E '^apt-get .* -s install ' "${TM_TMP}/calls" > "${TM_TMP}/sim.calls" || true
+    grep -q -- '--no-remove' "${TM_TMP}/sim.calls" \
         || _tm_afail "without an allowance the plan is no longer simulated with --no-remove"
 }
 tm_case "bundle-install-allows-exactly-the-named-removal" none a_bundle_allow_remove
@@ -258,9 +260,9 @@ a_restore_pre_v120_removes_them() {
 tm_case "restore-to-pre-v120-removes-the-v120-files" symlinks a_restore_pre_v120_removes_them
 
 a_upgrade_order() {
-    local up="$UP" n_health n_reapply n_phase9_keep n_restore
-    n_health="$(grep -n 'success "Version verified: ' "$up" | head -1 | cut -d: -f1)"
-    n_reapply="$(grep -n 'run_as_app stage all' "$up" | head -1 | cut -d: -f1)"
+    local up="$UP" n_health n_reapply n_restore
+    n_health="$(grep -n -m1 'success "Version verified: ' "$up" | cut -d: -f1)"
+    n_reapply="$(grep -n -m1 'run_as_app stage all' "$up" | cut -d: -f1)"
     [ -n "$n_health" ] && [ -n "$n_reapply" ] || _tm_afail "cannot find the version check or the re-apply"
     [ "$n_reapply" -gt "$n_health" ] || _tm_afail "the upgrade re-applies host settings BEFORE the new service is verified"
     grep -q '^install_if_absent 644 "${WORK_DIR}/nginx/tm-limits.conf" /etc/nginx/conf.d/topic-manager-limits.conf$' "$up" \

@@ -320,7 +320,7 @@ PYEOF
     tm_assert_file "$tls/chain.pem"
     tm_assert_eq "EC P-256" "$(fx_field "d['applied']['key_type']")" "the result does not describe what was applied"
     grep -q 'PRIVATE KEY\|BEGIN CERTIFICATE' "$FX_RES" && _tm_afail "the result file carries PEM material"
-    [ -z "$(ls "$FX/opt/topic-manager/data/apply" | grep -v '\.last$')" ] || _tm_afail "staged TLS files were left behind"
+    [ -z "$(fx_staged_left)" ] || _tm_afail "staged TLS files were left behind"
     ls "$FX"/var/backups/topic-manager/apply/tls-*/ >/dev/null 2>&1 || _tm_afail "the previous pair was not backed up"
     tm_assert_mode 700 "$FX/var/backups/topic-manager/apply" "the backup directory (it holds the old key) is not 0700"
     tm_note "nginx -t: ${FX_NGINX} (real = it loaded the installed pair)"

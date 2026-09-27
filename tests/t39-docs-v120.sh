@@ -57,7 +57,8 @@ a_contract_recipe_reads_all_modules() {
 tm_case "contract-recipe-reads-all-modules" none a_contract_recipe_reads_all_modules
 
 a_troubleshooting_is_keyed_to_real_strings() {
-    local T="${TM_REPO_ROOT}/TROUBLESHOOTING.md" H="$(tm_apply_helper)" frag missing=""
+    local T="${TM_REPO_ROOT}/TROUBLESHOOTING.md" H frag missing=""
+    H="$(tm_apply_helper)"
     local -a PAIRS=(
         "$H|syslog over TLS needs the rsyslog-openssl package"
         "$H|neither chrony nor systemd-timesyncd is running on this"

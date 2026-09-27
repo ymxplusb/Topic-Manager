@@ -50,7 +50,7 @@ a_nginx_applies() {
     tm_assert_eq "500" "$(fx_field "d['applied']['ratelimit_api_per_min']")" "the result does not carry what was applied (CC-1)"
     tm_assert_nofile "$FX/opt/topic-manager/data/apply/nginx.json" "the staging file was left behind"
     tm_assert_mode 644 "$FX_RES" "the result file is not 0644"
-    [ -z "$(ls "$FX/opt/topic-manager/data/apply" | grep -v '\.last$')" ] \
+    [ -z "$(fx_staged_left)" ] \
         || _tm_afail "something other than the app's own .last record is in the staging dir: $(ls "$FX/opt/topic-manager/data/apply")"
     tm_note "nginx -t: ${FX_NGINX}"
 }

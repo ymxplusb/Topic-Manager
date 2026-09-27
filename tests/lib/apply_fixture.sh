@@ -139,9 +139,11 @@ NGX
 }
 
 fx_helper() {   # fx_helper <domain> — run the helper; RC and the result in $FX_RES
-    FX_RC=0
+    # FX_RC and FX_RES are read by the calling case.
+    local rc=0
     python3 -I "$(tm_apply_helper)" "$1" --root "$FX" --bin "$FXBIN" \
-        --lib "$(tm_py_root)/tm" --svc-user "$FX_SVC_USER" > "${TM_TMP}/helper.out" 2>&1 || FX_RC=$?
+        --lib "$(tm_py_root)/tm" --svc-user "$FX_SVC_USER" > "${TM_TMP}/helper.out" 2>&1 || rc=$?
+    export FX_RC="$rc"
     FX_RES="${FX}/run/topic-manager-apply/$1.result"
 }
 
@@ -164,6 +166,14 @@ fx_stage_raw() {   # fx_stage_raw <domain> <raw json document> — bypasses ever
     printf '%s' "$2" > "$FX/opt/topic-manager/data/apply/$1.json"
     chown "$FX_SVC_USER" "$FX/opt/topic-manager/data/apply/$1.json"
     chmod 600 "$FX/opt/topic-manager/data/apply/$1.json"
+}
+
+fx_staged_left() {   # every staging file except the app's own .last records
+    local f
+    for f in "$FX"/opt/topic-manager/data/apply/*; do
+        [ -e "$f" ] || continue
+        case "$f" in *.last) ;; *) echo "${f##*/}" ;; esac
+    done
 }
 
 fx_hash_managed() {   # a digest of every file and link the helper may touch

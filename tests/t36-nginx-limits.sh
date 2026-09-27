@@ -119,7 +119,8 @@ a_real_nginx_t() {
 tm_case "the-shipped-site-passes-the-real-nginx-t" "linux,chown" a_real_nginx_t
 
 _loginview() {   # _loginview <status> <content-type> <body> -> the error the page shows
-    local js="$(tm_loginview_js)"
+    local js
+    js="$(tm_loginview_js)"
     node - "$js" "$1" "$2" "$3" <<'JSEOF' 2>&1 | tr -d '\r'
 const fs = require('fs');
 const src = fs.readFileSync(process.argv[2], 'utf8');
