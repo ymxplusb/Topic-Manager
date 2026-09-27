@@ -5,6 +5,93 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
+## Unreleased — 1.2.0 (backend, privileged helper and installer half)
+
+<!-- The version cascade renames this heading to "## [1.2.0] — <date>" (the
+     version-surfaces gate reads the newest BRACKETED heading, and VERSION stays
+     1.1.0 until the cascade). The frontend half adds its own notes here. -->
+
+**Seven STIG host settings, each set in Settings and applied to the host through one root
+helper that trusts nothing it is handed — plus an audit trail that goes to syslog, blocks
+any action it cannot record, and prunes itself on a schedule.** (F5 NGINX STIG V1R1,
+Database SRG V4R5 applied to SQLite.)
+
+### Read this before upgrading
+
+- **An audit write failure now BLOCKS the action** (owner ruling). If the audit database
+  cannot be written, topic/cluster changes, restarts, applies and sign-ins answer
+  `503 {"error": "audit_unavailable"}` and nothing happens; `AUDIT_WRITE_FAILED` goes to
+  syslog at CRIT with the whole record. Sign-out is never blocked.
+- **`session.max_concurrent` moved into Settings** (Security > Sessions, default **3**). The
+  value in `config.yaml` seeds it once, on the first start of the new release against an
+  existing database; after that Settings wins and a different `config.yaml` value is logged
+  as a warning at every start. `config/config.yaml.example` now says 3 (it said 5).
+- **The `:80` redirect is its own nginx site** (`/etc/nginx/sites-available/topic-manager-http`),
+  enabled by a link only while Settings has it on. The upgrade enables it (the previous
+  site file had the `:80` block) and never touches it again.
+- **New packages:** `rsyslog` and `rsyslog-openssl` (install.sh requires them; the upgrade
+  installs no packages and reports `rsyslog-openssl` as a WARN when absent — only syslog over
+  TLS needs it). `chrony` is in the offline bundle; it is installed only on a host with no
+  time daemon or with `--install-chrony`, because **installing chrony removes
+  systemd-timesyncd** (they conflict). That is the one removal the installer ever allows.
+
+### Added
+
+- **Remote syslog** (NGNX-APP-001400, SRG-APP-000515/000360): host, port, UDP/TCP/TLS and an
+  application id; forwards the audit trail, the apply helper and nginx's access/error logs
+  (RFC 5424, disk-assisted queue for TCP/TLS). TLS through `rsyslog-openssl` (the host's
+  OpenSSL), collector name verified, CA = system trust store or `install.sh --syslog-ca`.
+  Every audit record is always sent to local syslog (authpriv) regardless of
+  `logging.syslog_enabled`.
+- **Time source** (SRG-APP-000116/000920/000925): up to five NTP servers, written as chrony
+  sources or a systemd-timesyncd drop-in, tested (`chronyd -p`) and verified; read-only
+  status (`GET /api/system/time`: source, servers, sync, offset, stratum, last sync).
+- **Rate limiting** (NGNX-APP-001030/001940): nginx `limit_req` for sign-in (10/min burst 5)
+  and the API (300/min burst 100), `limit_conn` 20 per address, 10 s client timeouts, 1 MB
+  body cap. A limited request is a JSON 429 (`"code": "rate_limited"`).
+- **Audit retention** (SRG-APP-000120/000357/000359): prune by days and by row limit, daily
+  (`topic-manager-audit-prune.timer`, the service account, `UMask=0077`); every prune that
+  deletes writes `AUDIT_PRUNE` in the same transaction. Capacity (`GET /api/audit/capacity`)
+  is the larger of rows/limit and database/(database + free disk); crossing the warning
+  percentage writes one `AUDIT_CAPACITY_WARNING` (and a syslog WARNING) per crossing.
+- **TLS certificate upload** (NGNX-APP-001900/001960): `POST /api/system/tls/cert` (cert, key,
+  optional chain). EC P-256/P-384 and RSA 2048/3072/4096 only, SHA-2, in date, matching,
+  unencrypted, chain verified — by the host `openssl` CLI. Refusals are fixed sentences that
+  never quote the upload (contract CC-1). The key is parsed in memory (never `/tmp`), staged
+  0600 for the helper and deleted once read; nginx serves leaf + chain; `TLS_CERT_REPLACED`.
+  `GET /api/system/tls` shows the protocols, ciphers, FIPS mode and the certificate.
+- **HTTP redirect on/off** (NGNX-APP-000510): off removes the `:80` listener and ufw `80/tcp`.
+- **Apply to host**: `POST/GET /api/system/apply/<syslog|time|nginx>` and `GET
+  /api/system/apply/tls`. The root helper `/usr/libexec/topic-manager/tm-apply` (system
+  `python3 -I`, stdlib only, never code from `/opt/topic-manager`) re-validates, renders,
+  tests, backs up, installs, reloads, verifies and rolls back byte-for-byte; its verdict and
+  the values it applied are recorded (`SYSTEM_APPLY_REQUESTED`, `SYSTEM_APPLY_RESULT`; the
+  applied values feed the PPSM, contract CC-1). Four fixed one-shot units, `start` only
+  through polkit; one apply per domain per 5 s; 409 while one runs.
+- `install.sh` flags: `--syslog-host`, `--syslog-port`, `--syslog-protocol`,
+  `--syslog-app-id`, `--syslog-ca`, `--ntp-server`, `--no-http-redirect`, `--install-chrony`.
+
+### Changed
+
+- `_ALL_KEYS` is a NEW set (`_PUBLIC_KEYS | ADMIN_KEYS`, `_PUBLIC_KEYS` frozen). It used to
+  BE `_PUBLIC_KEYS`, so adding an admin key would have published it on the unauthenticated
+  `/api/settings/public`.
+- `PUT /api/settings` validates every admin key and refuses the whole request on one bad
+  value (`400 {"error": "invalid", "field", "reason"}`); host settings show old → new values
+  in `SETTINGS_UPDATE`.
+- The sign-in page reads a 429 it cannot parse as JSON as a rate limit, not "Network error".
+- The upgrade keeps every Settings-managed file (backed up in Phase 4, restored on a
+  rollback, removed when rolling back to a release before 1.2.0) and re-applies what `tm.db`
+  holds after the new service is verified.
+
+### Fixed during the build (found by the new tests)
+
+- The row-limit prune kept `max_rows` rows and then added `AUDIT_PRUNE` — one over.
+- After a reboot (the verdict file is on `/run`), a finished apply read as "queued" and then
+  "failed: no result"; the verdict is now kept in `tm.db` with the claim that audits it.
+
+---
+
 ## [1.1.0] — 2026-09-26
 
 **Aurora Glass theme, a Settings section rail, TLS 1.2/1.3 everywhere with a FIPS-approved

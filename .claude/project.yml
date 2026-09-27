@@ -93,10 +93,15 @@ surfaces:
       AFTER log_action( at most call sites, so a line-oriented grep sees 6 of
       15 and a multi-line regex truncated CLUSTER_CREATE to "STER_CREATE"
       while still returning a count of 15 — a right total made of a wrong set.
-      Both were tried on 2026-09-02 and both were wrong. Use:
-      python3 -c "import ast;t=ast.parse(open('tm/routes.py').read());
-      print(sorted({n.args[2].value for n in ast.walk(t)
-      if isinstance(n,ast.Call) and getattr(n.func,'attr','')=='log_action'
+      Both were tried on 2026-09-02 and both were wrong.
+      v1.2.0 (WO-0004): the recipe reads EVERY module, not tm/routes.py —
+      tm/apply.py and tm/audit_retention.py write actions of their own, and a
+      routes.py-only recipe would have undercounted by five. 21 in the DB as
+      of v1.2.0, plus AUDIT_WRITE_FAILED (syslog-only). t39 holds README to it.
+      Use:
+      python3 -c "import ast,glob;print(sorted({n.args[2].value for f in glob.glob('tm/*.py')
+      for n in ast.walk(ast.parse(open(f).read())) if isinstance(n,ast.Call)
+      and getattr(n.func,'attr',getattr(n.func,'id',''))=='log_action'
       and len(n.args)>2 and isinstance(n.args[2],ast.Constant)}))"
   - path: CHANGELOG.md
     note: new section per release
@@ -203,7 +208,7 @@ straggler_sweep:
 # gate here without running it first and proving it can go red.
 gates:
   - name: python-syntax
-    cmd: "python -m py_compile tm/*.py"
+    cmd: "python -m py_compile tm/*.py install/libexec/tm-apply"
     verified: 2026-08-30
     note: backend compiles; catches the syntax class only
   - name: shell-syntax

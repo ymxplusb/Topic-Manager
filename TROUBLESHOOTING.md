@@ -1044,3 +1044,174 @@ sudo bash install/upgrade-full.sh --list-backups
 # Disk
 df -h /opt /tmp /var
 ```
+
+## Apply to host (v1.2.0)
+
+Every apply leaves a verdict in `/run/topic-manager-apply/<domain>.result` (and, once the
+Settings pane or `install.sh`/the upgrade has read it, in the audit trail as
+`SYSTEM_APPLY_RESULT`). The helper's own log is the unit's journal:
+
+```bash
+sudo journalctl -u topic-manager-apply-nginx -n 50 --no-pager     # or -syslog, -time, -tls
+sudo cat /run/topic-manager-apply/nginx.result
+ls -l /var/backups/topic-manager/apply/                           # one directory per apply
+```
+
+The three final states mean exactly this:
+
+| state | what is true on the host |
+|---|---|
+| `ok` | the new configuration is installed, tested, reloaded and verified |
+| `failed` + "Nothing on the host was changed." | the request was refused before any file was written (validation, staging, a pre-test) |
+| `rolled_back` | it was installed, a later step failed, and the previous files were put back **and checked byte for byte** |
+| `failed` + "may be in a mixed state" | the restore could not be verified; the named files and the backup directory in the details are where to look |
+
+### `... the apply unit could not be started: ... Interactive authentication required`
+
+The polkit rule predates v1.2.0 (it does not list the four apply units) or polkitd is not
+running. Re-run the upgrade (it installs the rule), or check:
+`grep -c apply /etc/polkit-1/rules.d/50-topic-manager.rules` (expect 5 or more) and
+`sudo journalctl -u polkit -n 5`.
+
+### `no result was written for this request N s after it was made`
+
+The unit started but the helper never wrote a verdict — usually the unit failed before the
+helper ran (a `ReadWritePaths` directory missing on a trimmed host). `sudo systemctl status
+topic-manager-apply-<domain>` shows systemd's own reason.
+
+### `An apply for <domain> is already queued or running.` (409) / `apply_throttled` (429)
+
+One apply per domain at a time, and at most one request per domain every 5 seconds (each is
+a `systemctl start`, and systemd refuses a unit started 5 times in 10 seconds).
+
+### `syslog over TLS needs the rsyslog-openssl package (lmnsd_ossl.so is not installed)`
+
+`sudo apt-get install rsyslog-openssl` (online), or from the v1.2.0 offline bundle with
+`install.sh`. `rsyslogd -N1` does NOT detect the missing module (measured: the driver loads
+at connect time), which is why the helper looks for it. Or choose TCP/UDP.
+
+### `the syslog user cannot read /etc/rsyslog.d/topic-manager/...`
+
+The CA must be `root:root 0644` and every parent traversable. It lives under
+`/etc/rsyslog.d` on purpose: rsyslogd runs under an enforcing AppArmor profile that allows
+`/etc/rsyslog.d/**` and nothing under `/etc/ssl`, so a CA placed in `/etc/ssl/...` is
+unreadable to it whatever its mode says.
+
+### Forwarding is on but the collector receives nothing
+
+`sudo journalctl -u rsyslog --since "-10min"` names the reason: a name mismatch
+(`StreamDriverPermittedPeers` is the host you entered — it must be a name on the collector's
+certificate, not an IP address), an untrusted CA, or a refused connection. TCP/TLS messages
+wait in the queue (`/var/spool/rsyslog/tm_forward*`) and are sent when the collector
+returns; UDP gives no confirmation at all.
+
+### `rsyslogd -N1 refused the rendered configuration: ...` / `rsyslogd -N1 failed on the full configuration`
+
+The first is the helper's own file (report it — the values were validated); the second is
+another file in `/etc/rsyslog.d` that already fails `sudo rsyslogd -N1`. Nothing was
+changed in the first case; the second was rolled back.
+
+### `neither chrony nor systemd-timesyncd is running on this host`
+
+Start one (`sudo systemctl enable --now chrony` or `systemd-timesyncd`), or re-run
+`install.sh --install-chrony`. **chrony and systemd-timesyncd conflict: installing chrony
+removes systemd-timesyncd.**
+
+### `/etc/chrony/chrony.conf has no "sourcedir /etc/chrony/sources.d" line`
+
+Ubuntu's chrony.conf has it; a STIG profile that rewrote the file may not. Add the line and
+apply again — without it chrony would never read the servers.
+
+### `systemd-timesyncd reports servers [...], expected [...]` (rolled_back)
+
+Another `timesyncd.conf.d` drop-in sorting after `topic-manager.conf` sets `NTP=`. Remove or
+rename it; the last one wins.
+
+### `/etc/nginx/sites-available/topic-manager-http is not installed, so the HTTP redirect cannot be enabled`
+
+The `:80` site came with v1.2.0; re-run the upgrade or `install.sh`.
+
+### `nginx -t failed: ...` (rolled_back)
+
+The rendered change made the whole configuration fail, and it was put back. The message is
+nginx's own. If `sudo nginx -t` fails NOW, the fault was there before the apply.
+
+### `NOTE: another ufw rule still opens port 80: ...`
+
+The redirect is off and the Topic Manager rule (`80/tcp`) is gone, but another rule (for
+example `Nginx Full`, or a bare `80`) still admits port 80. The helper manages only its own
+rule; remove the other one if nothing else on the host needs it.
+
+### `staging file <domain>.json is not owned by topic-manager; refused` (or `is a symlink`, `has 2 links`, `readable or writable by others`)
+
+Something other than the application wrote into `/opt/topic-manager/data/apply`. The
+helper refuses and deletes whatever it refused; nothing was changed. Treat it as a security
+event: find out what wrote there.
+
+### `... is not root-owned and private to root; refusing to import it as root`
+
+`/usr/libexec/topic-manager/lib` or a file in it is not `root:root` and not writable only by
+root. Re-run the installer or the upgrade to reinstall it; investigate who changed it.
+
+### Certificate upload: `unsupported key type: ...`, `the certificate is signed with sha1...`, `the private key does not match the certificate`, `the certificate does not verify against the supplied chain for TLS server use`, `the private key is encrypted`
+
+The reasons are fixed sentences and never quote what was uploaded. Accepted: EC P-256/P-384,
+RSA 2048/3072/4096; SHA-2 signatures; in date; key unencrypted and matching; a chain (if
+given) that verifies the leaf for server use. Convert an encrypted key with
+`openssl pkey -in enc.key -out plain.key` on a trusted host. Intermediates go in the
+**chain** field, never after the certificate.
+
+## Audit trail (v1.2.0)
+
+### `503 {"error": "audit_unavailable"}` — "The audit trail cannot be written, so nothing was changed."
+
+The pre-check could not open a write transaction on `tm.db` or found less than 1 MiB free
+on its filesystem. The host syslog has an `AUDIT_WRITE_FAILED` record at CRIT with the
+reason (`sudo grep AUDIT_WRITE_FAILED /var/log/auth.log`). Free space, fix ownership
+(`topic-manager`, 0600) or restore the database, then retry. Sign-out still works.
+
+### `... WAS made, but its audit record could not be written to the audit database`
+
+The database failed between the pre-check and the record. The change happened; its record
+is in syslog as `AUDIT_WRITE_FAILED` with every field. Fix the database before anything
+else.
+
+### The Settings banner says the audit storage is above its warning level
+
+`GET /api/audit/capacity` is the larger of rows/limit and database/(database + free disk).
+Lower `audit_retention_days`, raise `audit_max_rows` (up to 50,000,000), or free disk; the
+next daily prune (`systemctl start topic-manager-audit-prune` to run it now) applies it.
+One `AUDIT_CAPACITY_WARNING` is written per crossing, not per page view.
+
+### `audit prune FAILED; nothing was deleted: ...`
+
+`journalctl -u topic-manager-audit-prune`. The delete and its `AUDIT_PRUNE` row are one
+transaction, so a failure deletes nothing.
+
+### `config.yaml session.max_concurrent is N but Settings holds M. Settings wins`
+
+Expected after an operator changed the limit in Settings: `config.yaml` only seeds it on the
+first start. Change it in Settings > Security > Sessions, or make `config.yaml` agree to
+silence the warning.
+
+## install.sh (v1.2.0)
+
+### `Invalid host setting: --<flag>: ... Nothing has been changed.`
+
+A `--syslog-*`, `--ntp-server` or `--no-http-redirect` value failed the same validator the
+application uses. Nothing was installed.
+
+### `Installing chrony would also remove: ...`
+
+Only `systemd-timesyncd` may be removed by `--install-chrony`; apt's plan wanted more.
+Nothing was changed by that step.
+
+### `The service is installed and running, but applying <domains> to the host failed`
+
+Each named domain was rolled back by the helper; the lines above name the step. Fix it and
+apply from Settings (or re-run `install.sh`).
+
+### Upgrade: `Re-apply <domain> did NOT succeed — ...`
+
+The upgrade itself succeeded; the saved host setting for that domain is not in force (the
+managed files the previous release left are). The same fixes apply; then Apply to host.

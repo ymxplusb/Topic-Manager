@@ -94,13 +94,14 @@ controller, base DN and domain when `config.yaml` omitted them.
 
 The script, in order:
 - Sets `umask 0022` for its own run (a STIG host's 077 would leave the venv and the frontend unreadable) and gives every sensitive file its mode explicitly
-- Installs any missing runtime package — `python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl` — from apt online, or from the bundle's `.deb`s offline (only packages the host does not already have are asked for; an installed dependency may be upgraded to the bundled build, never downgraded, and a FIPS package is never replaced). No compiler and no `-dev` headers: every Python dependency is a binary wheel (`pip --only-binary :all:`)
+- Installs any missing runtime package — `python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl rsyslog rsyslog-openssl` — from apt online, or from the bundle's `.deb`s offline (only packages the host does not already have are asked for; an installed dependency may be upgraded to the bundled build, never downgraded, and a FIPS package is never replaced). No compiler and no `-dev` headers: every Python dependency is a binary wheel (`pip --only-binary :all:`)
 - Installs Vue.js **3.5.43**, verified by SHA-256 before it is served (online: fetched from the CDN; offline: taken from the bundle's `lib/`). The version and hash are read from `install/upgrade-full.sh`, the same pin the upgrade and `prepare-offline.sh` use, and a file that does not match is refused — so a fresh install and an upgraded host serve byte-identical Vue
 - Creates the `topic-manager` system user and `/opt/topic-manager/` (`data/` **0700**), `/var/www/topic-manager/`, `/etc/topic-manager/`
 - Creates `/etc/topic-manager/clusters.d/` (owned by `topic-manager`) and `/opt/topic-manager/data/cluster-certs/` (mode 0700) — the only two directories the application may write outside its own data and log directories. `/etc/topic-manager` itself stays `root:topic-manager 0750`; see [Cluster profiles](#cluster-profiles) for why that split is not arbitrary
 - Writes `/etc/topic-manager/config.yaml` (0640 `root:topic-manager`) with your directory settings and a random secret key — or, on a reinstall, keeps the existing one and **refuses to continue** if it lacks `auth.ldap_server`, `ldap_base_dn` or `ldap_domain`
 - Creates an **empty** cluster store at `/etc/topic-manager/clusters.d/clusters.yaml` (or, on a reinstall over an older host, moves the existing `clusters:` block out of `config.yaml`). `config/clusters.yaml.example` is a format reference; it is never installed as live clusters
 - Installs the systemd service (`topic-manager.service`, `UMask=0077`), the on-demand `topic-manager-nginx-test.service`, and `/etc/polkit-1/rules.d/50-topic-manager.rules`, which is what lets the Settings restart control act
+- v1.2.0: installs the root apply helper (`/usr/libexec/topic-manager/tm-apply`), its four one-shot units, the daily `topic-manager-audit-prune.timer`, and the Settings-managed nginx/rsyslog files (release defaults, only where absent); keeps `systemd-timesyncd` or installs `chrony` (see [Host settings](#host-settings-v120)); then APPLIES the saved host settings through the same path as the Settings button, so what is live is recorded from the first minute. Optional flags seed those settings: `--syslog-host/--syslog-port/--syslog-protocol/--syslog-app-id/--syslog-ca`, `--ntp-server`, `--no-http-redirect`, `--install-chrony`; a bad value stops the install before anything is changed
 - Installs the nginx site, the certificate (yours, an existing one, or the self-signed placeholder) and sets `ssl_protocols TLSv1.2 TLSv1.3` in `/etc/nginx/nginx.conf` — backed up, `nginx -t`'d, and put back if the test fails
 - Opens ufw ports 80 and 443 if ufw is active
 - Verifies, as the service account, that the app can write `clusters.d` and cannot write `config.yaml`
@@ -425,10 +426,92 @@ as a control on *whether*.
 
 ---
 
+## Host settings (v1.2.0)
+
+Seven STIG settings live in **Settings** and are applied to the host from there. Each pane
+has **Save** (stores the value in `tm.db`, audited as `SETTINGS_UPDATE` with old → new
+values) and, where the host must change, **Apply to host** (audited as
+`SYSTEM_APPLY_REQUESTED`, then `SYSTEM_APPLY_RESULT`).
+
+| Setting | Where it lives | Applied by |
+|---|---|---|
+| Remote syslog — host, port, UDP/TCP/TLS, application id | `/etc/rsyslog.d/30-topic-manager.conf` + `/etc/nginx/snippets/tm-syslog.conf` | `tm-apply syslog` |
+| Time source — up to 5 NTP servers | `/etc/chrony/sources.d/topic-manager.sources` **or** `/etc/systemd/timesyncd.conf.d/topic-manager.conf` | `tm-apply time` |
+| Sessions — concurrent sessions per user (0 = unlimited, default 3) | `tm.db` | immediately (no host change) |
+| Rate limiting — sign-in and API requests/minute + burst, connections per address | `/etc/nginx/conf.d/topic-manager-limits.conf` + three `snippets/tm-limits-*.conf` | `tm-apply nginx` |
+| Audit retention — days, row limit, warning % | `tm.db` | the daily prune timer |
+| TLS & certificate — upload a certificate, key and chain | `/etc/topic-manager/tls/` | `tm-apply tls` |
+| HTTP redirect (port 80) — on/off | the `topic-manager-http` site link + ufw `80/tcp` | `tm-apply nginx` |
+
+**How an apply works.** The application (the unprivileged `topic-manager` account) writes
+the saved values for one domain to `/opt/topic-manager/data/apply/<domain>.json` (0600) and
+starts the fixed unit `topic-manager-apply-<domain>.service` through polkit. That unit runs
+the root helper `/usr/libexec/topic-manager/tm-apply` with the domain as its only argument.
+The helper trusts nothing it is handed: it opens the staging file without following
+symlinks, requires it to be a private regular file owned by `topic-manager`, re-validates
+every value against its **own root-owned copy** of the rules, and never executes anything
+under `/opt/topic-manager` (the service account's tree) — it is the system `python3 -I`,
+standard library only. Then: **validate → render → test** (`rsyslogd -N1`, `chronyd -p`,
+`nginx -t`, host `openssl`) **→ back up → install → test again → reload → verify**, and on
+any failure after the install it puts the backup back, reloads, and checks the restore byte
+for byte. The verdict (`ok`, `failed`, `rolled_back`, naming the step) is in
+`/run/topic-manager-apply/<domain>.result`, which the Settings pane polls; the values last
+applied **successfully** are kept in `tm.db` and are what the PPSM export shows. Backups of
+every replaced file are under `/var/backups/topic-manager/apply/` (root, 0700, newest 10 per
+domain).
+
+**Remote syslog** forwards the audit trail (tag `topic-manager-audit`), the apply helper
+(`topic-manager-apply`) and nginx's access/error logs as RFC 5424 with the application id
+as APP-NAME. Every audit record is ALWAYS written to local syslog (facility `authpriv`,
+normally `/var/log/auth.log`) whatever `logging.syslog_enabled` says. TLS uses
+`rsyslog-openssl` (the host's OpenSSL, so its FIPS provider) and verifies the collector's
+certificate name; the CA is the system trust store unless `install.sh --syslog-ca` put one
+in `/etc/rsyslog.d/topic-manager/syslog-ca.pem` — under `/etc/rsyslog.d` because rsyslogd's
+AppArmor profile cannot read `/etc/ssl`. **Pruning does not wait for forwarding**
+(owner ruling): use TCP or TLS for a delivery the queue can retry; UDP cannot confirm.
+
+**Time source.** chrony and systemd-timesyncd conflict:
+installing chrony removes systemd-timesyncd. `install.sh` keeps whichever runs; it installs chrony only on a host with
+neither, or with `--install-chrony` (the Ubuntu 24.04 STIG requires chrony), and then allows
+exactly one removal: `systemd-timesyncd`. With no servers set, the Topic Manager source file
+is removed and the host's own time configuration is left alone.
+
+**Audit write failure blocks the action** (owner ruling). Before anything that cannot be
+undone — a topic create/delete/config change, a cluster profile change, a restart, an
+apply, a sign-in — the audit database is proved writable (a real write transaction and
+enough free space). If it is not, the response is `503 {"error": "audit_unavailable"}`,
+nothing happens, and `AUDIT_WRITE_FAILED` goes to syslog at CRIT carrying the whole record.
+Sign-out is never blocked. If the database fails AFTER a change, the response says the
+change **was** made and the record went to syslog.
+
+**Session limit precedence** (owner ruling): Settings wins. `session.max_concurrent` in
+`config.yaml` only seeds the setting the first time the service starts on a database that
+has none; a different value there is logged as a warning at every start.
+
+**Rate limits** (defaults: sign-in 10/min burst 5, API 300/min burst 100, 20 connections
+per address). A limited request is `429` with a JSON body
+`{"error": "...", "code": "rate_limited"}`, which the sign-in page shows as "Too many
+sign-in attempts", never as a network error.
+
+**Certificate upload** accepts EC P-256/P-384 and RSA 2048/3072/4096, SHA-2 signed, in
+date, key matching and unencrypted, and a chain that verifies the leaf; everything else is
+refused with a fixed reason that never quotes the upload. Checks run with the host's
+`openssl` CLI (never Python `cryptography`, whose wheel carries its own OpenSSL). The key is
+parsed in memory, staged 0600 in the service's data directory for the helper, deleted as
+soon as the helper has read it, and installed `root:root 0600`; nginx serves leaf + chain.
+
+**HTTP redirect off** removes the `:80` listener entirely (the redirect is its own site,
+`/etc/nginx/sites-enabled/topic-manager-http`) and closes ufw `80/tcp` when ufw is active; a
+reinstall does not reopen it.
+
+**Upgrades never revert these.** The managed files are operator state: the upgrade backs
+them up, lays down the release's copy only where one is absent, puts them back on a
+rollback, and at the end re-applies what `tm.db` holds.
+
 ## Privileges the install grants
 
-The installer grants the `topic-manager` service account three narrowly scoped systemd
-actions, and nothing else. If you are reviewing the box, these are what changed in v1.0.4:
+The installer grants the `topic-manager` service account narrowly scoped systemd actions,
+and nothing else. If you are reviewing the box, these are what changed in v1.0.4 and v1.2.0:
 
 **`/etc/polkit-1/rules.d/50-topic-manager.rules`** — for the user `topic-manager` only, on
 the action `org.freedesktop.systemd1.manage-units`:
@@ -438,6 +521,7 @@ the action `org.freedesktop.systemd1.manage-units`:
 | `topic-manager.service` | `restart` |
 | `nginx.service` | `reload`, `restart` |
 | `topic-manager-nginx-test.service` | `start` |
+| `topic-manager-apply-syslog.service`, `-apply-time.service`, `-apply-nginx.service`, `-apply-tls.service` (v1.2.0) | `start` |
 
 There is no `stop` and no `kill` — leaving the site down is not one of the outcomes this
 feature offers. The rule returns `YES` for those combinations and `NOT_HANDLED` for
@@ -470,6 +554,17 @@ pre-check could not otherwise fail:
 Being `Type=oneshot`, `systemctl start` blocks until the test finishes and returns its exit
 status, so the verdict is conclusive rather than inferred. The unit reads configuration and
 writes nothing.
+
+**`/usr/libexec/topic-manager/tm-apply`** (v1.2.0) — the root helper behind the four apply
+units, `root:root 0755`, with its two rule modules in `lib/` (`root:root 0644`; the helper
+refuses to import them if they are not root-owned and private). Each unit is a
+`Type=oneshot` with a fixed `ExecStart=/usr/bin/python3 -I /usr/libexec/topic-manager/tm-apply
+<domain>`, no `[Install]` section, `NoNewPrivileges`, `ProtectSystem=strict` and
+`ReadWritePaths` limited to the files that domain changes. See
+[Host settings](#host-settings-v120) for what it trusts and what it refuses.
+
+**`topic-manager-audit-prune.timer`** (v1.2.0) — daily, runs `python -m tm.audit_retention`
+as the `topic-manager` account (`UMask=0077`), no polkit involved.
 
 **Why polkit and not sudoers.** `topic-manager.service` sets `NoNewPrivileges=true`, under
 which `sudo` refuses to run at all (`sudo: The "no new privileges" flag is set...`). A
@@ -747,7 +842,7 @@ Key settings:
 | `auth.ldap_bind_password` | **Optional.** Service account password. If both fields are set they must work — every login is gated on that bind |
 | `auth.required_group` | Full DN of the AD group required for access |
 | `session.timeout_minutes` | Session idle timeout in minutes (default: **15**) |
-| `session.max_concurrent` | Maximum simultaneous sessions per user; 0 = unlimited |
+| `session.max_concurrent` | SEEDS Settings > Security > Sessions on first start only (v1.2.0); Settings wins after that. 0 = unlimited; default 3 |
 
 #### Session timeout
 
@@ -818,7 +913,21 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
                              /etc/topic-manager itself
   clusters.d/clusters.yaml   topic-manager:topic-manager 0640 — cluster profiles, written
                              by the Cluster Builder
-/etc/nginx/sites-available/topic-manager   nginx site config
+/etc/nginx/sites-available/topic-manager   nginx site config (the release's; replaced by upgrades)
+/etc/nginx/sites-available/topic-manager-http   the :80 redirect (v1.2.0); ENABLED by a
+                             link in sites-enabled only while Settings has it on
+/etc/nginx/conf.d/topic-manager-limits.conf     rate-limit zones   } rendered by tm-apply,
+/etc/nginx/snippets/tm-limits-{server,login,api}.conf limits    } kept by upgrades
+/etc/nginx/snippets/tm-syslog.conf              nginx -> syslog  }
+/etc/rsyslog.d/30-topic-manager.conf   remote syslog forwarding (tm-apply syslog)
+/etc/rsyslog.d/topic-manager/          syslog TLS CA (rsyslogd's AppArmor profile reads here)
+/etc/chrony/sources.d/topic-manager.sources   NTP servers (chrony) — or —
+/etc/systemd/timesyncd.conf.d/topic-manager.conf   NTP servers (systemd-timesyncd)
+/usr/libexec/topic-manager/tm-apply   root apply helper (+ lib/), root:root
+/opt/topic-manager/data/apply/         staging for the helper, topic-manager 0700
+/run/topic-manager-apply/<domain>.result   the helper's verdicts (root, 0644)
+/var/backups/topic-manager/apply/      the helper's backups (root, 0700)
+/etc/topic-manager/tls/chain.pem       the uploaded CA chain (server.crt = leaf + chain)
 /etc/nginx/snippets/tm-security-headers.conf   Security header snippet
 /etc/systemd/system/topic-manager.service    systemd unit
 /etc/systemd/system/topic-manager-nginx-test.service   Root-side `nginx -t`, Type=oneshot.
@@ -842,21 +951,25 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
 
 ## Compliance
 
-- HTTPS enforced (HTTP → 301 redirect)
+- HTTPS enforced (HTTP → 301 redirect, or no :80 listener at all — Settings)
 - TLS 1.2 / 1.3 only — in the site AND at the http level of `/etc/nginx/nginx.conf`, which install and upgrade manage (stock Ubuntu enables TLS 1.0/1.1 there). FIPS-approved ciphers only: TLS 1.2 ECDHE with AES-GCM and SHA-256/384; TLS 1.3 AES-GCM suites; curves P-384/P-256; session tickets off; `server_tokens off`
 - Python dependencies hash-locked: `requirements.lock` pins every package (transitive ones too) with the SHA-256 of every published wheel; all installers use `--require-hashes --only-binary :all:`
 - Online upgrades pinned to a named 40-hex commit (`--repo-commit`); the offline bundle is a checksummed `git archive` of the tag plus hash-verified wheels
 - Settings changes are audited in the same transaction as the change: no audit row, no change
+- An action whose audit record cannot be written does not happen (503 `audit_unavailable`, CRIT to syslog); every audit record is also sent to syslog and can be forwarded off the host over TLS
+- Audit retention by age and row count, each prune audited in the same transaction; a capacity warning at a set percentage
 - Runs on a STIG'd, FIPS-mode Ubuntu 24.04 host. Known limitation: the `cryptography` and `confluent-kafka` wheels bundle their own OpenSSL, outside the host's validated module — see `SBOM.md` and docs/INSTALL.md section 10
 - Audit database `tm.db` 0600 in a 0700 directory, owned by the service account; `UMask=0077` on the unit
 - HTTPOnly + Secure + SameSite=Lax session cookies, signed with HMAC-SHA-256
 - Security headers on all routes: HSTS, CSP (`frame-ancestors 'none'`, `form-action 'none'`, `base-uri 'self'`), X-Content-Type-Options, Referrer-Policy
 - Server-side session store (SQLite); session tokens never leave the server in a readable form
-- Audit log with user, IP, timestamp and detail. **16 audited actions** (derived from `tm/routes.py` with the AST method in `.claude/project.yml`, not by grep): topics (`CREATE`, `DELETE`, `UPDATE_CONFIG`); cluster profiles (`CLUSTER_CREATE`, `CLUSTER_UPDATE`, `CLUSTER_DELETE`, before and after); application settings (`SETTINGS_UPDATE` — the banner and consent settings, naming the keys that changed and never their values; new in v1.1.0); service restarts (`SERVICE_RESTART`, `SERVICE_RESTART_STEP`, `SERVICE_RESTART_REFUSED`, `SERVICE_RESTART_THROTTLED`); and authentication (`LOGIN`, `LOGIN_FAILED`, `LOGIN_REFUSED`, `LOGOUT`, `SESSION_EXPIRED`). A `LOGOUT` row says in its detail whether the person signed out or the idle timeout did it, so the two are distinguishable in the export. SASL passwords are redacted and certificate paths reduced to basenames before anything is logged, because any authenticated user can export the log
+- Audit log with user, IP, timestamp and detail. **21 audited actions** in the database, plus one that exists only in syslog. Derived from EVERY module in `tm/*.py` with the AST (never grep — the action is the third positional argument, usually on the next line), with:
+  `python3 -c "import ast,glob;print(sorted({n.args[2].value for f in glob.glob('tm/*.py') for n in ast.walk(ast.parse(open(f).read())) if isinstance(n,ast.Call) and getattr(n.func,'attr',getattr(n.func,'id',''))=='log_action' and len(n.args)>2 and isinstance(n.args[2],ast.Constant)}))"`
+  — topics (`CREATE`, `DELETE`, `UPDATE_CONFIG`); cluster profiles (`CLUSTER_CREATE`, `CLUSTER_UPDATE`, `CLUSTER_DELETE`, before and after); application settings (`SETTINGS_UPDATE` — display and v1.2.0 host settings show old → new values, any other key is named only); service restarts (`SERVICE_RESTART`, `SERVICE_RESTART_STEP`, `SERVICE_RESTART_REFUSED`, `SERVICE_RESTART_THROTTLED`); authentication (`LOGIN`, `LOGIN_FAILED`, `LOGIN_REFUSED`, `LOGOUT`, `SESSION_EXPIRED`); host settings, v1.2.0 (`SYSTEM_APPLY_REQUESTED`, `SYSTEM_APPLY_RESULT`, `TLS_CERT_REPLACED` — the certificate's key type and expiry, never PEM material); retention, v1.2.0 (`AUDIT_PRUNE`, `AUDIT_CAPACITY_WARNING`); and, syslog-only because the database write is what failed, `AUDIT_WRITE_FAILED` (CRIT, carrying the lost record). A `LOGOUT` row says in its detail whether the person signed out or the idle timeout did it, so the two are distinguishable in the export. SASL passwords are redacted and certificate paths reduced to basenames before anything is logged, because any authenticated user can export the log
 - Destructive actions require name-match confirmation
 - Idle session timeout: 15 minutes (configurable as `session.timeout_minutes`); background refreshes do not count as activity
 - Fail-closed: application refuses to start if `secret_key` is absent or still the placeholder
-- The service account holds no general privilege escalation: `NoNewPrivileges=true` (so `sudo` cannot run under the unit at all), and exactly three systemd unit/verb pairs are authorised through polkit — see [Privileges the install grants](#privileges-the-install-grants)
+- The service account holds no general privilege escalation: `NoNewPrivileges=true` (so `sudo` cannot run under the unit at all), and exactly seven systemd unit/verb pairs are authorised through polkit (v1.2.0 added `start` on the four apply units, whose root helper re-validates everything and runs no code the service account owns) — see [Privileges the install grants](#privileges-the-install-grants)
 - The application cannot write or unlink its own `config.yaml`, and the upgrade asks the kernel to prove it as the real principal rather than reading mode bits
 - **No role separation.** Every member of `required_group` can delete any topic, rewrite the cluster list and restart the service. "Authenticated" and "fully privileged in this app" are the same thing here; the audit log records who acted, it does not constrain who may
 

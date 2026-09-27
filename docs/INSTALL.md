@@ -141,6 +141,24 @@ Add `--tls-cert /path/server.crt --tls-key /path/server.key` to install your cer
 asked for each value instead. `--non-interactive` turns any missing required value into a
 refusal instead of a prompt — use it from automation.
 
+**Host settings (v1.2.0), all optional** — each is a Settings pane afterwards; a flag only
+seeds it, and the install then applies it through the same root helper the pane uses:
+
+```bash
+    --syslog-host logs.example.org --syslog-protocol tls --syslog-port 6514 \
+    --syslog-app-id topic-manager --syslog-ca /path/collector-ca.pem \
+    --ntp-server ntp1.example.org,ntp2.example.org \
+    --no-http-redirect          # no :80 listener, ufw 80/tcp stays closed
+    --install-chrony            # see below
+```
+
+A bad value stops the install before anything changes. **Time daemon:** the install keeps
+whichever of chrony and systemd-timesyncd runs. It installs chrony only on a host with
+neither, or with `--install-chrony` — and chrony **conflicts with systemd-timesyncd: installing
+it removes systemd-timesyncd**. That is the only package removal the installer ever allows
+(checked in apt's simulated plan; anything else it would remove is refused). A STIG'd Ubuntu
+24.04 host already runs chrony.
+
 The script ends with the URL and a running service. If it stops, it says why, and nothing
 half-configured is left claiming success; see TROUBLESHOOTING.md.
 
@@ -237,7 +255,9 @@ Vue from the bundle, hash-verified.
 3. On a host with no `config.yaml`, collects the directory settings (flags, else prompts) —
    **before** anything is installed, so a missing value stops an untouched host.
 4. Installs any missing runtime package: `python3 python3-venv nginx polkitd rsync sudo curl
-   ca-certificates openssl`. No compiler, no `-dev` headers.
+   ca-certificates openssl rsyslog rsyslog-openssl`. No compiler, no `-dev` headers. Then the
+   time daemon: chrony is kept, systemd-timesyncd is kept unless `--install-chrony`, and a host
+   with neither gets chrony (v1.2.0).
 5. Creates the `topic-manager` system account and the directories:
    `/opt/topic-manager` (0750), `logs` (0750), `data` (**0700**), `/etc/topic-manager` (0750
    `root:topic-manager`), `tls` (0750), `clusters.d` (0750, app-owned), `data/cluster-certs`
@@ -252,15 +272,23 @@ Vue from the bundle, hash-verified.
     directory settings and a new random `secret_key`, or keeps the existing one.
 11. Creates an **empty** cluster store (or migrates a legacy `clusters:` block on a reinstall).
     `config/clusters.yaml.example` is a format reference and is never imported.
-12. Installs the systemd units and the polkit rule.
-13. Installs the nginx site and security-header snippet, the certificate (yours, existing, or a
+12. Installs the systemd units and the polkit rule; v1.2.0 adds the root apply helper
+    (`/usr/libexec/topic-manager/tm-apply`, `root:root`), its four one-shot units and the audit
+    prune timer. The host-setting flags are saved to `tm.db` here, as the service account.
+13. Installs the nginx site and security-header snippet, the Settings-managed nginx and
+    rsyslog files where absent (rate limits, syslog: the release defaults), the `:80` redirect
+    site (enabled only if the redirect setting is on), the certificate (yours, existing, or a
     self-signed ECDSA P-256 placeholder), and sets `ssl_protocols TLSv1.2 TLSv1.3` in
     `nginx.conf` (backup in `/var/backups/topic-manager/`, `nginx -t`, rolled back on failure).
-14. Opens 80/443 in ufw if ufw is active; installs log rotation.
+14. Opens 443 in ufw if ufw is active — and 80 only while the HTTP redirect is on; installs log
+    rotation.
 15. `nginx -t` (fatal on failure), then asks the kernel — as the service account — that the app
     can write `clusters.d` and can **not** write `config.yaml` or its directory.
 16. Starts the service and nginx, waits for `/api/health`, and measures `tm.db` 0600 and
     `data/` 0700.
+17. Applies the saved host settings (syslog, time, nginx) through the apply units and reads
+    each verdict back; a failed domain was rolled back by the helper and stops the install with
+    its reason. Enables the daily audit prune timer.
 
 ---
 
@@ -282,6 +310,11 @@ openssl s_client -connect localhost:443 -tls1_1 </dev/null 2>&1 | grep -c 'Ciphe
 sudo stat -c '%a %U %n' /opt/topic-manager/data /opt/topic-manager/data/tm.db
 #   700 topic-manager /opt/topic-manager/data
 #   600 topic-manager /opt/topic-manager/data/tm.db
+
+# v1.2.0: every apply the install made, and the prune timer
+sudo cat /run/topic-manager-apply/nginx.result | python3 -m json.tool | grep '"state"'
+#   "state": "ok",
+systemctl list-timers topic-manager-audit-prune.timer --no-pager | tail -n +2 | head -1
 ```
 
 ---
@@ -345,8 +378,9 @@ covered by the host's validated module:
 
 ## 11. Firewall
 
-If `ufw` is active, `install.sh` opens 80/tcp and 443/tcp (`ufw allow 80/tcp`, `ufw allow
-443/tcp`). If ufw refuses a rule, the install finishes with a warning naming the port and ufw's
+If `ufw` is active, `install.sh` opens 443/tcp, and 80/tcp while the HTTP redirect is on
+(`ufw allow 80/tcp`, `ufw allow 443/tcp`); turning the redirect off in Settings removes the
+80/tcp rule, and a reinstall does not add it back (v1.2.0). If ufw refuses a rule, the install finishes with a warning naming the port and ufw's
 reason, and does not claim the ports are open. Otherwise open them yourself, and
 nothing else is needed inbound except SSH for administration. The complete inventory is
 `PPSM.csv`.
