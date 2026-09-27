@@ -131,8 +131,21 @@ the host's validated boundary. This is recorded as a **known limitation**, not a
 wheels are statically linked by their publishers, and there is no FIPS-validated wheel of
 either package. Operators who must keep every TLS session inside the validated module should
 keep the Kafka path inside a boundary their accreditation already covers, or accept and record
-the limitation. Measured facts behind this table come from how the wheels are built; a run on a
-FIPS-enabled host has not yet been made (see CHANGELOG 1.1.0 → *Not verified*).
+the limitation. The "Yes" rows were measured on a STIG + FIPS Ubuntu 24.04 host (see CHANGELOG
+1.1.0 → *Verified*); the "No" rows follow from how the wheels are built.
+
+### Risk acceptance — Kafka client TLS outside the validated module
+
+| | |
+|---|---|
+| **Finding** | The `confluent-kafka` 2.15.1 wheel bundles librdkafka and its **own** OpenSSL. Kafka client TLS therefore runs **outside** the host's FIPS 140-3 validated cryptographic module, even with `fips_enabled=1`. |
+| **Mapping** | NIST SP 800-53 SC-13; SRG-APP-000014, SRG-APP-000514; CWE-327 |
+| **Decision** | **Accepted by the system owner, 2026-09-26.** |
+| **Compensating notes** | Kafka cluster profiles should use `SSL` or `SASL_SSL`, never `PLAINTEXT`. Every other TLS path on the host does use the validated module: nginx, LDAPS and Python `ssl` — measured on a STIG + FIPS Ubuntu 24.04 host (`fips_enabled=1`, provider "Ubuntu 24.04 OpenSSL Cryptographic Module 3.0.13+Fips2"). |
+| **Path to remove the risk** | Run the Kafka client against the system OpenSSL: the distribution's `python3-confluent-kafka` package (linked to the system libssl), or a site-built wheel compiled against the system libssl. |
+
+The `cryptography` wheel's bundled OpenSSL is used only to parse uploaded PEM certificates (no
+TLS session, no key agreement) and remains a known limitation as described above.
 
 ## Tooling (not shipped to the target host)
 

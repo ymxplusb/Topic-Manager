@@ -329,6 +329,15 @@ covered by the host's validated module:
   **run** on a FIPS host; their cryptography is simply outside the host's validated boundary. If
   your accreditation requires every TLS connection to use the validated module, keep Kafka on a
   network path your boundary already covers, or record this as an accepted limitation.
+- **Risk acceptance — Kafka client TLS (accepted by the system owner, 2026-09-26).** Because
+  the `confluent-kafka` 2.15.1 wheel bundles librdkafka and its own OpenSSL, Kafka client TLS
+  runs outside the host's FIPS 140-3 validated module even with `fips_enabled=1` (SC-13;
+  SRG-APP-000014 / SRG-APP-000514; CWE-327). Compensating: configure every Kafka profile with
+  `SSL` or `SASL_SSL`; nginx, LDAPS and Python `ssl` use the validated module (measured on a
+  STIG + FIPS Ubuntu 24.04 host: `fips_enabled=1`, "Ubuntu 24.04 OpenSSL Cryptographic Module
+  3.0.13+Fips2"). To remove the risk, install the distribution's `python3-confluent-kafka`
+  (linked to the system OpenSSL) or a wheel built on site against the system libssl. See
+  SBOM.md → *Risk acceptance*.
 - The self-signed placeholder is generated with `openssl req ... ec P-256 -sha256`, which works
   under FIPS mode.
 

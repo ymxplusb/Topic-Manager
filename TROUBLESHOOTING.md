@@ -790,6 +790,14 @@ Check it: `grep -E '^\s*ssl_protocols' /etc/nginx/nginx.conf`, and
   run on a FIPS host; their cryptography is outside the validated boundary. Record it as an
   accepted limitation, or keep the Kafka path inside a boundary your accreditation already
   covers.
+- **Risk acceptance (2026-09-26, system owner): Kafka client TLS.** `confluent-kafka` 2.15.1
+  bundles librdkafka and its own OpenSSL, so Kafka client TLS runs outside the host's FIPS
+  140-3 validated module even with `fips_enabled=1` (SC-13; SRG-APP-000014 / SRG-APP-000514;
+  CWE-327). Accepted. Use `SSL` or `SASL_SSL` in every Kafka profile. nginx, LDAPS and Python
+  `ssl` do use the validated module (measured: `fips_enabled=1`, "Ubuntu 24.04 OpenSSL
+  Cryptographic Module 3.0.13+Fips2"). To remove the risk, use the distribution's
+  `python3-confluent-kafka` (system OpenSSL) or a site-built wheel against the system libssl.
+  Full record: SBOM.md → *Risk acceptance*.
 - **A browser cannot connect after FIPS mode is enabled.** The client offered only suites
   outside the list (ChaCha20, CBC, X25519-only). Any current browser offers AES-GCM with
   P-256; check with `openssl s_client -connect <host>:443 -tls1_2`.

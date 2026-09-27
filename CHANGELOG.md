@@ -231,20 +231,32 @@ Adversary and security-review findings, all fixed on this branch before release:
 
 - **FIPS module boundary**: the `cryptography` and `confluent-kafka` wheels bundle their own
   OpenSSL, outside the host's validated module. Both run on a FIPS host. See SBOM.md.
+- **Risk acceptance (system owner, 2026-09-26): Kafka client TLS runs outside the host's FIPS
+  140-3 validated module** — the `confluent-kafka` 2.15.1 wheel bundles librdkafka and its own
+  OpenSSL (SC-13; SRG-APP-000014 / SRG-APP-000514; CWE-327). Compensating: SSL/SASL_SSL Kafka
+  profiles; nginx, LDAPS and Python `ssl` use the validated module. Removal path: the
+  distribution's `python3-confluent-kafka` or a site-built wheel against the system libssl.
+  Recorded in SBOM.md, TROUBLESHOOTING.md and docs/INSTALL.md §10.
 - **Tag signatures are not verified.** The online upgrade pins the commit id; verifying a signed
   tag against an operator keyring (`--verify-tag`) is a follow-up.
 - History entries below this one describe past releases as they were; for example the notes
   that `install.sh` fetched an unverified Vue 3.5.35 were true of v1.0.2 and were fixed in
   v1.0.4.
 
+### Verified
+
+- **DAST:** ZAP 2.17.0 active scan of the release candidate on a STIG (USG stig-v1r1) + FIPS
+  Ubuntu 24.04 host: 0 High, 0 Low, 2 distinct Medium (CSP script-src 'unsafe-eval' and
+  style-src 'unsafe-inline', both deferred to the CSP/precompiled-templates release).
+- **Air-gapped install:** the install from the offline bundle completed on that host; the host
+  STIG audit was unchanged after install (209 pass / 8 site-specific fail).
+- **FIPS paths:** on that host (`fips_enabled=1`) nginx, LDAPS and Python `ssl` use the
+  validated module, "Ubuntu 24.04 OpenSSL Cryptographic Module 3.0.13+Fips2".
+
 ### Not verified
 
-- No FIPS-enabled host was available: behaviour under FIPS mode is argued from how each
-  component is built and configured, not measured.
-- The round-1 bundle (9a794ff) WAS installed on a real STIG + FIPS host by the owner and failed
-  at the offline apt step — the defect fixed above. The round-2 bundle has not yet been
-  re-installed there; the new apt path was proven by simulation (`apt-get -s`, /tmp only) on
-  a stock host and by the test suite.
+- The Kafka client's TLS under FIPS mode is not inside the validated module by construction
+  (see the risk acceptance above); it was not measured separately.
 
 ---
 
