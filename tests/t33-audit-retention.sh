@@ -45,7 +45,7 @@ def count(where='1=1'):
     d = db(); n = d.execute('SELECT COUNT(*) FROM audit_log WHERE ' + where).fetchone()[0]; d.close(); return n
 $1
 PYEOF
-    PYTHONPATH="$PYROOT" PYTHONDONTWRITEBYTECODE=1 TM_CONFIG="${TM_TMP}/config.yaml" \
+    PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 TM_CONFIG="${TM_TMP}/config.yaml" \
         TM_CLUSTERS_DIR="${TM_TMP}/clusters.d" TM_SYSLOG_SOCKET="${TM_TMP}/none.sock" \
         "$PY" "${TM_TMP}/probe.py" 2>&1 | tr -d '\r'
 }

@@ -275,17 +275,101 @@ a_upgrade_order() {
 }
 tm_case "upgrade-re-applies-after-verification-and-never-overwrites" none a_upgrade_order
 
+_phase9() {   # <backup has the v1.2.0 marker: yes|no> — the REAL Phase 9 block, relocated
+    FR="${TM_TMP}/p9"
+    mkdir -p "$FR"/etc/nginx/{conf.d,snippets,sites-available,sites-enabled} "$FR"/etc/rsyslog.d "$FR"/etc/systemd/system "${TM_TMP}/bk/system"
+    [ "$1" = yes ] && { mkdir -p "${TM_TMP}/bk/system/v120"; : > "${TM_TMP}/bk/system/v120/.present"; }
+    {
+        echo 'set -uo pipefail'
+        echo 'fail() { echo "FAIL: $*"; exit 1; }; info() { echo "INFO $*"; }; success() { echo "OK $*"; }'
+        echo 'install_apply_helper() { echo "HELPER $*" >> "'"${TM_TMP}"'/calls"; }'
+        echo 'safe_install_dir() { echo "SID $*" >> "'"${TM_TMP}"'/calls"; }'
+        echo 'install() { local a=(); while [ $# -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) a+=("$1"); shift ;; esac; done; command install "${a[@]}"; }'
+        tm_extract_func "$UP" install_if_absent
+        printf 'WORK_DIR=%q BACKUP_DIR=%q PREV_SN="tm.example.org _" APP_USER=topic-manager APP_HOME=/opt/topic-manager\n' \
+            "$TM_REPO_ROOT" "${TM_TMP}/bk"
+        tm_extract_line "$UP" '^V120_UNITS='
+        tm_extract_between "$UP" '^V120_UNITS=' '^[[:space:]]+topic-manager-audit-prune.service topic-manager-audit-prune.timer\)$' | sed 1d
+        tm_extract_between "$UP" '^install_if_absent 644 "\$\{WORK_DIR\}/nginx/tm-limits.conf"' \
+            '^success "Apply helper, apply units and the audit prune timer installed; managed files kept"$' \
+            | sed "s#/etc/#${FR}/etc/#g"
+    } > "${TM_TMP}/p9.sh"
+    grep -qE '(^|[^/])/etc/(nginx|rsyslog|systemd)' <(grep -v "${FR}" "${TM_TMP}/p9.sh" | grep -v '^#') \
+        && tm_die "a Phase 9 path escaped the fake root"
+    : > "${TM_TMP}/calls"
+    P9_RC=0
+    bash "${TM_TMP}/p9.sh" > "${TM_TMP}/p9.out" 2>&1 || P9_RC=$?
+}
+
+a_phase9_redirect_link() {
+    _phase9 no
+    tm_assert_rc 0 "$P9_RC" "Phase 9 failed: $(cat "${TM_TMP}/p9.out")"
+    [ -L "$FR/etc/nginx/sites-enabled/topic-manager-http" ] \
+        || _tm_afail "upgrading from a release BEFORE v1.2.0 left no :80 listener (its old site file had one)"
+    grep -q "server_name tm.example.org _;" "$FR/etc/nginx/sites-available/topic-manager-http" \
+        || _tm_afail "the :80 site did not keep the host's server_name"
+    grep -q '^HELPER ' "${TM_TMP}/calls" || _tm_afail "Phase 9 did not install the apply helper"
+    tm_assert_file "$FR/etc/systemd/system/topic-manager-apply-tls.service" "Phase 9 did not install the apply units"
+    rm -rf "$FR" "${TM_TMP}/bk"
+    _phase9 yes
+    [ -L "$FR/etc/nginx/sites-enabled/topic-manager-http" ] \
+        && _tm_afail "an upgrade from v1.2.0+ RE-ENABLED the :80 site the operator had turned off"
+    true
+}
+tm_case "phase9-enables-80-only-when-coming-from-before-v120" symlinks a_phase9_redirect_link
+
+_reapply() {   # <result state for nginx> <stage rc> — the REAL Phase 12 re-apply block
+    {
+        echo 'set -uo pipefail'
+        echo 'info() { echo "INFO $*"; }; success() { echo "OK $*"; }; warn() { echo "WARN $*"; }'
+        echo "run_as_app() { echo \"APP \$*\" >> '${TM_TMP}/calls'; case \"\$1\" in stage) return $2 ;; result) [ \"\$2\" = nginx ] && echo '{\"state\":\"$1\",\"message\":\"m\"}' || echo '{\"state\":\"ok\",\"message\":\"m\"}' ;; esac; }"
+        echo "systemctl() { echo \"SYSTEMCTL \$*\" >> '${TM_TMP}/calls'; }"
+        tm_extract_between "$UP" '^info "Re-applying the saved host settings' '^    \|\| warn "The audit prune timer could not be enabled'
+        echo 'echo "FAILED=[${REAPPLY_FAILED}]"'
+    } > "${TM_TMP}/ra.sh"
+    : > "${TM_TMP}/calls"
+    bash "${TM_TMP}/ra.sh" > "${TM_TMP}/ra.out" 2>&1
+}
+
+a_reapply_block() {
+    _reapply ok 0
+    grep -qx 'APP stage all' "${TM_TMP}/calls" || _tm_afail "the upgrade does not stage the saved settings: $(cat "${TM_TMP}/calls")"
+    local d
+    for d in syslog time nginx; do
+        grep -qx "SYSTEMCTL start topic-manager-apply-${d}.service" "${TM_TMP}/calls" || _tm_afail "the ${d} apply unit is not started"
+        grep -qx "APP result ${d}" "${TM_TMP}/calls" || _tm_afail "the ${d} verdict is not read back (nor audited)"
+    done
+    tm_assert_grep "FAILED=[]" "${TM_TMP}/ra.out" "a clean re-apply was reported as failed"
+    _reapply rolled_back 0
+    tm_assert_grep "FAILED=[ nginx]" "${TM_TMP}/ra.out" "a rolled-back domain was not reported"
+    tm_assert_grep "WARN Re-apply nginx did NOT succeed" "${TM_TMP}/ra.out"
+    _reapply ok 1
+    tm_assert_grep "FAILED=[ syslog time nginx]" "${TM_TMP}/ra.out" "a failed stage was not reported as nothing re-applied"
+    grep -q 'SYSTEMCTL start topic-manager-apply' "${TM_TMP}/calls" && _tm_afail "units were started with nothing staged"
+    true
+}
+tm_case "phase12-re-applies-every-domain-and-reports-each-failure" none a_reapply_block
+
 a_bad_flag_changes_nothing() {
     local rc=0 out
-    out="$(bash "$INSTALL_SH" --server-name tm.example.org --non-interactive --syslog-host 'logs.example.org;x' 2>&1)" || rc=$?
+    # NEVER as root: a mutation that let install.sh past its flag check would
+    # otherwise run a real install on the test host. Unprivileged, it can only
+    # reach the root check and stop.
+    local -a AS=()
+    if [ "$(id -u)" = 0 ]; then
+        AS=(setpriv --reuid nobody --regid nogroup --clear-groups)
+        command -v setpriv >/dev/null 2>&1 || tm_die "running as root without setpriv to drop privileges"
+    fi
+    _inst() { "${AS[@]}" bash "$INSTALL_SH" "$@"; }
+    out="$(_inst --server-name tm.example.org --non-interactive --syslog-host 'logs.example.org;x' 2>&1)" || rc=$?
     tm_assert_rc 1 "$rc" "a hostile --syslog-host was accepted: ${out}"
     case "$out" in *"Invalid host setting: --syslog-host:"*"Nothing has been changed."*) ;; *)
         _tm_afail "the refusal does not name the flag or say nothing changed: ${out}" ;; esac
-    out="$(bash "$INSTALL_SH" --server-name tm.example.org --non-interactive --syslog-port 70000 --syslog-host logs.example.org 2>&1)" || rc=$?
+    out="$(_inst --server-name tm.example.org --non-interactive --syslog-port 70000 --syslog-host logs.example.org 2>&1)" || rc=$?
     case "$out" in *"--syslog-port: must be from 1 to 65535"*) ;; *) _tm_afail "port 70000: ${out}" ;; esac
-    out="$(bash "$INSTALL_SH" --server-name tm.example.org --non-interactive --ntp-server 'a,b,c,d,e,f' 2>&1)" || rc=$?
+    out="$(_inst --server-name tm.example.org --non-interactive --ntp-server 'a,b,c,d,e,f' 2>&1)" || rc=$?
     case "$out" in *"--ntp-server: at most 5 servers"*) ;; *) _tm_afail "six NTP servers: ${out}" ;; esac
-    out="$(bash "$INSTALL_SH" --server-name tm.example.org --non-interactive --syslog-ca /nonexistent/ca.pem 2>&1)" || rc=$?
+    out="$(_inst --server-name tm.example.org --non-interactive --syslog-ca /nonexistent/ca.pem 2>&1)" || rc=$?
     case "$out" in *"--syslog-ca /nonexistent/ca.pem: no such file"*) ;; *) _tm_afail "missing CA: ${out}" ;; esac
     case "$out" in *"Install mode:"*) _tm_afail "install.sh probed the network before refusing a bad flag" ;; esac
     true

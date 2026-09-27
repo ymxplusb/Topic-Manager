@@ -1420,3 +1420,897 @@ TARGET|install
 EQUIV|no
 ANCHOR|        warn "ufw is active but could NOT open:${failed}"
 REPLACE|        die "ufw is active but could NOT open:${failed}"
+
+# ─── v1.2.0 (WO-0004): settings, audit, retention, apply helper, TLS, nginx, installer ─
+# Every anchor below was checked to match EXACTLY ONCE when this block was
+# written (scratchpad gen_mutations.py); tests/mutate.sh re-checks it on every run.
+
+--- M174
+DESC|settings: a host name may start with a dash (an option to the tools root runs)
+TESTS|t31-settings-keys.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    return bool(_HOSTNAME_RE.match(value)) and value[0] not in '-.'
+REPLACE|    return bool(_HOSTNAME_RE.match(value))
+
+--- M175
+DESC|settings: syslog port 0 and 65536 accepted
+TESTS|t31-settings-keys.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    'syslog_port':             (1, 65535),
+REPLACE|    'syslog_port':             (0, 65536),
+
+--- M176
+DESC|settings: an unknown syslog protocol accepted
+TESTS|t31-settings-keys.sh t34-apply-helper.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|SYSLOG_PROTOCOLS = ('udp', 'tcp', 'tls')
+REPLACE|SYSLOG_PROTOCOLS = ('udp', 'tcp', 'tls', 'sctp')
+
+--- M177
+DESC|settings: the app id may carry a space or a quote
+TESTS|t31-settings-keys.sh t34-apply-helper.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|_APP_ID_RE = re.compile(r'^[A-Za-z0-9._-]{1,48}$')
+REPLACE|_APP_ID_RE = re.compile(r'^[^\n]{1,48}$')
+
+--- M178
+DESC|settings: six NTP servers accepted
+TESTS|t31-settings-keys.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|MAX_NTP_SERVERS = 5
+REPLACE|MAX_NTP_SERVERS = 6
+
+--- M179
+DESC|settings: remote syslog ON with no host is not refused
+TESTS|t31-settings-keys.sh t35-apply-routes.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    if domain == 'syslog' and values.get('syslog_enabled') == 'true' \
+REPLACE|    if False and domain == 'syslog' and values.get('syslog_enabled') == 'true' \
+
+--- M180
+DESC|settings: config.yaml overwrites the Settings session limit at every start
+TESTS|t31-settings-keys.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    db.execute('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)',
+REPLACE|    db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)',
+
+--- M181
+DESC|settings: config.yaml does not seed the session limit
+TESTS|t31-settings-keys.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|            seed = normalise(SESSION_KEY, raw)
+REPLACE|            pass
+
+--- M182
+DESC|settings: the config/Settings disagreement is not logged
+TESTS|t31-settings-keys.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    if raw is not None and str(raw).strip() != current:
+REPLACE|    if False:
+
+--- M183
+DESC|settings: a JSON boolean is stored as "True" — EQUIVALENT: the bool branch lower-cases the text after, so "true" is still stored (measured: survives)
+TESTS|t31-settings-keys.sh
+TARGET|py:settings_schema
+EQUIV|yes
+ANCHOR|        return 'true' if value else 'false'
+REPLACE|        return str(value)
+
+--- M184
+DESC|routes: THE ALIAS — the public route serves every key
+TESTS|t31-settings-keys.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    data = _read_settings(db, _PUBLIC_KEYS)
+REPLACE|    data = _read_settings(db, _ALL_KEYS)
+
+--- M185
+DESC|routes: _PUBLIC_KEYS can be extended in place again
+TESTS|t31-settings-keys.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|_PUBLIC_KEYS = frozenset({'banner_enabled', 'banner_text', 'banner_bg', 'banner_fg',
+REPLACE|_PUBLIC_KEYS = set({'banner_enabled', 'banner_text', 'banner_bg', 'banner_fg',
+
+--- M186
+DESC|routes: PUT stores an admin value without validating it
+TESTS|t31-settings-keys.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|                accepted[k] = settings_schema.normalise(k, v)
+REPLACE|                accepted[k] = str(v)
+
+--- M187
+DESC|routes: admin settings audited by name only (no old -> new)
+TESTS|t31-settings-keys.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|                               'banner_fg', 'dow_enabled'}) | settings_schema.ADMIN_KEYS
+REPLACE|                               'banner_fg', 'dow_enabled'})
+
+--- M188
+DESC|routes: the session limit comes from config.yaml again
+TESTS|t31-settings-keys.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    max_s = _max_sessions(db)
+REPLACE|    max_s = _cfg().get('session', {}).get('max_concurrent', 0)
+
+--- M189
+DESC|routes: the audit gate is neutralised
+TESTS|t32-audit-syslog.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|            audit.require_writable(_cfg())
+REPLACE|            pass
+
+--- M190
+DESC|routes: sign-in skips the audit pre-check
+TESTS|t32-audit-syslog.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        audit.require_writable(cfg)
+ANCHOR|    except audit.AuditUnavailable:
+ANCHOR|        return _audit_unavailable()
+ANCHOR|    db  = get_db(cfg)
+REPLACE|        pass
+REPLACE|    except audit.AuditUnavailable:
+REPLACE|        return _audit_unavailable()
+REPLACE|    db  = get_db(cfg)
+
+--- M191
+DESC|routes: a sign-in whose LOGIN record failed keeps its session
+TESTS|t32-audit-syslog.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        db = get_db(cfg)
+ANCHOR|        delete_session(db, sid)
+ANCHOR|        db.close()
+ANCHOR|        return _audit_unavailable()
+REPLACE|        return _audit_unavailable()
+
+--- M192
+DESC|routes: sign-out is blocked by an audit failure
+TESTS|t32-audit-syslog.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|                     request.remote_addr or 'unknown', detail, '', best_effort=True)
+REPLACE|                     request.remote_addr or 'unknown', detail, '')
+
+--- M193
+DESC|routes: an apply whose request record failed stays staged
+TESTS|t32-audit-syslog.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        apply_mod.discard_stage(cfg, domain)
+REPLACE|        pass
+
+--- M194
+DESC|routes: the apply cross-field check is skipped
+TESTS|t35-apply-routes.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    problems = settings_schema.check_domain(domain, values)
+ANCHOR|    if problems:
+REPLACE|    problems = settings_schema.check_domain(domain, values)
+REPLACE|    if False:
+
+--- M195
+DESC|routes: the apply throttle is off
+TESTS|t35-apply-routes.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if not allowed:
+ANCHOR|        wait = max(1, int(math.ceil(remaining)))
+ANCHOR|        resp = jsonify({'error': 'apply_throttled', 'retry_after': wait,
+REPLACE|    if False:
+REPLACE|        wait = max(1, int(math.ceil(remaining)))
+REPLACE|        resp = jsonify({'error': 'apply_throttled', 'retry_after': wait,
+
+--- M196
+DESC|routes: an apply is started over a running one
+TESTS|t35-apply-routes.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if apply_mod.status(cfg, domain)['state'] in ('queued', 'running'):
+REPLACE|    if False:
+
+--- M197
+DESC|routes: a unit that could not start is not recorded as failed
+TESTS|t35-apply-routes.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        apply_mod.record_start_failure(cfg, domain, job, detail)
+REPLACE|        pass
+
+--- M198
+DESC|routes: the certificate upload is staged without validation
+TESTS|t37-tls-upload.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        info = tls_check.validate(cert, key, chain or None)
+REPLACE|        info = {'subject': '', 'issuer': '', 'not_after': '', 'key_type': '', 'chain_count': 0}
+
+--- M199
+DESC|routes: an oversized upload is parsed
+TESTS|t37-tls-upload.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if length > _TLS_UPLOAD_MAX:
+REPLACE|    if False:
+
+--- M200
+DESC|routes: tls is applicable through the generic route
+TESTS|t35-apply-routes.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if domain not in apply_mod.APPLY_DOMAINS:
+REPLACE|    if domain not in apply_mod.STATUS_DOMAINS:
+
+--- M201
+DESC|audit: a committed row is not sent to syslog
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    if own:
+ANCHOR|        emit(record)
+ANCHOR|    return record
+REPLACE|    return record
+
+--- M202
+DESC|audit: a failed write is not reported at CRIT
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    syslog_send(msg, SEV_CRIT)
+REPLACE|    pass
+
+--- M203
+DESC|audit: best_effort inverted — a refused action passes silently
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|        if best_effort:
+ANCHOR|            return None
+REPLACE|        if not best_effort:
+REPLACE|            return None
+
+--- M204
+DESC|audit: a field is not quoted (a CR/LF forges a second syslog line)
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    return json.dumps(_CONTROL.sub('?', str(value))[:limit])
+REPLACE|    return '"%s"' % str(value)[:limit]
+
+--- M205
+DESC|audit: the pre-check ignores free space
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|        if st is not None and st.f_bavail * st.f_frsize < AUDIT_MIN_FREE_BYTES:
+REPLACE|        if False:
+
+--- M206
+DESC|audit: the pre-check only takes the lock (the probe row is never written)
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|        db.execute('INSERT INTO audit_log (ts, user, action, target, detail, cluster_id) '
+ANCHOR|                   'VALUES (?,?,?,?,?,?)',
+ANCHOR|                   (probe['ts'], probe['user'], probe['action'], probe['target'],
+ANCHOR|                    probe['detail'], probe['cluster_id']))
+
+--- M207
+DESC|audit: records go to facility daemon, not authpriv
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|_LOG_AUTHPRIV = 10
+REPLACE|_LOG_AUTHPRIV = 3
+
+--- M208
+DESC|retention: prune by age deletes the NEW rows
+TESTS|t33-audit-retention.sh
+TARGET|py:audit_retention
+EQUIV|no
+ANCHOR|        by_age = db.execute('DELETE FROM audit_log WHERE ts < ?', (cutoff,)).rowcount
+REPLACE|        by_age = db.execute('DELETE FROM audit_log WHERE ts > ?', (cutoff,)).rowcount
+
+--- M209
+DESC|retention: THE OFF-BY-ONE — max_rows kept, then AUDIT_PRUNE on top
+TESTS|t33-audit-retention.sh
+TARGET|py:audit_retention
+EQUIV|no
+ANCHOR|            (s['audit_max_rows'] - 2,)).rowcount
+REPLACE|            (s['audit_max_rows'] - 1,)).rowcount
+
+--- M210
+DESC|retention: a prune that deletes writes no AUDIT_PRUNE
+TESTS|t33-audit-retention.sh
+TARGET|py:audit_retention
+EQUIV|no
+ANCHOR|            record = audit.log_action(cfg, SYSTEM_USER, 'AUDIT_PRUNE', 'audit_log',
+ANCHOR|                                      detail, '', db=db)
+REPLACE|            record = None
+
+--- M211
+DESC|retention: a failed prune commits its deletions
+TESTS|t33-audit-retention.sh
+TARGET|py:audit_retention
+EQUIV|no
+ANCHOR|    except Exception:
+ANCHOR|        db.rollback()
+ANCHOR|        raise
+ANCHOR|    finally:
+ANCHOR|        remaining = None
+REPLACE|    except Exception:
+REPLACE|        db.commit()
+REPLACE|        raise
+REPLACE|    finally:
+REPLACE|        remaining = None
+
+--- M212
+DESC|retention: the warning flag is inverted
+TESTS|t33-audit-retention.sh
+TARGET|py:audit_retention
+EQUIV|no
+ANCHOR|    warning = pct >= s['audit_warn_pct']
+REPLACE|    warning = pct < s['audit_warn_pct']
+
+--- M213
+DESC|retention: the crossing is warned on every read
+TESTS|t33-audit-retention.sh
+TARGET|py:audit_retention
+EQUIV|no
+ANCHOR|            '  WHERE app_settings.value != excluded.value',
+ANCHOR|            (WARNED_KEY, want))
+REPLACE|            '', (WARNED_KEY, want))
+
+--- M214
+DESC|retention: the timer entry point exits 0 on a failed prune
+TESTS|t33-audit-retention.sh
+TARGET|py:audit_retention
+EQUIV|no
+ANCHOR|        log.error('audit prune FAILED; nothing was deleted: %s: %s', type(exc).__name__, exc)
+ANCHOR|        return 1
+REPLACE|        log.error('audit prune FAILED; nothing was deleted: %s: %s', type(exc).__name__, exc)
+REPLACE|        return 0
+
+--- M215
+DESC|apply: staging files are created 0644
+TESTS|t35-apply-routes.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|                 0o600)
+REPLACE|                 0o644)
+
+--- M216
+DESC|apply: the result claim is not once-only
+TESTS|t35-apply-routes.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|            '  WHERE app_settings.value != excluded.value', (key, job))
+REPLACE|            '', (key, job))
+
+--- M217
+DESC|apply: a FAILED apply replaces the live applied values (CC-1)
+TESTS|t35-apply-routes.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|        if res.get('state') == 'ok' and isinstance(done, dict):
+REPLACE|        if isinstance(done, dict):
+
+--- M218
+DESC|apply: the verdict is not kept past a reboot
+TESTS|t35-apply-routes.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|    if final and final.get('job') == last.get('job') and final.get('state') in FINAL_STATES:
+REPLACE|    if False:
+
+--- M219
+DESC|apply: no throttle interval
+TESTS|t35-apply-routes.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|APPLY_MIN_INTERVAL_S = 5
+REPLACE|APPLY_MIN_INTERVAL_S = 0
+
+--- M220
+DESC|apply: a start failure leaves the job queued
+TESTS|t35-apply-routes.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|    if last.get('start_error'):
+REPLACE|    if False:
+
+--- M221
+DESC|apply: TLS_CERT_REPLACED is not recorded
+TESTS|t35-apply-routes.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|        if domain == 'tls' and res.get('state') == 'ok':
+REPLACE|        if False:
+
+--- M222
+DESC|tls: RSA-1024 accepted
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|ACCEPTED_KEY_TYPES = ('EC P-256', 'EC P-384', 'RSA 2048', 'RSA 3072', 'RSA 4096')
+REPLACE|ACCEPTED_KEY_TYPES = ('EC P-256', 'EC P-384', 'RSA 1024', 'RSA 2048', 'RSA 3072', 'RSA 4096')
+
+--- M223
+DESC|tls: SHA-1 signatures accepted
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|    if not leaf['sig'] or _WEAK_SIG.search(leaf['sig']):
+REPLACE|    if not leaf['sig']:
+
+--- M224
+DESC|tls: an expired certificate accepted
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|    if not_after <= now:
+REPLACE|    if False:
+
+--- M225
+DESC|tls: a not-yet-valid certificate accepted
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|    if not_before > now:
+REPLACE|    if False:
+
+--- M226
+DESC|tls: a mismatched pair accepted
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|    if '-----BEGIN PUBLIC KEY-----' not in leaf['pubkey'] or keypub.strip() != leaf['pubkey'].strip():
+REPLACE|    if '-----BEGIN PUBLIC KEY-----' not in leaf['pubkey']:
+
+--- M227
+DESC|tls: an encrypted key is not named as such
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|    if b'ENCRYPTED' in key_pem:
+REPLACE|    if False:
+
+--- M228
+DESC|tls: an unverifiable chain accepted
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|        if rc != 0:
+ANCHOR|            # A FIXED reason (contract CC-1). openssl's own text names the
+REPLACE|        if False:
+REPLACE|            # A FIXED reason (contract CC-1). openssl's own text names the
+
+--- M229
+DESC|tls: the cert field may carry the chain
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|    if len(certs) != 1:
+REPLACE|    if len(certs) < 1:
+
+--- M230
+DESC|tls: CC-1 — a parse refusal echoes the upload
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|            raise CertInvalid('%s does not parse as an X.509 certificate' % what)
+REPLACE|            raise CertInvalid('%s does not parse as an X.509 certificate: %r' % (what, pem[:120]))
+
+--- M231
+DESC|helper: staged values are not re-validated by root
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|                values[k] = schema.normalise(k, given.get(k, schema.ADMIN_DEFAULTS[k]))
+REPLACE|                values[k] = str(given.get(k, schema.ADMIN_DEFAULTS[k]))
+
+--- M232
+DESC|helper: unexpected staged keys are ignored, not refused
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        if extra:
+REPLACE|        if False:
+
+--- M233
+DESC|helper: a symlinked staging FILE is followed
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
+REPLACE|        fd = os.open(name, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
+
+--- M234
+DESC|helper: a staging file owned by someone else is read
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        if st.st_uid != ctx.svc_uid:
+REPLACE|        if False:
+
+--- M235
+DESC|helper: a hard-linked staging file is read
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        if st.st_nlink != 1:
+REPLACE|        if False:
+
+--- M236
+DESC|helper: a group/other-readable staging file is read
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        if st.st_mode & 0o077:
+REPLACE|        if False:
+
+--- M237
+DESC|helper: a symlinked staging DIRECTORY is followed
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|                nfd = os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+REPLACE|                nfd = os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+
+--- M238
+DESC|helper: a failure after install is NOT rolled back
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        problems = restore(ctx, snap)
+REPLACE|        problems = []
+
+--- M239
+DESC|helper: ufw is not put back on a late failure
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|                ufw_apply(ctx, 'allow' if ufw_before['port80'] else 'delete')
+REPLACE|                pass
+
+--- M240
+DESC|helper: staging (incl. a key) survives the run
+TESTS|t34-apply-helper.sh t37-tls-upload.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    finally:
+ANCHOR|        discard_staged(dfd, domain)
+REPLACE|    finally:
+REPLACE|        pass
+
+--- M241
+DESC|helper: TLS peer name not checked
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|                  '           StreamDriverPermittedPeers="%s"' % v['syslog_host'],
+
+--- M242
+DESC|helper: the rsyslogd pre-test is skipped
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|            rc, out = run(ctx, 'rsyslogd', ['-N1', '-f', path])
+REPLACE|            rc, out = 0, ''
+
+--- M243
+DESC|helper: TLS forwarding without rsyslog-openssl is not refused
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        if not glob.glob(ctx.p(OSSL_MODULE_GLOB)):
+REPLACE|        if False:
+
+--- M244
+DESC|helper: the redirect opens 80 when OFF and closes it when ON
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    plan.ufw = 'allow' if redirect else 'delete'
+REPLACE|    plan.ufw = 'delete' if redirect else 'allow'
+
+--- M245
+DESC|helper: the :80 link is left in place when the redirect is OFF
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    plan.links.append((ctx.p(HTTP_SITE_ENABLED), ctx.p(HTTP_SITE_AVAILABLE) if redirect else None))
+REPLACE|    plan.links.append((ctx.p(HTTP_SITE_ENABLED), ctx.p(HTTP_SITE_AVAILABLE)))
+
+--- M246
+DESC|helper: an INACTIVE ufw is changed
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        if plan.ufw and ufw_before and ufw_before['active']:
+ANCHOR|            step = 'firewall'
+REPLACE|        if plan.ufw:
+REPLACE|            step = 'firewall'
+
+--- M247
+DESC|helper: chrony servers written where chrony never reads them
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        if servers and not reads_dir:
+REPLACE|        if False:
+
+--- M248
+DESC|helper: the chronyd -p pre-test is skipped
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|                rc, out = run(ctx, 'chronyd', ['-p', '-f', path])
+REPLACE|                rc, out = 0, ''
+
+--- M249
+DESC|helper: timesyncd is not verified
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|                if rc != 0 or out.split() != servers:
+REPLACE|                if False:
+
+--- M250
+DESC|helper: nginx -t is not run after the install
+TESTS|t34-apply-helper.sh t37-tls-upload.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    rc, out = run(ctx, 'nginx', ['-t'])
+REPLACE|    rc, out = 0, ''
+
+--- M251
+DESC|helper: the installed key is 0644
+TESTS|t37-tls-upload.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|                   (ctx.p(TLS_KEY), key, 0o600),
+REPLACE|                   (ctx.p(TLS_KEY), key, 0o644),
+
+--- M252
+DESC|helper: server.crt lacks the chain
+TESTS|t37-tls-upload.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    plan.files += [(ctx.p(TLS_CRT), leaf + chain, 0o644),
+REPLACE|    plan.files += [(ctx.p(TLS_CRT), leaf, 0o644),
+
+--- M253
+DESC|helper: a mixed/partial TLS upload is accepted
+TESTS|t37-tls-upload.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|            if hashlib.sha256(blob).hexdigest() != want.get(suffix):
+REPLACE|            if False:
+
+--- M254
+DESC|helper: the rendered files are root:root but chown is dropped (the helper runs as root)
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|yes
+ANCHOR|        if ctx.euid == 0:
+ANCHOR|            os.fchown(fd, 0, 0)
+REPLACE|        pass
+
+--- M255
+DESC|site: the sign-in location drops X-Forwarded-Host (the backend trusts it)
+TESTS|t36-nginx-limits.sh
+TARGET|site
+EQUIV|no
+ANCHOR|        proxy_set_header   X-Forwarded-Proto $scheme;
+ANCHOR|        proxy_set_header   X-Forwarded-Host $host;
+REPLACE|        proxy_set_header   X-Forwarded-Proto $scheme;
+
+--- M256
+DESC|site: the sign-in location loses the security headers
+TESTS|t36-nginx-limits.sh
+TARGET|site
+EQUIV|no
+ANCHOR|        include /etc/nginx/snippets/tm-security-headers.conf;
+ANCHOR|    }
+ANCHOR|
+ANCHOR|    # Proxy API to gunicorn
+REPLACE|    }
+REPLACE|
+REPLACE|    # Proxy API to gunicorn
+
+--- M257
+DESC|site: the sign-in location is not rate-limited
+TESTS|t36-nginx-limits.sh
+TARGET|site
+EQUIV|no
+ANCHOR|        include /etc/nginx/snippets/tm-limits-login.conf;
+
+--- M258
+DESC|site: /api/ is not rate-limited
+TESTS|t36-nginx-limits.sh
+TARGET|site
+EQUIV|no
+ANCHOR|        include /etc/nginx/snippets/tm-limits-api.conf;
+
+--- M259
+DESC|site: limit_req answers nginx's default 503
+TESTS|t36-nginx-limits.sh
+TARGET|site
+EQUIV|no
+ANCHOR|    limit_req_status  429;
+
+--- M260
+DESC|site: an API body may spill to nginx's temp dir
+TESTS|t36-nginx-limits.sh
+TARGET|site
+EQUIV|no
+ANCHOR|        client_body_buffer_size 1m;
+
+--- M261
+DESC|site: the named 429 location loses the security headers
+TESTS|t36-nginx-limits.sh
+TARGET|site
+EQUIV|no
+ANCHOR|        add_header Retry-After 60 always;
+ANCHOR|        include /etc/nginx/snippets/tm-security-headers.conf;
+REPLACE|        add_header Retry-After 60 always;
+
+--- M262
+DESC|site: the per-address connection limit is gone
+TESTS|t36-nginx-limits.sh
+TARGET|site
+EQUIV|no
+ANCHOR|    include /etc/nginx/snippets/tm-limits-server.conf;
+
+--- M263
+DESC|ui: THE DEFECT — a non-JSON 429 is a "Network error" again
+TESTS|t36-nginx-limits.sh
+TARGET|loginview
+EQUIV|no
+ANCHOR|                try { data = await r.json(); } catch (_) { data = {}; }
+REPLACE|                data = await r.json();
+
+--- M264
+DESC|ui: nginx's JSON rate-limit 429 shows the raw server text
+TESTS|t36-nginx-limits.sh
+TARGET|loginview
+EQUIV|no
+ANCHOR|                if (r.status === 429 && data.code === 'rate_limited') {
+REPLACE|                if (false) {
+
+--- M265
+DESC|install: an allowed removal still runs with --no-remove
+TESTS|t38-install-upgrade-v120.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ -z "${APT_ALLOW_REMOVE:-}" ]] || inst_opts=(--no-install-recommends --no-download)
+REPLACE|    true
+
+--- M266
+DESC|install: ANY removal passes once one is allowed
+TESTS|t38-install-upgrade-v120.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        elif [[ "$line" == Remv\ * && -n "${APT_ALLOW_REMOVE:-}" \
+ANCHOR|                && " ${APT_ALLOW_REMOVE} " == *" $(r="${line#Remv }"; printf '%s' "${r%% *}") "* ]]; then
+REPLACE|        elif [[ "$line" == Remv\ * && -n "${APT_ALLOW_REMOVE:-}" ]]; then
+
+--- M267
+DESC|install: chrony replaces systemd-timesyncd without --install-chrony
+TESTS|t38-install-upgrade-v120.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if pkg_installed systemd-timesyncd && [[ $OPT_INSTALL_CHRONY != true ]]; then
+REPLACE|    if false; then
+
+--- M268
+DESC|install: the online chrony plan may remove other packages
+TESTS|t38-install-upgrade-v120.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        [[ -z "$rm_other" ]] || die "Installing chrony would also remove: ${rm_other//$'\n'/ }. Refused; nothing
+REPLACE|        true || die "Installing chrony would also remove: ${rm_other//$'\n'/ }. Refused; nothing
+
+--- M269
+DESC|install: offline chrony is installed with nothing allowed out
+TESTS|t38-install-upgrade-v120.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        APT_ALLOW_REMOVE="systemd-timesyncd" apt_install_from_bundle "${SCRIPT_DIR}/install/packages/apt" chrony
+REPLACE|        apt_install_from_bundle "${SCRIPT_DIR}/install/packages/apt" chrony
+
+--- M270
+DESC|install: a managed file is OVERWRITTEN by the release default
+TESTS|t38-install-upgrade-v120.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ -e "$3" ]] && return 0
+REPLACE|    true
+
+--- M271
+DESC|install: a reinstall re-opens 80 with the redirect OFF
+TESTS|t27-firewall.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ "${HTTP_REDIRECT:-true}" != true ]] || ports=(80/tcp 443/tcp)
+REPLACE|    ports=(80/tcp 443/tcp)
+
+--- M272
+DESC|install: a bad host-setting flag is not refused
+TESTS|t38-install-upgrade-v120.sh
+TARGET|install
+EQUIV|no
+ANCHOR|)" || die "Invalid host setting: ${SEED_ERR}. Nothing has been changed."
+REPLACE|)" || true
+
+--- M273
+DESC|upgrade: a rollback does not put the managed files back
+TESTS|t38-install-upgrade-v120.sh
+EQUIV|no
+ANCHOR|    restore_v120_managed "$BD"
+REPLACE|    true
+
+--- M274
+DESC|upgrade: the backup carries no v1.2.0 marker
+TESTS|t38-install-upgrade-v120.sh
+EQUIV|no
+ANCHOR|    : > "${BD}/system/v120/.present"
+REPLACE|    true
+
+--- M275
+DESC|upgrade: a pre-1.2.0 rollback leaves the prune timer enabled
+TESTS|t38-install-upgrade-v120.sh
+EQUIV|no
+ANCHOR|        systemctl disable --now topic-manager-audit-prune.timer >/dev/null 2>&1 || true
+REPLACE|        true
+
+--- M276
+DESC|upgrade: Phase 12 does not re-apply
+TESTS|t38-install-upgrade-v120.sh
+EQUIV|no
+ANCHOR|if run_as_app stage all >/dev/null; then
+REPLACE|if false; then
+
+--- M277
+DESC|upgrade: a failed re-apply is not reported
+TESTS|t38-install-upgrade-v120.sh
+EQUIV|no
+ANCHOR|            REAPPLY_FAILED="${REAPPLY_FAILED} ${d}"
+REPLACE|            true
+
+--- M278
+DESC|upgrade: from before v1.2.0 the :80 listener is lost
+TESTS|t38-install-upgrade-v120.sh
+EQUIV|no
+ANCHOR|if [[ ! -f "${BACKUP_DIR}/system/v120/.present" ]]; then
+REPLACE|if false; then
+
+--- M279
+DESC|upgrade: from v1.2.0+ the :80 site is re-enabled over the operator's choice
+TESTS|t38-install-upgrade-v120.sh
+EQUIV|no
+ANCHOR|if [[ ! -f "${BACKUP_DIR}/system/v120/.present" ]]; then
+REPLACE|if true; then
+
+--- M280
+DESC|upgrade: Phase 9 OVERWRITES the rate-limit file
+TESTS|t38-install-upgrade-v120.sh
+EQUIV|no
+ANCHOR|install_if_absent 644 "${WORK_DIR}/nginx/tm-limits.conf" /etc/nginx/conf.d/topic-manager-limits.conf
+REPLACE|install -m 644 "${WORK_DIR}/nginx/tm-limits.conf" /etc/nginx/conf.d/topic-manager-limits.conf

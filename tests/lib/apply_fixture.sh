@@ -59,7 +59,10 @@ _fx_tools() {
 case \"\$1\" in
   is-active) grep -qx \"\$2\" '${T}/active' && { echo active; exit 0; }; echo inactive; exit 3 ;;
   restart|reload|try-reload-or-restart|start)
-     [ -f \"${T}/fail.\$1\" ] && { echo \"stub: \$1 failed\"; exit 1; }; exit 0 ;;
+     [ -f \"${T}/fail.\$1\" ] && { echo \"stub: \$1 failed\"; exit 1; }
+     # die.<verb>: the verb succeeds but nginx is not running afterwards
+     [ -f \"${T}/die.\$1\" ] && { sed -i '/^nginx.service\$/d' \"${T}/active\"; rm -f \"${T}/die.\$1\"; }
+     exit 0 ;;
 esac
 exit 0"
     _fx_stub ufw "
@@ -148,7 +151,7 @@ fx_field() {   # fx_field <jsonpath-ish python expr on d>
 
 fx_stage() {   # fx_stage <domain> <json settings> — through the REAL tm/apply.py writer
     local NT="$FX/opt/topic-manager/data"
-    PYTHONPATH="$(tm_py_root)" PYTHONDONTWRITEBYTECODE=1 python3 - "$1" "$2" "$NT" <<'PYEOF'
+    PYTHONPATH="$(tm_py_root)" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$1" "$2" "$NT" <<'PYEOF'
 import json, sys
 from tm import apply
 cfg = {'audit': {'db_path': sys.argv[3] + '/tm.db'}}

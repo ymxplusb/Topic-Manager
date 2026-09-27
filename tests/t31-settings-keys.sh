@@ -26,7 +26,7 @@ PY="$(tm_python)"
 [ -n "$PY" ] || tm_die "no python interpreter found"
 PYROOT="$(tm_py_root)"
 
-_py() { PYTHONPATH="$PYROOT" PYTHONDONTWRITEBYTECODE=1 "$PY" "$@" 2>&1 | tr -d '\r'; }
+_py() { PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 "$PY" "$@" 2>&1 | tr -d '\r'; }
 
 _setup() {   # _setup [extra yaml for the session block]
     local NT; NT="$(cygpath -m "$TM_TMP" 2>/dev/null || printf '%s' "$TM_TMP")"
@@ -74,7 +74,7 @@ def login_as(user):
 H = {'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin'}
 $1
 PYEOF
-    PYTHONPATH="$PYROOT" PYTHONDONTWRITEBYTECODE=1 TM_CONFIG="${TM_TMP}/config.yaml" \
+    PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 TM_CONFIG="${TM_TMP}/config.yaml" \
         TM_TEST_DB="${TM_TMP}/tm.db" TM_CLUSTERS_DIR="${TM_TMP}/clusters.d" \
         TM_CLUSTER_CERT_DIR="${TM_TMP}/cluster-certs" TM_SYSLOG_SOCKET="${TM_TMP}/no-such.sock" \
         "$PY" "${TM_TMP}/probe.py" 2>&1 | tr -d '\r'

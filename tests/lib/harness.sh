@@ -201,7 +201,7 @@ tm_python() {
 tm_probe_tmapp() {
     local py; py="$(tm_python)"
     [ -n "$py" ] || return 1
-    PYTHONPATH="$(tm_py_root)" PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH="$(tm_py_root)" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 \
         "$py" -c "import tm.routes" >/dev/null 2>&1
 }
 

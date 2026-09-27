@@ -56,7 +56,7 @@ _mk_chain() {   # CA -> intermediate -> leaf (EC P-256), and an unrelated CA
 }
 
 _validate() {   # _validate <crt> <key> [chain] [now-iso] -> OK:<key_type> | REFUSED:<reason>
-    PYTHONPATH="$PYROOT" PYTHONDONTWRITEBYTECODE=1 "$PY" - "$@" <<'PYEOF' 2>&1 | tr -d '\r'
+    PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 "$PY" - "$@" <<'PYEOF' 2>&1 | tr -d '\r'
 import sys, datetime
 from tm import tls_check
 a = sys.argv[1:]
@@ -178,7 +178,7 @@ def upload(crt, key, chain=None):
     return c.post('/api/system/tls/cert', data=data, content_type='multipart/form-data')
 $1
 PYEOF
-    PATH="${TM_TMP}/bin:${PATH}" PYTHONPATH="$PYROOT" PYTHONDONTWRITEBYTECODE=1 T="$TM_TMP" \
+    PATH="${TM_TMP}/bin:${PATH}" PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 T="$TM_TMP" \
         TMPDIR="${TM_TMP}/tmp" TM_CONFIG="${TM_TMP}/config.yaml" TM_TEST_DB="${TM_TMP}/data/tm.db" \
         TM_CLUSTERS_DIR="${TM_TMP}/clusters.d" TM_CLUSTER_CERT_DIR="${TM_TMP}/cluster-certs" \
         TM_APPLY_RESULT_DIR="${TM_TMP}/run" TM_SYSLOG_SOCKET="${TM_TMP}/log.sock" \
@@ -250,7 +250,7 @@ body = key.split(b'\n')[1].decode()
 print('key_in_audit=%s key_in_log=%s' % (body in rows, body in logbuf.getvalue()))
 print('settings_key=%s' % any(b'PRIVATE KEY' in (v or '').encode() for (v,) in db().execute('SELECT value FROM app_settings').fetchall()))
 big = c.post('/api/system/tls/cert', data=b'x' * 300000, content_type='multipart/form-data; boundary=x')
-print('big=%d' % big.status_code)
+print('big=%d %s' % (big.status_code, (big.get_json(silent=True) or {}).get('error')))
 ")"
     tm_assert_eq "code=202 state=queued dom=tls" "$(grep '^code=' <<<"$out")" "a valid upload was not staged: ${out}"
     tm_assert_eq "staged=['tls.chain', 'tls.crt', 'tls.json', 'tls.key', 'tls.last']" "$(grep '^staged=' <<<"$out")" \
@@ -260,7 +260,7 @@ print('big=%d' % big.status_code)
     tm_assert_eq "newtmp=[]" "$(grep '^newtmp=' <<<"$out")" "the upload wrote a file under TMPDIR (the key must never reach /tmp)"
     tm_assert_eq "key_in_audit=False key_in_log=False" "$(grep '^key_in_audit=' <<<"$out")" "key material reached the audit trail or the log"
     tm_assert_eq "settings_key=False" "$(grep '^settings_key=' <<<"$out")" "key material reached app_settings (the DB)"
-    tm_assert_eq "big=413" "$(grep '^big=' <<<"$out")" "an oversized upload was parsed"
+    tm_assert_eq "big=413 invalid_cert" "$(grep '^big=' <<<"$out")"         "an oversized upload was not refused BEFORE parsing with the contract's JSON error"
     grep -qx 'start --no-block topic-manager-apply-tls.service' "${TM_TMP}/calls" || _tm_afail "the tls apply unit was not started"
 }
 tm_case "a-valid-upload-stages-0600-in-the-data-dir-never-tmp" "tmapp,linux,openssl" a_valid_upload_stages_privately
@@ -273,7 +273,7 @@ a_helper_installs_and_rolls_back() {
     [ -f "$tls/server.crt" ] || { printf 'old-cert\n' > "$tls/server.crt"; printf 'old-key\n' > "$tls/server.key"; chmod 600 "$tls/server.key"; }
     old_crt="$(sha256sum < "$tls/server.crt")"; old_key="$(sha256sum < "$tls/server.key")"
     _stage_tls() {
-        PYTHONPATH="$(tm_py_root)" PYTHONDONTWRITEBYTECODE=1 python3 - "$FX" "$TM_TMP" <<'PYEOF'
+        PYTHONPATH="$(tm_py_root)" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$FX" "$TM_TMP" <<'PYEOF'
 import sys
 from tm import apply
 fx, t = sys.argv[1], sys.argv[2]
@@ -311,5 +311,34 @@ PYEOF
     tm_note "nginx -t: ${FX_NGINX} (real = it loaded the installed pair)"
 }
 tm_case "helper-installs-fullchain-and-key-0600-or-restores-exactly" "linux,chown,openssl" a_helper_installs_and_rolls_back
+
+a_helper_refuses_a_mixed_set() {
+    # The request names the SHA-256 of each staged file. A key swapped in
+    # after the request was written (a second upload racing the first, or
+    # anything else writing the staging directory) is refused — even though
+    # the swapped key is itself a perfectly valid key for another certificate.
+    . "${TM_TESTS_DIR}/lib/apply_fixture.sh"
+    fx_setup
+    _mk_chain
+    _mk other2 -newkey ec -pkeyopt ec_paramgen_curve:P-256
+    local tls="$FX/etc/topic-manager/tls" before
+    before="$(fx_hash_managed)"
+    PYTHONPATH="$(tm_py_root)" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$FX" "$TM_TMP" <<'PYEOF'
+import sys
+from tm import apply
+fx, t = sys.argv[1], sys.argv[2]
+rd = lambda n: open('%s/%s' % (t, n), 'rb').read()
+apply.write_stage({'audit': {'db_path': fx + '/opt/topic-manager/data/tm.db'}}, 'tls', {}, 'admin',
+                  files={'crt': rd('leaf.crt'), 'key': rd('leaf.key')})
+PYEOF
+    cp "${TM_TMP}/other2.key" "$FX/opt/topic-manager/data/apply/tls.key"
+    chown -R "$FX_SVC_USER" "$FX/opt/topic-manager/data/apply"; chmod 600 "$FX/opt/topic-manager/data/apply/tls.key"
+    fx_helper tls
+    tm_assert_eq "failed validate" "$(fx_field "d['state'] + ' ' + d['step']")" "a mixed staged set was acted on: $(cat "$FX_RES")"
+    grep -q "does not match the request" "$FX_RES" || _tm_afail "the refusal does not name the mismatch: $(cat "$FX_RES")"
+    tm_assert_eq "$before" "$(fx_hash_managed)" "a refused mixed set changed the host"
+    tm_assert_nofile "$FX/opt/topic-manager/data/apply/tls.key" "the refused key was left in the staging directory"
+}
+tm_case "helper-refuses-a-mixed-staged-set" "linux,chown,openssl" a_helper_refuses_a_mixed_set
 
 tm_finish

@@ -75,7 +75,7 @@ def break_audit():
 
 _run() {   # _run <python body>
     printf '%s\n%s\n' "$_PRELUDE" "$1" > "${TM_TMP}/probe.py"
-    PYTHONPATH="$PYROOT" PYTHONDONTWRITEBYTECODE=1 TM_CONFIG="${TM_TMP}/config.yaml" \
+    PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 TM_CONFIG="${TM_TMP}/config.yaml" \
         TM_TEST_DB="${TM_TMP}/tm.db" TM_CLUSTERS_DIR="${TM_TMP}/clusters.d" \
         TM_CLUSTER_CERT_DIR="${TM_TMP}/cluster-certs" TM_SYSLOG_SOCKET="${TM_TMP}/log.sock" \
         "$PY" "${TM_TMP}/probe.py" 2>&1 | tr -d '\r'
@@ -217,7 +217,12 @@ res['restart'] = c.post('/api/service/restart', data='{}', headers=H)
 res['settings'] = c.put('/api/settings', data=json.dumps({'banner_text': 'NEW'}), headers=H)
 res['apply'] = c.post('/api/system/apply/nginx', data='{}', headers=H)
 anon = app.test_client()
+# An EXPIRED session of someone else: a sign-in normally sweeps it. A refused
+# sign-in must change nothing at all, the sweep included.
+d = db(); d.execute('INSERT INTO sessions VALUES (?,?,?,?,?,?)', ('old', 'zed', '2000-01-01', '2000-01-01', '2000-01-01T00:00:00+00:00', 'x')); d.commit(); d.close()
+before_sessions = sorted(db().execute('SELECT id FROM sessions').fetchall())
 res['login'] = anon.post('/api/auth/login', data=json.dumps({'username': 'bob', 'password': 'x'}), headers=H)
+print('sessions_untouched=%s' % (sorted(db().execute('SELECT id FROM sessions').fetchall()) == before_sessions))
 for k, r in sorted(res.items()):
     print('%s=%d %s' % (k, r.status_code, (r.get_json() or {}).get('error')))
 print('calls=%s' % calls)
@@ -239,6 +244,8 @@ print('logout=%d' % r.status_code)
         "an action REACHED Kafka / systemd although its audit record could not be written: ${out}"
     tm_assert_eq "banner=None" "$(grep '^banner=' <<<"$out")" "the settings change was written without its audit record"
     tm_assert_eq "bob_sessions=0" "$(grep '^bob_sessions=' <<<"$out")" "a session was created that the audit trail cannot record"
+    tm_assert_eq "sessions_untouched=True" "$(grep '^sessions_untouched=' <<<"$out")" \
+        "a sign-in refused for a broken audit trail still CHANGED the session table (it must be refused before it acts)"
     tm_assert_eq "clusters_c2=False" "$(grep '^clusters_c2=' <<<"$out")" "a cluster profile was saved without its audit record"
     tm_assert_eq "staged=False" "$(grep '^staged=' <<<"$out")" "an apply was staged without its audit record"
     grep -q '^crit=[1-9]' <<<"$out" || _tm_afail "no CRIT syslog record for the refusals: ${out}"
@@ -266,6 +273,59 @@ print('calls=%s' % calls)
         "the response did not say the change WAS made (hazards[misleading-failure-message])"
 }
 tm_case "a-failure-after-the-change-says-the-change-was-made" "tmapp,linux" a_after_change_is_honest
+
+a_record_fails_after_precheck() {
+    # The store passes the pre-check and then refuses the record itself: a
+    # sign-in must leave NO session behind, and an apply must be withdrawn
+    # (nothing staged, no unit started).
+    _setup
+    mkdir -p "${TM_TMP}/bin"
+    printf '#!/usr/bin/env bash\necho "$*" >> %s/calls\nexit 0\n' "$TM_TMP" > "${TM_TMP}/bin/systemctl"
+    chmod 755 "${TM_TMP}/bin/systemctl"; : > "${TM_TMP}/calls"
+    local out
+    out="$(PATH="${TM_TMP}/bin:${PATH}" _run "${_ROUTES}
+from tm import audit
+audit.require_writable = lambda cfg: None
+break_audit()
+anon = app.test_client()
+r = anon.post('/api/auth/login', data=json.dumps({'username': 'bob', 'password': 'x'}), headers=H)
+print('login=%d %s' % (r.status_code, (r.get_json() or {}).get('error')))
+d = db(); print('bob_sessions=%d' % d.execute(\"SELECT COUNT(*) FROM sessions WHERE user='bob'\").fetchone()[0]); d.close()
+r = c.post('/api/system/apply/nginx', data='{}', headers=H)
+print('apply=%d %s' % (r.status_code, (r.get_json() or {}).get('error')))
+st = os.path.join(os.path.dirname(os.environ['TM_TEST_DB']), 'apply')
+print('staged=%s' % sorted(os.listdir(st)) if os.path.isdir(st) else 'staged=[]')
+")"
+    tm_assert_eq "login=503 audit_unavailable" "$(grep '^login=' <<<"$out")" "a sign-in whose LOGIN record failed was let in: ${out}"
+    tm_assert_eq "bob_sessions=0" "$(grep '^bob_sessions=' <<<"$out")" \
+        "the session created before the LOGIN record failed was left in the database"
+    tm_assert_eq "apply=503 audit_unavailable" "$(grep '^apply=' <<<"$out")" "an apply whose request record failed went ahead: ${out}"
+    tm_assert_eq "staged=[]" "$(grep '^staged=' <<<"$out")" "an apply whose request record failed was left staged"
+    grep -q 'start' "${TM_TMP}/calls" && _tm_afail "the apply unit was started although its request was never recorded"
+    true
+}
+tm_case "a-record-that-fails-after-the-precheck-undoes-sign-in-and-apply" "tmapp,linux" a_record_fails_after_precheck
+
+a_precheck_measures_free_space() {
+    _setup
+    local out
+    out="$(_run "
+from tm.config import load_config
+from tm.models import init_db
+from tm import audit
+cfg = load_config(); init_db(cfg); drain()
+audit.AUDIT_MIN_FREE_BYTES = 1 << 62      # more than any disk has free
+try:
+    audit.require_writable(cfg); print('pre=passed')
+except audit.AuditUnavailable as e:
+    print('pre=refused')
+print('crit=%s' % any(g.startswith('<82>') and 'bytes free' in g for g in drain()))
+")"
+    tm_assert_eq "pre=refused" "$(grep '^pre=' <<<"$out")" \
+        "the pre-check passed a filesystem with less free space than it requires (SQLite fails at COMMIT on a full disk)"
+    tm_assert_eq "crit=True" "$(grep '^crit=' <<<"$out")" "the full-disk refusal was not reported at CRIT"
+}
+tm_case "the-precheck-refuses-a-full-disk" linux a_precheck_measures_free_space
 
 
 tm_finish

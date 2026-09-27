@@ -121,6 +121,21 @@ a_injection_refused() {
 }
 tm_case "hostile-values-staged-directly-are-refused-by-root" "$REQ" a_injection_refused
 
+a_root_renders_the_normalised_value() {
+    # Staged directly (no app-side normalising): "UDP" and a padded host are
+    # VALID, and root must render what they normalise to — never the raw text
+    # ("UDP" is not "udp", and would fall through to TCP).
+    fx_setup
+    fx_stage_raw syslog '{"domain":"syslog","job":"00000000000000aa","requested_by":"t","files":{},"settings":{"syslog_enabled":"TRUE","syslog_host":" logs.example.org ","syslog_port":"514","syslog_protocol":"UDP","syslog_app_id":"tm"}}'
+    fx_helper syslog
+    tm_assert_eq "ok" "$(fx_field "d['state']")" "a valid, un-normalised request failed: $(cat "$FX_RES")"
+    tm_assert_grep 'target="logs.example.org" port="514" protocol="udp"' "$FX/etc/rsyslog.d/30-topic-manager.conf" \
+        "root rendered the RAW staged value instead of the normalised one"
+    tm_assert_eq "udp logs.example.org true" "$(fx_field "d['applied']['syslog_protocol'] + ' ' + d['applied']['syslog_host'] + ' ' + d['applied']['syslog_enabled']")" \
+        "the applied values reported are not the normalised ones"
+}
+tm_case "root-renders-the-normalised-value-not-the-staged-text" "$REQ" a_root_renders_the_normalised_value
+
 a_domain_mismatch() {
     fx_setup
     fx_stage_raw nginx '{"domain":"syslog","job":"0000000000000001","settings":{}}'
@@ -186,6 +201,23 @@ a_rollback_byte_identical() {
     true
 }
 tm_case "a-failed-test-rolls-back-to-a-byte-identical-host" "$REQ" a_rollback_byte_identical
+
+a_firewall_restored_on_late_failure() {
+    # nginx reloads, ufw 80/tcp is opened, and THEN verification fails (nginx
+    # died on the reload). The rollback must close 80/tcp again, not only put
+    # the files back.
+    fx_setup
+    local before; before="$(fx_hash_managed)"
+    rm -f "$FX/etc/nginx/sites-enabled/topic-manager-http"; before="$(fx_hash_managed)"
+    : > "${TM_TMP}/die.try-reload-or-restart"
+    fx_stage nginx "$NGX" >/dev/null
+    fx_helper nginx
+    tm_assert_eq "rolled_back verify" "$(fx_field "d['state'] + ' ' + d['step']")" "state: $(cat "$FX_RES")"
+    grep -qx 'ufw allow 80/tcp' "${TM_TMP}/calls" || _tm_afail "the case never reached the firewall step: $(cat "${TM_TMP}/calls")"
+    grep -q '^80/tcp' "${TM_TMP}/ufw.state" && _tm_afail "the rollback left ufw 80/tcp OPEN"
+    tm_assert_eq "$before" "$(fx_hash_managed)" "the host is not byte-identical after a failure past the firewall step"
+}
+tm_case "a-failure-after-the-firewall-step-closes-80-again" "$REQ" a_firewall_restored_on_late_failure
 
 a_reload_failure_rolls_back() {
     fx_setup

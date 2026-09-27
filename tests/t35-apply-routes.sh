@@ -71,7 +71,7 @@ def unthrottle():
     d = db(); d.execute("DELETE FROM app_settings WHERE key LIKE 'apply_last_epoch_%'"); d.commit(); d.close()
 $1
 PYEOF
-    PATH="${TM_TMP}/bin:${PATH}" PYTHONPATH="$PYROOT" PYTHONDONTWRITEBYTECODE=1 \
+    PATH="${TM_TMP}/bin:${PATH}" PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 \
         TM_CONFIG="${TM_TMP}/config.yaml" TM_TEST_DB="${TM_TMP}/data/tm.db" \
         TM_CLUSTERS_DIR="${TM_TMP}/clusters.d" TM_CLUSTER_CERT_DIR="${TM_TMP}/cluster-certs" \
         TM_APPLY_RESULT_DIR="${TM_TMP}/run" TM_SYSLOG_SOCKET="${TM_TMP}/none.sock" \
@@ -257,7 +257,7 @@ tm_case "polkit-grants-start-of-the-four-apply-units-and-nothing-else" node a_po
 
 a_allowed_units_match_polkit() {
     local out
-    out="$(PYTHONPATH="$PYROOT" PYTHONDONTWRITEBYTECODE=1 "$PY" -c "
+    out="$(PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 "$PY" -c "
 from tm import service_control as s
 print(' '.join(sorted(s.APPLY_UNITS.values())))
 print(all(u in s.ALLOWED_UNITS for u in s.APPLY_UNITS.values()))
