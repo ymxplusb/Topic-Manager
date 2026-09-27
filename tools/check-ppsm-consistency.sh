@@ -45,7 +45,12 @@ const fs = require("fs"), vm = require("vm");
 const src = fs.readFileSync(process.env.PPSM_SRC, "utf8");
 let captured = null;
 const sandbox = {
-    ClusterModal: {}, console: console, Date: Date,
+    ClusterModal: {}, console: console, Date: Date, AbortController, setTimeout, clearTimeout,
+    // Independent installer defaults, not the saved Settings form.
+    fetch: async url => ({ ok: true, json: async () => ({ applied: {
+        syslog: { syslog_enabled: "false", syslog_port: "6514", syslog_protocol: "tls" },
+        time: { ntp_servers: "" }, nginx: { http_redirect_enabled: "true" },
+    }[url.split("/").pop()] }) }),
     Blob: function (parts) { captured = parts.join(""); },
     URL: { createObjectURL: function () { return "blob:stub"; } },
     document: { createElement: function () { return { click: function () {} }; },
@@ -53,9 +58,10 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 vm.runInContext(src + "\n;globalThis.__S = SettingsTab;", sandbox);
-sandbox.__S.methods.downloadPpsm.call({});
+sandbox.__S.methods.downloadPpsm.call({}).then(() => {
 if (captured === null) { console.error("downloadPpsm produced no CSV"); process.exit(4); }
 fs.writeFileSync(process.env.PPSM_OUT, captured);
+}).catch(e => { console.error(e); process.exitCode = 1; });
 ' || { echo "FAIL: could not run SettingsTab.downloadPpsm() under node — a parse error here is a blank Settings tab in the browser"; exit 1; }
 
 "$PY" - "$STATIC" "$GEN" <<'PYCHK'
@@ -103,14 +109,14 @@ if not any(r[0] == "Generated" for r in gen):
 # surface; changing one is a decision, and it is made here, in review.
 PINNED = [
     ("Web",     "443",  "TCP",     "Inbound",  ""),
-    ("Web",     "80",   "TCP",     "Inbound",  "Redirect"),
+    ("Web",     "80",   "TCP",     "Inbound",  "Enabled by applied http_redirect_enabled"),
     ("Admin",   "22",   "TCP",     "Inbound",  ""),
     ("App",     "5001", "TCP",     "Loopback", ""),
     ("Auth",    "636",  "TCP",     "Outbound", ""),
     ("Infra",   "53",   "UDP/TCP", "Outbound", ""),
-    ("Infra",   "123",  "UDP",     "Outbound", ""),
-    ("Logging", "514",  "UDP/TCP", "Outbound", "PLANNED"),
-    ("Logging", "6514", "TCP",     "Outbound", "PLANNED"),
+    ("Infra",   "123",  "UDP",     "Outbound", "Time synchronisation"),
+    ("Logging", "6514", "TCP",     "Outbound", "Remote forwarding"),
+    ("Logging", "6514", "TCP",     "Outbound", "TLS remote forwarding"),
     ("PKI",     "N/A",  "N/A",     "Outbound", "NOT USED"),
 ]
 for sec, port, proto, d, t in PINNED:
