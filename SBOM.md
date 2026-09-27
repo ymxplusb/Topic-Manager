@@ -1,10 +1,10 @@
 # Jarvis Topic Manager — Software Bill of Materials (SBOM)
 
-**Version:** 1.1.0
+**Version:** 1.2.0
 **Date:** 2026-09-26
 **Format:** CycloneDX-compatible markdown
 **Copyright:** (c) 2025–2026 James Rodman. All Rights Reserved.
-**SBOM Serial:** urn:topic-manager:sbom:1.1.0
+**SBOM Serial:** urn:topic-manager:sbom:1.2.0
 
 > The backend table below is generated from `requirements.txt`, which is the single source
 > of truth for every Python pin: `install/upgrade-full.sh` installs exactly these versions on
@@ -91,8 +91,8 @@ adds to a machine, so every row can be checked against an advisory feed.
 MEASURED 2026-09-26: rsyslog `8.2312.0-3ubuntu9.2` and chrony `4.5-1ubuntu4.2` on the STIG+FIPS
 QC host (Ubuntu 24.04.4); rsyslog 8.2312.0 on the test host, which runs systemd-timesyncd, not
 chrony. rsyslog is part of Ubuntu Server; chrony REPLACES systemd-timesyncd when installed (they
-conflict). The app-side versions shown in the About dialog are not updated by this half of
-v1.2.0 (the About dialog is frontend; see WO-0004).
+conflict). The About dialog carries the same infrastructure rows, and
+tools/check-sbom-consistency.sh holds the two copies to each other.
 
 **SQLite is not a separate package.** `sqlite3` is not installed on the target;
 3.45.1 is the library compiled into Python 3.12.3's stdlib `_sqlite3`. It moves

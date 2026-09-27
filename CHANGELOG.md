@@ -5,11 +5,8 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
-## Unreleased — 1.2.0 (backend, privileged helper and installer half)
+## [1.2.0] — 2026-09-27
 
-<!-- The version cascade renames this heading to "## [1.2.0] — <date>" (the
-     version-surfaces gate reads the newest BRACKETED heading, and VERSION stays
-     1.1.0 until the cascade). The frontend half adds its own notes here. -->
 
 **Seven STIG host settings, each set in Settings and applied to the host through one root
 helper that trusts nothing it is handed — plus an audit trail that goes to syslog, blocks
@@ -89,6 +86,29 @@ Database SRG V4R5 applied to SQLite.)
 - The row-limit prune kept `max_rows` rows and then added `AUDIT_PRUNE` — one over.
 - After a reboot (the verdict file is on `/run`), a finished apply read as "queued" and then
   "failed: no result"; the verdict is now kept in `tm.db` with the claim that audits it.
+
+### Frontend
+
+- Settings gains **Security** (Sessions, Rate limiting, TLS & certificate, HTTP redirect),
+  **Logging** (Remote syslog, Audit retention) and **System › Time source**, each with Save and,
+  where the host changes, **Apply to host** with live status; the audit-capacity banner; the
+  PPSM export built from the values last APPLIED, not merely saved (contract CC-1); every
+  backend error code handled explicitly (t30, t40).
+
+### Scripts and gates (REG-0004 … REG-0013)
+
+- **The product scripts are held to the pipefail rule too.** `dpkg-query | grep -q` in
+  install.sh could read an installed package as missing, and `lsattr | … | grep -q` in the
+  upgrade audit could MISS an immutable file; every early-exit consumer at a pipe in install.sh,
+  install/upgrade-full.sh, prepare-offline.sh and install/libexec/ now captures, then tests.
+  `tools/check-pipefail-consumers.sh` checks them by default, with a real shell tokenizer.
+- The gates were hardened against an independent falsification: SCA reads the lock the way pip
+  does and queries every package at its locked version; lock completeness is a self-consistent
+  closure (an older compatible lock passes) and CI requires it online; exact `==` pins only;
+  env-neutral sees through latin-1 bytes and UTF-16 and covers fc00::/7; version tokens in
+  comments no longer count; duplicate SBOM rows and empty-container config values fail; the
+  About dialog's infrastructure rows are held to SBOM.md; the test runner rejects unrecognised
+  result records. Each is proven by its reproduction in t41.
 
 ---
 
