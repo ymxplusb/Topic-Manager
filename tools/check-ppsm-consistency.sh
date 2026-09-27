@@ -103,14 +103,14 @@ if not any(r[0] == "Generated" for r in gen):
 # surface; changing one is a decision, and it is made here, in review.
 PINNED = [
     ("Web",     "443",  "TCP",     "Inbound",  ""),
-    ("Web",     "80",   "TCP",     "Inbound",  "Redirect"),
+    ("Web",     "80",   "TCP",     "Inbound",  "Enabled by http_redirect_enabled"),
     ("Admin",   "22",   "TCP",     "Inbound",  ""),
     ("App",     "5001", "TCP",     "Loopback", ""),
     ("Auth",    "636",  "TCP",     "Outbound", ""),
     ("Infra",   "53",   "UDP/TCP", "Outbound", ""),
-    ("Infra",   "123",  "UDP",     "Outbound", ""),
-    ("Logging", "514",  "UDP/TCP", "Outbound", "PLANNED"),
-    ("Logging", "6514", "TCP",     "Outbound", "PLANNED"),
+    ("Infra",   "123",  "UDP",     "Outbound", "Time synchronisation"),
+    ("Logging", "6514", "TCP",     "Outbound", "Remote forwarding"),
+    ("Logging", "6514", "TCP",     "Outbound", "TLS remote forwarding"),
     ("PKI",     "N/A",  "N/A",     "Outbound", "NOT USED"),
 ]
 for sec, port, proto, d, t in PINNED:

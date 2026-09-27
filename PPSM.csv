@@ -1,12 +1,12 @@
 "Jarvis Topic Manager — Ports, Protocols and Services Management (PPSM)",,,,,
 "Version","1.1.0",,,,
 "Copyright","(c) 2025-2026 James Rodman",,,,
-"Scope","Every port, protocol and service the Topic Manager host listens on or initiates. Ports marked operator-defined come from configuration.",,,,
+"Scope","Every port, protocol and service the Topic Manager host listens on or initiates. Ports marked operator-defined come from configuration. Saved settings shown; host changes require Apply to host. Static PPSM describes fresh-install defaults.",,,,
 ,,,,,
 "Section","Service/Component","Port","Protocol","Direction","Description"
 "--- INBOUND (to the Topic Manager host) ---",,,,,
 "Web","HTTPS","443","TCP","Inbound","Topic Manager web UI and REST API. nginx TLS termination: TLS 1.2 and 1.3 only, FIPS-approved cipher suites (ECDHE with AES-GCM)."
-"Web","HTTP","80","TCP","Inbound","Redirect to HTTPS only (301). No content is served on this port."
+"Web","HTTP","80","TCP","Inbound","Redirect to HTTPS only (301). No content is served on this port. Enabled by http_redirect_enabled."
 "Admin","SSH","22","TCP","Inbound","Operating-system administration of the host (key-based). Not used by the application."
 "--- INTERNAL LOOPBACK (not reachable off the host) ---",,,,,
 "App","gunicorn (Flask)","5001","TCP","Loopback","nginx to the application backend, bound to 127.0.0.1 only."
@@ -16,8 +16,8 @@
 "Kafka","Kafka brokers","operator-defined (commonly 9092, 9093, 9094)","TCP","Outbound","Kafka AdminClient to the brokers named in each cluster profile. Commonly 9092 PLAINTEXT and 9093/9094 SSL or SASL_SSL; the profiles decide."
 "Infra","DNS","53","UDP/TCP","Outbound","Name resolution for the directory and Kafka broker host names."
 "Infra","NTP","123","UDP","Outbound","Time synchronisation by the host time service. Required for TLS validity and audit timestamps."
-"Logging","Syslog","514","UDP/TCP","Outbound","PLANNED for v1.2.0 (remote syslog). Not used by this release: the application logs to the local syslog socket only."
-"Logging","Syslog over TLS","6514","TCP","Outbound","PLANNED for v1.2.0 (remote syslog over TLS). Not used by this release."
+"Logging","Syslog","6514","TCP","Outbound","Disabled; configured protocol: tls. Remote forwarding of app audit and nginx logs. This row applies when udp or tcp is selected; port is syslog_port."
+"Logging","Syslog over TLS","6514","TCP","Outbound","Disabled; configured protocol: tls. TLS remote forwarding of app audit and nginx logs. This row applies when tls is selected; port is syslog_port."
 "PKI","OCSP / CRL","N/A","N/A","Outbound","NOT USED. Neither nginx nor the application fetches OCSP responses or CRLs; certificate revocation is not checked online."
 "--- OUTBOUND (online install and upgrade ONLY; none of these at runtime or on an air-gapped host) ---",,,,,
 "Install","Ubuntu APT repositories","80/443","TCP","Outbound","OS packages (nginx, python3-venv, polkitd). Port 80 unless the configured mirror is HTTPS."

@@ -130,18 +130,18 @@ tm_case "template-does-not-render-the-form-before-the-load" none c_template_gate
 # The rail is DERIVED from the template (deriveSettingsRail), so these cases
 # assert the CONSEQUENCE — which groups the operator is offered and which cards
 # each one opens — rather than the shape of a list that no longer exists.
-c_rail_offers_the_three_groups() {
+c_rail_offers_the_five_groups() {
     _probe rail > "${TM_TMP}/out"
-    tm_assert_eq "general,system,support" "$(_field "${TM_TMP}/out" railIds)" \
-        "the rail does not offer exactly General, System, Support in that order.
+    tm_assert_eq "general,security,logging,system,support" "$(_field "${TM_TMP}/out" railIds)" \
+        "the rail does not offer exactly General, Security, Logging, System, Support in that order.
         A pane the reader cannot see is a card the operator cannot reach, and
         an extra entry (a commented-out example pane, say) is a dead link"
-    tm_assert_eq "General,System,Support" "$(_field "${TM_TMP}/out" railNames)" \
+    tm_assert_eq "General,Security,Logging,System,Support" "$(_field "${TM_TMP}/out" railNames)" \
         "the rail names do not come from the settings-group-label headings"
     tm_assert_eq "general" "$(_field "${TM_TMP}/out" activeGroup)" \
         "with nothing saved, Settings did not open on the first group"
 }
-tm_case "the-rail-offers-general-system-support" node c_rail_offers_the_three_groups
+tm_case "the-rail-offers-general-security-logging-system-support" node c_rail_offers_the_five_groups
 
 c_rail_puts_each_card_in_its_group() {
     _probe rail > "${TM_TMP}/out"
@@ -153,7 +153,7 @@ c_rail_puts_each_card_in_its_group() {
         *) _tm_afail "General does not hold Cluster Profiles, the consent banner
         and the classification banner panel (the owner kept the custom selection
         panel). Got: ${g}" ;; esac
-    tm_assert_eq '["Service Control"]' "$s" "System does not hold exactly Service Control"
+    tm_assert_eq '["Service Control","Time source"]' "$s" "System does not hold Service Control followed by Time source"
     case "$y" in *'"Support & Compliance Downloads"'*'"About"'*) ;;
         *) _tm_afail "Support does not hold the PPSM download and About. Got: ${y}" ;; esac
 }

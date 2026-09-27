@@ -1,0 +1,298 @@
+// Frontend contract tests: execute the shipped component, with deterministic
+// fetch and time. No backend, npm, network, or installed browser is required.
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const root = process.argv[2];
+const scenario = process.argv[3];
+const source = fs.readFileSync(process.env.TM_SETTINGS_SOURCE || path.join(root, 'app/components/SettingsTab.js'), 'utf8');
+// Independent contract fixtures: do not derive expected fields/ranges from code.
+const groups = {
+    sessions: { session_max_concurrent: '7' },
+    rate: { ratelimit_login_per_min: '22', ratelimit_login_burst: '8', ratelimit_api_per_min: '450', ratelimit_api_burst: '140', ratelimit_conn_per_ip: '30' },
+    redirect: { http_redirect_enabled: 'false' },
+    syslog: { syslog_enabled: 'true', syslog_host: 'logs.example.org', syslog_port: '10514', syslog_protocol: 'udp', syslog_app_id: 'tm.audit-2' },
+    retention: { audit_retention_days: '730', audit_max_rows: '123456', audit_warn_pct: '88' },
+    time: { ntp_servers: 'time.example.org,2001:db8::1' },
+};
+const loaded = { ...Object.assign({}, ...Object.values(groups)), banner_text: 'CONTROLLED', banner_bg: 'red', banner_fg: 'white', banner_enabled: 'true', dow_enabled: 'true' };
+const capacity = { rows: 80000, max_rows: 100000, oldest: null, retention_days: 365, pct: 80, warn_pct: 75, warning: true, last_prune: null };
+const time = { source: 'chrony', servers: ['time.example.org'], synced: true, offset_ms: 0, stratum: 3, last_sync: null };
+const tls = { protocols: ['TLSv1.2', 'TLSv1.3'], ciphers: ['TEST-CIPHER'], fips_mode: true, cert: { subject: 'example.org', issuer: 'Example CA', not_after: '2027-01-01', key_type: 'EC P-256', sans: ['example.org'] }, chain_present: true };
+const json = (data, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => data });
+const plain = object => JSON.parse(JSON.stringify(object));
+let calls = [], csv = '', now = 0, nextId = 0;
+const timers = new Map();
+let handler = url => json(url === '/api/settings' ? loaded : url === '/api/audit/capacity' ? capacity : url === '/api/system/time' ? time : url === '/api/system/tls' ? tls : { state: 'idle', message: '', details: [] });
+const sandbox = {
+    ClusterModal: {}, console, AbortController,
+    fetch: async (url, options = {}) => {
+        calls.push({ url, options, at: now });
+        return handler(url, options);
+    },
+    setTimeout(fn, ms) { const id = ++nextId; timers.set(id, { at: now + ms, fn }); return id; },
+    clearTimeout(id) { timers.delete(id); },
+    Date: class extends Date { static now() { return now; } },
+    document: { getElementById: () => null, body: { style: {} }, createElement: () => ({ click() {} }) },
+    URL: { createObjectURL: () => 'blob:stub' },
+    Blob: function (parts) { csv = parts.join(''); },
+    FormData: class {
+        constructor(form) { this.fields = { ...form.fields }; }
+        get(key) { return this.fields[key]; }
+        delete(key) { delete this.fields[key]; }
+    },
+};
+vm.createContext(sandbox);
+vm.runInContext(source + '\nglobalThis.S = SettingsTab;', sandbox);
+const S = sandbox.S;
+function instance() {
+    const inst = S.data();
+    for (const [key, method] of Object.entries(S.methods)) inst[key] = method.bind(inst);
+    for (const [key, get] of Object.entries(S.computed)) Object.defineProperty(inst, key, { get: get.bind(inst) });
+    inst.$emit = () => {};
+    return inst;
+}
+async function flush() { for (let i = 0; i < 25; i++) await Promise.resolve(); }
+async function tick() {
+    await flush();
+    const next = [...timers.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    assert.ok(next, 'an unfinished operation must schedule a timer');
+    timers.delete(next[0]); now = next[1].at; next[1].fn();
+    await flush();
+}
+async function finish(promise) {
+    let done = false, error;
+    promise.then(() => { done = true; }, e => { done = true; error = e; });
+    await flush();
+    for (let i = 0; !done && i < 100; i++) await tick();
+    assert.ok(done, 'operation must finish by its deadline');
+    if (error) throw error;
+    assert.equal(timers.size, 0, 'operation must clean up timers');
+}
+async function ready() {
+    const inst = instance();
+    await inst.loadSettings();
+    for (const job of Object.values(inst.applyJobs)) job.uncertain = false;
+    calls = [];
+    return inst;
+}
+async function main() {
+    if (scenario === 'bindings') {
+        const inst = await ready();
+        assert.deepEqual(plain(inst.hostSettings), Object.assign({}, ...Object.values(groups)));
+        assert.deepEqual(plain(inst.railGroups.find(g => g.id === 'security').sections), ['Sessions', 'Rate limiting', 'HTTP redirect', 'TLS & certificate']);
+        assert.deepEqual(plain(inst.railGroups.find(g => g.id === 'logging').sections), ['Remote syslog', 'Audit retention']);
+        for (const [section, values] of Object.entries(groups)) {
+            const form = S.template.match(new RegExp('<form @submit.prevent="saveHostSection\\(\'' + section + '\'\\)">([\\s\\S]*?)</form>'));
+            assert.ok(form, section + ' must have a Save form');
+            assert.match(form[1], /<fieldset :disabled="!settingsLoaded \|\| sectionSaving\./);
+            for (const [key, value] of Object.entries(values)) {
+                // Drive the real binding expression from the labelled input. A
+                // wrong v-model changes the wrong property, and the PUT fails.
+                const control = form[1].match(new RegExp('<(?:input|select)\\b[^>]*id="' + key + '"[^>]*>'));
+                assert.ok(control, 'missing labelled control ' + key);
+                const model = control[0].match(/v-model="([^"]+)"/);
+                assert.ok(model, 'missing binding ' + key);
+                assert.equal(model[1], 'hostSettings.' + key, key + ' binding');
+                inst.hostSettings[key] = 'deliberately different';
+                vm.runInNewContext('inst.' + model[1] + ' = value', { inst, value });
+            }
+            await inst.saveHostSection(section);
+            const put = calls.filter(c => c.options.method === 'PUT').at(-1);
+            assert.ok(put, section + ' sends a PUT');
+            assert.deepEqual(JSON.parse(put.options.body), values, section + ' saves only its keys');
+            assert.equal(put.options.headers['Content-Type'], 'application/json');
+            assert.match(inst.sectionMessages[section], /✓ Saved/);
+        }
+        for (const [query, group] of [['time source', 'system'], ['rate limiting', 'security'], ['audit retention', 'logging']]) {
+            inst.railQuery = query;
+            assert.ok(inst.railGroups.filter(g => inst.railMatch(g)).some(g => g.id === group));
+        }
+        assert.doesNotMatch(S.template, /v-html|<script/);
+        assert.equal((S.template.match(/ref="certForm"/g) || []).length, 1);
+    } else if (scenario === 'validation') {
+        const inst = await ready();
+        const ranges = { syslog_port: [1,65535], session_max_concurrent: [0,50], ratelimit_login_per_min: [1,600], ratelimit_login_burst: [0,100], ratelimit_api_per_min: [10,6000], ratelimit_api_burst: [0,1000], ratelimit_conn_per_ip: [1,500], audit_retention_days: [30,3650], audit_max_rows: [10000,50000000], audit_warn_pct: [50,95] };
+        for (const [key, [min,max]] of Object.entries(ranges)) {
+            for (const value of [String(min-1), String(max+1), '1.5', '', 'Infinity', '1e2', 'text']) {
+                calls = [];
+                assert.equal(await inst.saveSettings({ [key]: value }), false, key + ' rejects ' + value);
+                assert.equal(calls.length, 0, 'invalid values never reach the server');
+                assert.match(inst.settingsSaveError, new RegExp(key));
+            }
+            for (const value of [String(min), String(max)]) assert.equal(await inst.saveSettings({ [key]: value }), true, key + ' accepts boundary ' + value);
+        }
+        for (const key of ['syslog_enabled', 'http_redirect_enabled']) {
+            assert.equal(await inst.saveSettings({ [key]: 'yes' }), false);
+            for (const value of ['true', 'false']) assert.equal(await inst.saveSettings({ [key]: value }), true);
+        }
+        for (const value of ['udp','tcp','tls']) assert.equal(await inst.saveSettings({ syslog_protocol: value }), true);
+        assert.equal(await inst.saveSettings({ syslog_protocol: 'https' }), false);
+        for (const value of ['', 'a'.repeat(49), 'bad id', 'bad@id']) assert.equal(await inst.saveSettings({ syslog_app_id: value }), false);
+        for (const value of ['a'.repeat(48), 'A.b_c-d']) assert.equal(await inst.saveSettings({ syslog_app_id: value }), true);
+        for (const value of ['logs.example.org', '192.0.2.1', '::1', '2001:db8::1', '::ffff:192.0.2.1', 'a'.repeat(253)]) assert.equal(await inst.saveSettings({ syslog_enabled: 'true', syslog_host: value }), true, value);
+        for (const value of ['', 'a'.repeat(254), 'host/path', '[::1]', '1:2:3', '2001:::1', '::ffff:999.0.0.1']) assert.equal(await inst.saveSettings({ syslog_enabled: 'true', syslog_host: value }), false, value);
+        assert.equal(await inst.saveSettings({ syslog_enabled: 'false', syslog_host: '' }), true, 'fresh disabled default');
+        for (const value of ['', 'time.example.org', 'time.example.org, ::1', Array(5).fill('time.example.org').join(',')]) assert.equal(await inst.saveSettings({ ntp_servers: value }), true, value);
+        for (const value of [' ', ',', 'time.example.org,', Array(6).fill('time.example.org').join(','), 'https://time.example.org']) assert.equal(await inst.saveSettings({ ntp_servers: value }), false, value);
+    } else if (scenario === 'errors') {
+        const inst = instance();
+        handler = () => json({}, 401);
+        await inst.loadSettings();
+        await inst.saveHostSection('sessions');
+        await inst.applyToHost('syslog');
+        assert.equal(inst.settingsLoaded, false);
+        assert.equal(calls.filter(c => ['PUT','POST'].includes(c.options.method)).length, 0);
+        handler = () => json(loaded);
+        await inst.loadSettings();
+        handler = () => json({ error: 'invalid', field: 'session_max_concurrent', reason: 'too many sessions' }, 400);
+        inst.hostSettings.session_max_concurrent = '8';
+        await inst.saveHostSection('sessions');
+        assert.match(inst.sectionMessages.sessions, /session_max_concurrent: too many sessions/);
+        assert.equal(inst.savedHostSettings.session_max_concurrent, '7', 'failed saves do not change saved export data');
+        handler = () => json({ error: 'audit_unavailable' }, 503);
+        await inst.saveHostSection('sessions');
+        assert.match(inst.sectionMessages.sessions, /Audit logging is unavailable.*action was blocked/);
+        inst.applyJobs.nginx.uncertain = false;
+        await finish(inst.applyToHost('nginx'));
+        assert.match(inst.applyJobs.nginx.message, /Audit logging is unavailable.*nothing was changed/);
+        handler = () => { throw new Error('offline'); };
+        await inst.saveHostSection('sessions');
+        assert.match(inst.sectionMessages.sessions, /could not be reached/);
+        await inst.loadSettings();
+        assert.equal(inst.settingsLoaded, false, 'failed reload closes save gate');
+    } else if (scenario === 'apply') {
+        for (const domain of ['syslog','time','nginx']) {
+            const inst = await ready();
+            let count = 0;
+            handler = (url, options) => {
+                if (options.method === 'POST') return json({ domain, job: 'job1', state: 'queued' }, 202);
+                if (url.endsWith('/apply/' + domain)) {
+                    count++;
+                    return json({ domain, state: count === 1 ? 'running' : 'ok', message: count === 1 ? 'Testing' : 'Applied', details: ['Validated', 'Reloaded'] });
+                }
+                return json(domain === 'time' ? time : {});
+            };
+            inst.sectionSaving[domain === 'nginx' ? 'rate' : domain] = true;
+            await inst.applyToHost(domain);
+            assert.equal(calls.length, 0, 'apply waits for the pending save');
+            inst.sectionSaving[domain === 'nginx' ? 'rate' : domain] = false;
+            const pending = inst.applyToHost(domain);
+            assert.equal(inst.applyJobs[domain].busy, true);
+            await inst.applyToHost(domain);
+            await finish(pending);
+            const posts = calls.filter(c => c.options.method === 'POST');
+            assert.equal(posts.length, 1, 'double apply is blocked');
+            assert.equal(posts[0].url, '/api/system/apply/' + domain);
+            assert.equal(posts[0].options.body, '{}');
+            const polls = calls.filter(c => !c.options.method && c.url.endsWith('/apply/' + domain));
+            assert.deepEqual(polls.map(c => c.at - posts[0].at), [2000, 4000]);
+            assert.ok(polls.every(c => c.options.headers['X-TM-Background'] === '1'));
+            assert.equal(inst.applyJobs[domain].busy, false);
+            assert.equal(inst.applyJobs[domain].state, 'ok');
+            assert.equal(inst.applyJobs[domain].message, 'Applied');
+            assert.deepEqual(plain(inst.applyJobs[domain].details), ['Validated','Reloaded']);
+        }
+        for (const state of ['failed', 'rolled_back']) {
+            const inst = await ready();
+            handler = (url, options) => json(options.method ? { state: 'queued' } : { state, message: 'Validation failed', details: ['Original config restored'] });
+            await finish(inst.applyToHost('syslog'));
+            assert.equal(inst.applyJobs.syslog.state, state);
+            assert.equal(inst.statusGlyph(state), '✕');
+            assert.equal(inst.applyJobs.syslog.busy, false);
+        }
+    } else if (scenario === 'timeout') {
+        for (const hung of [false, true]) {
+            const inst = await ready();
+            handler = () => hung ? new Promise(() => {}) : json({ state: 'running', message: 'Still running', details: [] });
+            const started = now;
+            await finish(inst.applyToHost('syslog'));
+            assert.equal(now - started, 90000);
+            assert.equal(inst.applyJobs.syslog.busy, false);
+            assert.equal(inst.applyJobs.syslog.uncertain, true);
+            assert.match(inst.applyJobs.syslog.message, /90 seconds.*unknown/);
+            const n = calls.length;
+            await inst.applyToHost('syslog');
+            assert.equal(calls.length, n, 'unknown outcomes require status check before retry');
+            handler = () => json({ state: 'ok', message: 'Applied', details: [] });
+            await finish(inst.runHostApply('syslog'));
+            assert.equal(inst.applyJobs.syslog.uncertain, false);
+        }
+        const inst = await ready();
+        handler = () => new Promise(() => {});
+        const pending = inst.runHostApply('nginx');
+        await flush();
+        S.beforeUnmount.call(inst);
+        await finish(pending);
+        const n = calls.length;
+        await inst.applyToHost('nginx');
+        assert.equal(calls.length, n, 'no fetch after unmount');
+    } else if (scenario === 'panels') {
+        const inst = instance();
+        S.mounted.call(inst);
+        await flush();
+        assert.deepEqual(plain(inst.hostPanels), { capacity, time, tls });
+        assert.equal(inst.hostPanels.capacity.warning, true);
+        assert.ok(calls.some(c => c.url === '/api/audit/capacity'));
+        assert.match(S.template, /v-if="hostPanels.capacity\?\.warning" class="host-audit-banner" role="alert"/);
+        assert.match(S.template, /role="progressbar"[^>]*:aria-valuenow=/);
+        for (const key of ['source', 'servers', 'synced', 'offset_ms', 'stratum', 'last_sync']) assert.ok(S.template.includes('hostPanels.time.' + key), 'time panel shows ' + key);
+        for (const key of ['protocols', 'ciphers', 'fips_mode', 'chain_present']) assert.ok(S.template.includes('hostPanels.tls.' + key), 'TLS panel shows ' + key);
+        for (const key of ['subject', 'issuer', 'not_after', 'key_type', 'sans']) assert.ok(S.template.includes('hostPanels.tls.cert?.' + key), 'TLS cert shows ' + key);
+        handler = () => json({}, 500);
+        await inst.loadHostPanel('capacity');
+        assert.match(inst.hostPanelErrors.capacity, /HTTP 500/);
+        assert.equal(inst.hostPanels.capacity.warning, true, 'failed refresh does not falsely clear warning');
+        for (const state of ['idle','queued','running','unknown']) assert.equal(inst.statusGlyph(state), '!');
+        assert.equal(inst.statusGlyph('ok'), '✓');
+        S.beforeUnmount.call(inst);
+    } else if (scenario === 'tls') {
+        for (const failure of [null, 'no-chain', 'invalid_cert', 'audit_unavailable', 'network']) {
+            const inst = await ready();
+            let resets = 0;
+            inst.$refs = { certForm: { fields: { cert: { name: 'cert.pem' }, key: { name: 'secret.key' }, chain: { name: 'chain.pem' } }, reset() { resets++; this.fields = {}; } } };
+            if (failure === 'no-chain') inst.$refs.certForm.fields.chain.name = '';
+            handler = (url, options) => {
+                if (options.method === 'POST') {
+                    if (failure === 'network') throw new Error('offline');
+                    if (failure && failure !== 'no-chain') return json({ error: failure, reason: failure === 'invalid_cert' ? 'Certificate does not match key' : '' }, failure === 'invalid_cert' ? 400 : 503);
+                    return json({ state: 'queued', domain: 'tls', job: 'cert1' }, 202);
+                }
+                return json(url === '/api/system/tls' ? tls : { state: 'ok', message: 'Certificate installed', details: ['Verified'] });
+            };
+            const pending = inst.submitCertificate();
+            assert.equal(resets, 1, 'clear inputs immediately even before response');
+            const data = Object.fromEntries(Object.keys(S.data()).map(key => [key, inst[key]]));
+            assert.ok(!JSON.stringify(data).includes('secret.key'), 'key must never enter component data');
+            await finish(pending);
+            const request = calls.find(c => c.options.method === 'POST');
+            assert.equal(request.url, '/api/system/tls/cert');
+            assert.deepEqual(Object.keys(request.options.body.fields), failure === 'no-chain' ? ['cert','key'] : ['cert','key','chain']);
+            assert.equal(request.options.headers, undefined, 'browser must set multipart boundary');
+            assert.ok(!calls.some(c => c.url === '/api/system/apply/tls' && c.options.method === 'POST'));
+            if (failure === 'invalid_cert') assert.match(inst.applyJobs.tls.message, /Certificate does not match key/);
+            if (failure === 'audit_unavailable') assert.match(inst.applyJobs.tls.message, /Audit logging is unavailable/);
+            if (!failure || failure === 'no-chain') assert.equal(inst.applyJobs.tls.state, 'ok');
+            assert.equal(inst.applyJobs.tls.busy, false);
+        }
+    } else if (scenario === 'ppsm') {
+        const inst = await ready();
+        inst.hostSettings.syslog_port = '9999'; // unsaved must not leak into PPSM
+        inst.downloadPpsm();
+        assert.match(csv, /"Logging","Syslog","10514","UDP","Outbound","Enabled; configured protocol: udp/);
+        assert.match(csv, /"Web","HTTP","80","TCP","Inbound","Disabled by http_redirect_enabled/);
+        assert.match(csv, /"Infra","NTP","123","UDP","Outbound"/);
+        assert.ok(!csv.includes('PLANNED'));
+        assert.ok(!csv.includes('9999'));
+        assert.match(csv, /Saved settings shown; host changes require Apply to host/);
+        handler = () => json({ ok: true });
+        inst.hostSettings.syslog_protocol = 'tls';
+        await inst.saveHostSection('syslog');
+        inst.downloadPpsm();
+        assert.match(csv, /"Logging","Syslog over TLS","9999","TCP","Outbound","Enabled; configured protocol: tls/);
+    } else throw new Error('Unknown scenario: ' + scenario);
+    console.log('PASS ' + scenario);
+}
+main().catch(e => { console.error(e.stack); process.exitCode = 1; });
