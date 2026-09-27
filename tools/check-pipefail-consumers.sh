@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
 # tools/check-pipefail-consumers.sh — no early-exit consumer at the end of a
-# pipe in the test suite.
+# pipe in the test suite OR in the product scripts.
 #
-#   bash tools/check-pipefail-consumers.sh [file-or-dir ...]   (default: tests/)
+#   bash tools/check-pipefail-consumers.sh [file-or-dir ...]
+#   default: tests/ AND the product scripts — install.sh, install/*.sh,
+#   install/libexec/*, prepare-offline.sh (REG-0004, v1.2.0). Round 8 fixed
+#   the class in tests only; in install.sh's pkg_installed the same race could
+#   read an installed package as missing, and in the upgrade audit it could
+#   MISS an immutable file — a blocker read as a pass.
 #
 # Every test runs under `set -o pipefail`. A consumer that stops reading as soon
 # as it has its answer — `grep -q`, `grep -m N`, `head` — can leave the PRODUCER
@@ -23,7 +28,12 @@
 # =============================================================================
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-[ $# -gt 0 ] || set -- "${ROOT}/tests"
+if [ $# -eq 0 ]; then
+    set -- "${ROOT}/tests" "${ROOT}/install.sh" "${ROOT}/prepare-offline.sh"
+    for f in "${ROOT}"/install/*.sh "${ROOT}"/install/libexec/*; do
+        [ -f "$f" ] && set -- "$@" "$f"
+    done
+fi
 
 files=()
 for a in "$@"; do
@@ -40,9 +50,10 @@ done
 hits="$(awk '
     { line = $0 }
     line ~ /^[[:space:]]*#/ { next }
-    line ~ /\|[[:space:]]*grep[^|]*[[:space:]](-[A-Za-z]*[qm]|--quiet|--silent|--max-count)/ \
-      || line ~ /\|[[:space:]]*head([[:space:]]|$)/ \
-      || line ~ /\|[[:space:]]*awk[^|]*[^A-Za-z_]exit([^A-Za-z_]|$)/ { printf "%s:%d: %s\n", FILENAME, FNR, line }
+    # A PIPE is a "|" that is not half of "||" (a || b is not a pipeline).
+    line ~ /(^|[^|])\|[[:space:]]*grep[^|]*[[:space:]](-[A-Za-z]*[qm]|--quiet|--silent|--max-count)/ \
+      || line ~ /(^|[^|])\|[[:space:]]*head([[:space:]]|$)/ \
+      || line ~ /(^|[^|])\|[[:space:]]*awk[^|]*[^A-Za-z_]exit([^A-Za-z_]|$)/ { printf "%s:%d: %s\n", FILENAME, FNR, line }
 ' "${files[@]}")"
 
 if [ -n "$hits" ]; then

@@ -329,7 +329,7 @@ apt_removal_reason() {
     # shellcheck disable=SC2046
     srcs="$(dpkg-query -W -f='${Package}\t${source:Package}\n' $(printf '%s\n' "$removed" | sed 's/:.*//') 2>/dev/null || true)"
     while IFS= read -r name; do
-        src="$(printf '%s\n' "$srcs" | awk -F'\t' -v p="${name%%:*}" '$1 == p { print $2; exit }')"
+        src="$(printf '%s\n' "$srcs" | awk -F'\t' -v p="${name%%:*}" '$1 == p && !done { print $2; done = 1 }')"
         if [[ -n "$src" && -n "${upsrc[$src]:-}" ]]; then
             sib+=("${name} (source ${src})")
         else
@@ -740,7 +740,9 @@ fi
 # toolchain. polkitd is what lets the Settings restart control act.
 REQUIRED_PKGS=(python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl
                rsyslog rsyslog-openssl)
-pkg_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"; }
+# Captured, then tested: `dpkg-query | grep -q` could SIGPIPE dpkg-query under
+# pipefail and read an installed package as missing (REG-0004).
+pkg_installed() { [[ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true)" == *"install ok installed"* ]]; }
 MISSING_PKGS=()
 for p in "${REQUIRED_PKGS[@]}"; do pkg_installed "$p" || MISSING_PKGS+=("$p"); done
 info "Installing system dependencies..."
@@ -895,8 +897,10 @@ success "Backend installed"
 # signature. The fresh-install path is now held to the same standard as upgrade.
 UPGRADE_SH="${SCRIPT_DIR}/install/upgrade-full.sh"
 [[ -f "$UPGRADE_SH" ]] || die "${UPGRADE_SH} not found — it holds the Vue version and hash pin."
-VUE_VERSION="$(sed -n 's/^VUE_VERSION="\([^"]*\)".*/\1/p' "$UPGRADE_SH" | head -1)"
-VUE_SHA256="$(sed -n 's/^VUE_SHA256="\([^"]*\)".*/\1/p' "$UPGRADE_SH" | head -1)"
+# `sed -n 1p`, never `head -1`: under pipefail an early-exit consumer can
+# SIGPIPE its producer (REG-0004); sed reads all of its input.
+VUE_VERSION="$(sed -n 's/^VUE_VERSION="\([^"]*\)".*/\1/p' "$UPGRADE_SH" | sed -n 1p)"
+VUE_SHA256="$(sed -n 's/^VUE_SHA256="\([^"]*\)".*/\1/p' "$UPGRADE_SH" | sed -n 1p)"
 [[ -n "$VUE_VERSION" && -n "$VUE_SHA256" ]] \
     || die "Could not read VUE_VERSION/VUE_SHA256 from ${UPGRADE_SH}."
 VUE_URL="https://cdn.jsdelivr.net/npm/vue@${VUE_VERSION}/dist/vue.global.prod.js"
@@ -1353,8 +1357,9 @@ echo "  Next steps:"
 echo "  1. Sign in with a member of the required group, then add the Kafka"
 echo "     clusters in Settings > General > Cluster Profiles (a new install"
 echo "     starts with none)."
-if [[ -z "$OPT_TLS_CERT" ]] && openssl x509 -in "$TLS_CRT" -noout -issuer -subject 2>/dev/null \
-        | awk -F'= ' '/^issuer/{i=$2} /^subject/{s=$2} END{exit !(i==s)}'; then
+TLS_NAMES="$(openssl x509 -in "$TLS_CRT" -noout -issuer -subject 2>/dev/null || true)"
+if [[ -z "$OPT_TLS_CERT" && -n "$TLS_NAMES" ]] \
+        && awk -F'= ' '/^issuer/{i=$2} /^subject/{s=$2} END{exit !(i==s)}' <<<"$TLS_NAMES"; then
 echo "  2. The TLS certificate is SELF-SIGNED. Replace ${TLS_CRT} and"
 echo "     ${TLS_KEY} with a CA-issued pair, then: sudo systemctl reload nginx"
 fi

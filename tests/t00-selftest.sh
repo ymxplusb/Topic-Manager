@@ -244,10 +244,33 @@ s_pipefail_lint_goes_red() {
         rc=0; bash "${TM_REPO_ROOT}/tools/check-pipefail-consumers.sh" "$TM_TMP/lint.sh" >/dev/null 2>&1 || rc=$?
         tm_assert_rc 1 "$rc" "the lint did not flag: ${shape}"
     done
-    printf '%s\n' "# x ${P} grep -q y" 'grep -q y <<<"$x"' "x ${P} sed -n 1p" > "$TM_TMP/lint.sh"
+    printf '%s\n' "# x ${P} grep -q y" 'grep -q y <<<"$x"' "x ${P} sed -n 1p" "a ${P}${P} grep -q y f" > "$TM_TMP/lint.sh"
     rc=0; bash "${TM_REPO_ROOT}/tools/check-pipefail-consumers.sh" "$TM_TMP/lint.sh" >/dev/null 2>&1 || rc=$?
-    tm_assert_rc 0 "$rc" "the lint flagged a safe shape"
+    tm_assert_rc 0 "$rc" "the lint flagged a safe shape (a comment, a here-string, sed, or a || b)"
 }
 tm_case "the-pipefail-lint-goes-red-on-each-shape" none s_pipefail_lint_goes_red
+
+# ── v1.2.0 REG-0004: the PRODUCT scripts are held to the same rule ───────────
+s_pipefail_lint_covers_product_scripts() {
+    local out rc=0 f P='|' fake="$TM_TMP/tree"
+    # Green on the real tree with NO arguments — the gate's own default set.
+    out="$(bash "${TM_REPO_ROOT}/tools/check-pipefail-consumers.sh" 2>&1)" || rc=$?
+    tm_assert_rc 0 "$rc" "a product script has an early-exit consumer under pipefail: ${out}"
+    # Red, by default, on a product-script instance in each place it must
+    # look: a copy of the tree with ONE line added to ONE product script.
+    for f in install.sh install/upgrade-full.sh prepare-offline.sh install/libexec/tm-apply; do
+        rm -rf "$fake"; mkdir -p "$fake/tools" "$fake/tests" "$fake/install/libexec"
+        cp "${TM_REPO_ROOT}/tools/check-pipefail-consumers.sh" "$fake/tools/"
+        cp "${TM_REPO_ROOT}/install.sh" "${TM_REPO_ROOT}/prepare-offline.sh" "$fake/"
+        cp "${TM_REPO_ROOT}/install/upgrade-full.sh" "$fake/install/"
+        cp "${TM_REPO_ROOT}/install/libexec/tm-apply" "$fake/install/libexec/"
+        : > "$fake/tests/t00-empty.sh"
+        printf '%s\n' "pkg_installed() { dpkg-query -W \"\$1\" ${P} grep -q 'install ok installed'; }" >> "$fake/$f"
+        rc=0; out="$(bash "$fake/tools/check-pipefail-consumers.sh" 2>&1)" || rc=$?
+        tm_assert_rc 1 "$rc" "the default run did not look at ${f}: ${out}"
+        grep -qF "${f}:" <<<"$out" || _tm_afail "the finding does not name ${f}: ${out}"
+    done
+}
+tm_case "the-pipefail-lint-covers-the-product-scripts" none s_pipefail_lint_covers_product_scripts
 
 tm_finish

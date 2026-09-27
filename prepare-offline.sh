@@ -118,8 +118,9 @@ ok "Bundle matches requirements.txt"
 info "Downloading Vue.js 3..."
 UPGRADE_SH="${SCRIPT_DIR}/install/upgrade-full.sh"
 [[ -f "$UPGRADE_SH" ]] || die "${UPGRADE_SH} not found — it holds the Vue version and hash pin."
-VUE_VER="$(sed -n 's/^VUE_VERSION="\([^"]*\)".*/\1/p' "$UPGRADE_SH" | head -1)"
-VUE_SHA256="$(sed -n 's/^VUE_SHA256="\([^"]*\)".*/\1/p' "$UPGRADE_SH" | head -1)"
+# `sed -n 1p`, never `head -1` under pipefail (REG-0004).
+VUE_VER="$(sed -n 's/^VUE_VERSION="\([^"]*\)".*/\1/p' "$UPGRADE_SH" | sed -n 1p)"
+VUE_SHA256="$(sed -n 's/^VUE_SHA256="\([^"]*\)".*/\1/p' "$UPGRADE_SH" | sed -n 1p)"
 [[ -n "$VUE_VER" && -n "$VUE_SHA256" ]] \
     || die "Could not read VUE_VERSION/VUE_SHA256 from ${UPGRADE_SH}."
 VUE_URL="https://cdn.jsdelivr.net/npm/vue@${VUE_VER}/dist/vue.global.prod.js"

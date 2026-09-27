@@ -1210,7 +1210,10 @@ echo "  ── immutable and extended attributes"
 IMMUT=0
 for p in "${BASELINE_PATHS[@]}"; do
     [[ -e "$p" ]] || continue
-    if lsattr -d "$p" 2>/dev/null | awk '{print $1}' | grep -q 'i'; then
+    # Captured, then tested (REG-0004): `| grep -q` under pipefail could
+    # SIGPIPE the producer and MISS an immutable file — a blocker read as a pass.
+    _attrs="$(lsattr -d "$p" 2>/dev/null || true)"
+    if [[ "${_attrs%% *}" == *i* ]]; then
         row BLOCK "immutable attribute set" "$p — chattr -i required before upgrade"
         IMMUT=$((IMMUT+1))
     fi
@@ -1220,7 +1223,8 @@ done
 ACL_FOUND=0
 for p in "$FRONTEND_DIR" "$CONFIG_DIR" "$APP_HOME"; do
     [[ -d "$p" ]] || continue
-    if getfacl -p "$p" 2>/dev/null | grep -qE '^(user|group|mask):[^:]+:'; then
+    _acl="$(getfacl -p "$p" 2>/dev/null || true)"
+    if grep -qE '^(user|group|mask):[^:]+:' <<<"$_acl"; then
         row WARN "POSIX ACL present" "$p — ACLs are preserved by cp -a but not by mode restore"
         ACL_FOUND=$((ACL_FOUND+1))
     fi
@@ -1472,8 +1476,9 @@ LDAP_PW_RES="$(resolve_cfg auth.ldap_bind_password TM_LDAP_BIND_PASSWORD)"
 LDAP_PW_SRC="${LDAP_PW_RES%%|*}"; LDAP_PW="${LDAP_PW_RES#*|}"
 [[ "$LDAP_PW_SRC" == "none" || "$LDAP_PW_SRC" == "error" ]] && LDAP_PW=""
 # The other two thirds of the bind identity, for the attempt-budget cache key.
-LDAP_DN="$(grep -oP 'ldap_bind_dn:\s*"\K[^"]+' "$CONFIG_FILE" 2>/dev/null | head -1 || true)"
-LDAP_SRV_RAW="$(grep -oP 'ldap_server:\s*"?\K[^"]+' "$CONFIG_FILE" 2>/dev/null | head -1 || true)"
+# grep -m1 on the FILE, not `| head -1` on a pipe (REG-0004).
+LDAP_DN="$(grep -m1 -oP 'ldap_bind_dn:\s*"\K[^"]+' "$CONFIG_FILE" 2>/dev/null || true)"
+LDAP_SRV_RAW="$(grep -m1 -oP 'ldap_server:\s*"?\K[^"]+' "$CONFIG_FILE" 2>/dev/null || true)"
 
 LDAP_PY="$(mktemp)"; chmod 600 "$LDAP_PY"
 cat > "$LDAP_PY" <<'PYLDAP'
@@ -1621,11 +1626,12 @@ esac
 
 # --- 3. LDAPS trust. The new version enforces CERT_REQUIRED; an untrusted DC
 # certificate turns into a login outage rather than a warning.
-LDAP_SRV="$(grep -oP 'ldap_server:\s*"?\Kldaps://[^"]+' "$CONFIG_FILE" 2>/dev/null | head -1 || true)"
+LDAP_SRV="$(grep -m1 -oP 'ldap_server:\s*"?\Kldaps://[^"]+' "$CONFIG_FILE" 2>/dev/null || true)"
 if [[ -n "$LDAP_SRV" ]]; then
     HP="${LDAP_SRV#ldaps://}"
     RC="$(timeout 15 openssl s_client -connect "$HP" -CAfile /etc/ssl/certs/ca-certificates.crt \
-            </dev/null 2>&1 | grep -m1 'Verify return code' || true)"
+            </dev/null 2>&1 || true)"
+    RC="$(grep -m1 'Verify return code' <<<"$RC" || true)"
     if grep -q 'Verify return code: 0' <<<"$RC"; then
         row PASS "LDAPS certificate trust" "${HP} verifies against the system store"
     else
@@ -1651,7 +1657,7 @@ fi
 # --- 5b. nginx.conf offers TLS 1.0/1.1 at the http level (stock Ubuntu does).
 # Reported, not blocked: Phase 11 rewrites it, backs it up and tests it.
 if [[ -f /etc/nginx/nginx.conf ]]; then
-    NGX_PROTO="$(grep -E '^[[:space:]]*ssl_protocols[[:space:]]' /etc/nginx/nginx.conf 2>/dev/null | head -1 | sed -E 's/^[[:space:]]+//; s/[[:space:]]*#.*$//' || true)"
+    NGX_PROTO="$(grep -m1 -E '^[[:space:]]*ssl_protocols[[:space:]]' /etc/nginx/nginx.conf 2>/dev/null | sed -E 's/^[[:space:]]+//; s/[[:space:]]*#.*$//' || true)"
     if [[ -z "$NGX_PROTO" ]]; then
         row WARN "nginx.conf ssl_protocols" "not set at http level — this upgrade adds TLSv1.2 TLSv1.3"
     elif grep -Eq 'TLSv1([^.]|$)|TLSv1\.1' <<<"$NGX_PROTO"; then
