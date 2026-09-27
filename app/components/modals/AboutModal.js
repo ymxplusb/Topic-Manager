@@ -35,6 +35,9 @@ const AboutModal = {
                 { name: 'polkit',          version: '124',      license: 'LGPL-2.0+ / Expat', url: 'polkit.freedesktop.org' },
                 { name: 'Python',          version: '3.12.3',   license: 'PSF-2.0',       url: 'python.org' },
                 { name: 'SQLite',          version: '3.45.1',   license: 'Public Domain', url: 'sqlite.org' },
+                { name: 'rsyslog',         version: '8.2312.0', license: 'GPL-3.0+ / LGPL-3.0+ / Apache-2.0', url: 'rsyslog.com' },
+                { name: 'rsyslog-openssl', version: '8.2312.0 (same source as rsyslog; not measured)', license: 'GPL-3.0+ / LGPL-3.0+ / Apache-2.0', url: 'rsyslog.com' },
+                { name: 'chrony',          version: '4.5',      license: 'GPL-2.0',       url: 'chrony-project.org (where installed)' },
             ],
         };
     },

@@ -54,6 +54,14 @@ const LoginView = {
                     return;
                 }
                 if (!r.ok) {
+                    if (r.status === 503 && data.error === 'audit_unavailable') {
+                        this.error = 'Sign-in was blocked because the audit trail is unavailable. No sign-in session was issued. Ask an administrator to restore audit logging before retrying.';
+                        return;
+                    }
+                    if (r.status === 500 && data.error === 'audit_write_failed') {
+                        this.error = 'The sign-in change WAS made, but its audit record could not be written. Ask an administrator to check the audit database and AUDIT_WRITE_FAILED in the host syslog before signing in again.';
+                        return;
+                    }
                     this.error = data.error || (r.status === 429
                         ? 'Too many sign-in attempts from this address. Wait a minute and try again.'
                         : 'Login failed (HTTP ' + r.status + ')');

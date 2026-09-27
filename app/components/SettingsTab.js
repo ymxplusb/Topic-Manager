@@ -67,7 +67,7 @@ function settingsValidation(payload, current) {
             reason = 'Enter a whole number from ' + range[0] + ' to ' + range[1] + '.';
         if (['syslog_enabled', 'http_redirect_enabled'].includes(key) && !['true', 'false'].includes(value))
             reason = 'Choose true or false.';
-        if (key === 'syslog_protocol' && !['udp', 'tcp', 'tls'].includes(value)) reason = 'Choose UDP, TCP or TLS.';
+        if (key === 'syslog_protocol' && !['udp', 'tcp', 'tls'].includes(value.trim().toLowerCase())) reason = 'Choose UDP, TCP or TLS.';
         if (key === 'syslog_app_id' && !/^[A-Za-z0-9._-]{1,48}$/.test(value))
             reason = 'Use 1–48 letters, numbers, dots, underscores or hyphens.';
         if (key === 'syslog_host' && !(value === '' && current.syslog_enabled === 'false') && !settingsHostValid(value))
@@ -111,7 +111,7 @@ const SettingsTab = {
             hostPanelErrors: {},
             hostPanelLoading: {},
             applyJobs: Object.fromEntries(['syslog', 'time', 'nginx', 'tls'].map(domain =>
-                [domain, { busy: false, uncertain: true, state: 'idle', message: '', details: [] }])),
+                [domain, { busy: false, uncertain: true, state: 'idle', job: '', applied: null, applied_at: null, message: '', details: [] }])),
             hostRuns: {},
             hostDisposed: false,
             // DoW Consent
@@ -240,10 +240,13 @@ const SettingsTab = {
                 this.settingsSaveError = 'Save failed: the server could not be reached.';
                 return false;
             }
-            Object.keys(payload).forEach(key => {
-                if (Object.prototype.hasOwnProperty.call(SETTINGS_V120_DEFAULTS, key))
-                    this.savedHostSettings[key] = String(payload[key]);
-            });
+            // PUT returns changed key names, not their normalised values.
+            // Reload all 21 keys before reporting success or enabling Apply.
+            await this.loadSettings();
+            if (!this.settingsLoaded) {
+                this.settingsSaveError = 'The settings were saved, but their normalised values could not be reloaded. Reload settings before making another change.';
+                return false;
+            }
             return true;
         },
         async saveDow() {
@@ -274,15 +277,36 @@ const SettingsTab = {
             document.body.style.paddingBottom = h;
         },
         // ── v1.2.0 host settings ────────────────────────────────────
-        async hostResponseError(response, fallback, context = 'save') {
-            let data = {};
-            try { data = await response.json(); } catch (e) { /* non-JSON proxy response */ }
+        async hostResponseError(response, fallback, context = 'save', parsed = null) {
+            let data = parsed || {};
+            if (!parsed) try { data = await response.json(); } catch (e) { /* non-JSON proxy response */ }
             if (context === 'poll') return SETTINGS_STATUS_UNKNOWN;
             if (response.status === 503 && data.error === 'audit_unavailable')
                 return 'Audit logging is unavailable. The action was blocked; nothing was changed. Restore audit logging before retrying.';
-            if (context === 'tls') return Object.prototype.hasOwnProperty.call(SETTINGS_TLS_ERRORS, data.reason)
+            if (response.status === 500 && data.error === 'audit_write_failed')
+                return 'The change WAS made, but its audit record could not be written. Check the audit database and AUDIT_WRITE_FAILED in the host syslog before making any further change.';
+            if (response.status === 409 && data.error === 'apply_in_progress')
+                return 'An apply is already queued or running. Check status before applying again.';
+            if (response.status === 429 && data.error === 'apply_throttled') {
+                const seconds = Number(response.headers?.get('Retry-After') || data.retry_after);
+                return 'Apply requests are limited to one per domain every 5 seconds. Wait '
+                    + (Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : 5) + ' seconds before retrying.';
+            }
+            if (response.status === 404 && data.error === 'unknown_domain')
+                return 'This apply domain is not supported. TLS changes must use the certificate upload form.';
+            if (response.status === 502 && data.error === 'apply_unit_failed')
+                return 'The host apply service could not start. Check the service on the host, then check status before retrying.';
+            if (response.status === 411)
+                return 'Certificate upload requires Content-Length. Retry the file upload and check that your proxy preserves this header.';
+            if (response.status === 413)
+                return 'Certificate upload exceeds the 200 KiB request limit, including multipart framing. Choose smaller PEM files.';
+            if (response.status === 415)
+                return context === 'tls' ? 'Certificate upload requires multipart/form-data. Select the PEM files and submit the upload form.'
+                    : 'This request requires Content-Type: application/json. Reload the page before retrying.';
+            if (context === 'tls' && response.status === 400 && data.error === 'invalid_cert') return Object.prototype.hasOwnProperty.call(SETTINGS_TLS_ERRORS, data.reason)
                 ? SETTINGS_TLS_ERRORS[data.reason] : 'Certificate upload failed. Check the certificate and key, then try again.';
-            if (data.field && data.reason) return data.field + ': ' + data.reason;
+            if (context === 'tls') return 'Certificate upload failed. Check the certificate and key, then try again.';
+            if (response.status === 400 && data.error === 'invalid') return data.field + ': ' + data.reason;
             return data.reason || data.error || fallback + ' (HTTP ' + response.status + ').';
         },
         async saveHostSection(section) {
@@ -350,7 +374,7 @@ const SettingsTab = {
                 if (!response.ok) {
                     const error = new Error(await this.hostResponseError(response, 'Host request failed', opts.method === 'POST' ? domain : 'poll'));
                     error.safe = true;
-                    error.refused = opts.method === 'POST' && ([400, 401, 403].includes(response.status)
+                    error.refused = opts.method === 'POST' && ([400, 401, 403, 404, 411, 413, 415, 429, 502].includes(response.status)
                         || error.message.startsWith('Audit logging is unavailable.'));
                     throw error;
                 }
@@ -362,7 +386,7 @@ const SettingsTab = {
                     const data = await request(domain === 'tls' ? '/api/system/tls/cert' : '/api/system/apply/' + domain, options);
                     options = null;
                     if (this.hostDisposed || run.controller.signal.aborted) return;
-                    Object.assign(job, { state: data.state, uncertain: true, message: 'Apply queued. Waiting for host status…' });
+                    Object.assign(job, { job: settingsJobText(data.job), state: data.state, uncertain: true, message: 'Apply queued. Waiting for host status…' });
                 }
                 let first = !submitted;
                 while (!this.hostDisposed && Date.now() < deadline) {
@@ -374,7 +398,12 @@ const SettingsTab = {
                     if (this.hostDisposed || run.controller.signal.aborted) return;
                     const data = await request('/api/system/apply/' + domain, { headers: { 'X-TM-Background': '1' } });
                     if (this.hostDisposed || run.controller.signal.aborted) return;
-                    Object.assign(job, { state: data.state, message: settingsJobText(data.message), details: Array.isArray(data.details) ? data.details.map(settingsJobText).filter(Boolean) : [] });
+                    Object.assign(job, { job: settingsJobText(data.job), state: data.state, applied_at: settingsJobText(data.applied_at),
+                        // TLS applied data is a certificate summary, never settings or PEM.
+                        applied: domain === 'tls' && data.applied ? Object.fromEntries(
+                            ['subject', 'issuer', 'not_after', 'key_type', 'chain_count'].map(key =>
+                                [key, key === 'chain_count' ? (Number.isInteger(data.applied[key]) ? data.applied[key] : null) : settingsJobText(data.applied[key])])) : null,
+                        message: settingsJobText(data.message), details: Array.isArray(data.details) ? data.details.map(settingsJobText).filter(Boolean) : [] });
                     if (['idle', 'ok', 'failed', 'rolled_back'].includes(data.state)) {
                         job.uncertain = false;
                         if (domain === 'time' || domain === 'tls') void this.loadHostPanel(domain);
@@ -456,7 +485,7 @@ const SettingsTab = {
             try {
                 const r = await fetch('/api/clusters/' + encodeURIComponent(c.id), { method: 'DELETE' });
                 const d = await r.json();
-                if (!r.ok) { this.clusterError = d.error || 'Delete failed'; return; }
+                if (!r.ok) { this.clusterError = await this.hostResponseError(r, 'Delete failed', 'delete', d); return; }
                 this.$emit('clusters-changed');
             } catch (e) {
                 this.clusterError = 'Network error while deleting the cluster profile';
@@ -481,7 +510,7 @@ const SettingsTab = {
                 accepted = await r.json();
                 if (!r.ok) {
                     this.restartState = 'failed';
-                    this.restartMessage = accepted.error || ('Refused (HTTP ' + r.status + ')');
+                    this.restartMessage = await this.hostResponseError(r, 'Restart refused', 'restart', accepted);
                     return;
                 }
             } catch (e) {
@@ -789,6 +818,7 @@ const SettingsTab = {
     <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.nginx.state">
       <strong>{{ statusGlyph(applyJobs.nginx.state) }} {{ applyJobs.nginx.state }}</strong>
       <span>{{ applyJobs.nginx.message }}</span>
+      <span v-if="applyJobs.nginx.job">Job: {{ applyJobs.nginx.job }}</span>
       <ul v-if="applyJobs.nginx.details.length"><li v-for="(detail, i) in applyJobs.nginx.details" :key="i">{{ detail }}</li></ul>
     </div>
   </div>
@@ -809,6 +839,7 @@ const SettingsTab = {
     <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.nginx.state">
       <strong>{{ statusGlyph(applyJobs.nginx.state) }} {{ applyJobs.nginx.state }}</strong>
       <span>{{ applyJobs.nginx.message }}</span>
+      <span v-if="applyJobs.nginx.job">Job: {{ applyJobs.nginx.job }}</span>
       <ul v-if="applyJobs.nginx.details.length"><li v-for="(detail, i) in applyJobs.nginx.details" :key="i">{{ detail }}</li></ul>
     </div>
   </div>
@@ -843,7 +874,16 @@ const SettingsTab = {
     <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.tls.state">
       <strong>{{ statusGlyph(applyJobs.tls.state) }} {{ applyJobs.tls.state }}</strong>
       <span>{{ applyJobs.tls.message }}</span>
+      <span v-if="applyJobs.tls.job">Job: {{ applyJobs.tls.job }}</span>
       <ul v-if="applyJobs.tls.details.length"><li v-for="(detail, i) in applyJobs.tls.details" :key="i">{{ detail }}</li></ul>
+      <dl v-if="applyJobs.tls.applied" class="host-facts">
+        <dt>Last applied</dt><dd>{{ applyJobs.tls.applied_at || 'Unavailable' }}</dd>
+        <dt>Subject</dt><dd>{{ applyJobs.tls.applied.subject }}</dd>
+        <dt>Issuer</dt><dd>{{ applyJobs.tls.applied.issuer }}</dd>
+        <dt>Expires</dt><dd>{{ applyJobs.tls.applied.not_after }}</dd>
+        <dt>Key type</dt><dd>{{ applyJobs.tls.applied.key_type }}</dd>
+        <dt>Chain certificates</dt><dd>{{ applyJobs.tls.applied.chain_count }}</dd>
+      </dl>
     </div>
   </div>
   </div>
@@ -872,6 +912,7 @@ const SettingsTab = {
     <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.syslog.state">
       <strong>{{ statusGlyph(applyJobs.syslog.state) }} {{ applyJobs.syslog.state }}</strong>
       <span>{{ applyJobs.syslog.message }}</span>
+      <span v-if="applyJobs.syslog.job">Job: {{ applyJobs.syslog.job }}</span>
       <ul v-if="applyJobs.syslog.details.length"><li v-for="(detail, i) in applyJobs.syslog.details" :key="i">{{ detail }}</li></ul>
     </div>
   </div>
@@ -954,6 +995,7 @@ const SettingsTab = {
     <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.time.state">
       <strong>{{ statusGlyph(applyJobs.time.state) }} {{ applyJobs.time.state }}</strong>
       <span>{{ applyJobs.time.message }}</span>
+      <span v-if="applyJobs.time.job">Job: {{ applyJobs.time.job }}</span>
       <ul v-if="applyJobs.time.details.length"><li v-for="(detail, i) in applyJobs.time.details" :key="i">{{ detail }}</li></ul>
     </div>
     <div class="host-readout">

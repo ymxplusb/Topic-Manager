@@ -11,7 +11,7 @@ probe_case() {
         "probe did not complete exactly ${EXPECTED} assertions for ${SCENARIO}"
 }
 # Independent fixed counts: neither a zero exit nor a partial PASS is enough.
-for SPEC in bindings:93 validation:269 errors:14 apply:45 timeout:13 panels:27 tls:92 ppsm:28; do
+for SPEC in bindings:93 validation:269 errors:14 apply:45 timeout:13 panels:27 tls:92 ppsm:28 integration:83; do
     SCENARIO="${SPEC%:*}"
     EXPECTED="${SPEC#*:}"
     tm_case "settings-v120-${SCENARIO}" node probe_case

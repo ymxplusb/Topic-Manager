@@ -319,6 +319,83 @@ async function main() {
                 assert.deepEqual(plain(inst.applyJobs[domain].details), ['Safe detail']);
             }
         }
+    } else if (scenario === 'integration') {
+        const inst = await ready();
+        assert.equal(Object.keys(loaded).length, 21, 'full GET fixture');
+        const normalized = { ...loaded, syslog_protocol: 'udp', ntp_servers: 'a.example.org,b.example.org', session_max_concurrent: '8' };
+        handler = (url, opts) => opts.method === 'PUT' ? json({ ok: true, changed: ['syslog_protocol', 'ntp_servers', 'session_max_concurrent'] }) : json(normalized);
+        inst.hostSettings.syslog_protocol = 'UDP';
+        assert.equal(await inst.saveSettings({ syslog_protocol: 'UDP', ntp_servers: 'a.example.org, b.example.org', session_max_concurrent: '08' }), true);
+        assert.deepEqual(calls.map(c => [c.url, c.options.method || 'GET']), [['/api/settings', 'PUT'], ['/api/settings', 'GET']]);
+        for (const key of ['syslog_protocol', 'ntp_servers', 'session_max_concurrent']) {
+            assert.equal(inst.hostSettings[key], normalized[key]);
+            assert.equal(inst.savedHostSettings[key], normalized[key]);
+        }
+        handler = (url, opts) => json({}, opts.method === 'PUT' ? 200 : 503);
+        assert.equal(await inst.saveSettings({ session_max_concurrent: '9' }), false);
+        assert.equal(inst.settingsLoaded, false);
+        assert.match(inst.settingsSaveError, /were saved.*could not be reloaded/);
+        handler = () => json(loaded);
+        await inst.loadSettings();
+        const failures = [
+            [400, 'invalid', /syslog_host: host required/, false],
+            [404, 'unknown_domain', /not supported.*TLS/, false],
+            [409, 'apply_in_progress', /already queued or running.*Check status/, true],
+            [429, 'apply_throttled', /Wait 3 seconds/, false],
+            [502, 'apply_unit_failed', /service could not start/, false],
+            [503, 'audit_unavailable', /blocked; nothing was changed/, false],
+            [500, 'audit_write_failed', /change WAS made.*audit record/, true],
+            [415, 'Content-Type must be application/json', /requires Content-Type: application\/json/, false],
+        ];
+        for (const [status, error, message, uncertain] of failures) {
+            for (const domain of ['syslog', 'tls']) {
+                if (domain === 'tls' && [400, 404, 415].includes(status)) continue;
+                inst.applyJobs[domain].uncertain = false;
+                calls = [];
+                handler = () => ({ ...json({ error, field: 'syslog_host', reason: 'host required', retry_after: 5 }, status), headers: { get: key => key === 'Retry-After' ? '3' : null } });
+                const opts = domain === 'tls' ? { method: 'POST', body: new sandbox.FormData({ fields: {} }) } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' };
+                await finish(inst.runHostApply(domain, opts));
+                assert.match(inst.applyJobs[domain].message, message);
+                assert.equal(inst.applyJobs[domain].uncertain, uncertain);
+                assert.equal(calls.length, 1, 'refused POST never automatically retried');
+            }
+        }
+        for (const [status, pattern] of [[411, /requires Content-Length/], [413, /200 KiB.*multipart framing/], [415, /requires multipart\/form-data/]]) {
+            inst.applyJobs.tls.uncertain = false;
+            handler = () => json({ error: 'invalid_cert', reason: '-----BEGIN PRIVATE KEY-----DO_NOT_ECHO' }, status);
+            await finish(inst.runHostApply('tls', { method: 'POST', body: new sandbox.FormData({ fields: {} }) }));
+            assert.match(inst.applyJobs.tls.message, pattern);
+            assert.equal(inst.applyJobs.tls.uncertain, false);
+            assert.ok(!JSON.stringify(inst).includes('DO_NOT_ECHO'));
+        }
+        const summary = { subject: 'example.org', issuer: 'Example CA', not_after: '2027-01-01', key_type: 'EC P-256', chain_count: 2 };
+        handler = url => json(url === '/api/system/tls' ? tls : { state: 'ok', job: 'job42', applied: { ...summary, key: 'NEVER_STORE_KEY' }, applied_at: '2026-09-27' });
+        await finish(inst.runHostApply('tls'));
+        assert.equal(inst.applyJobs.tls.job, 'job42');
+        assert.deepEqual(plain(inst.applyJobs.tls.applied), summary);
+        assert.equal(inst.applyJobs.tls.applied_at, '2026-09-27');
+        assert.ok(!JSON.stringify(inst).includes('NEVER_STORE_KEY'));
+        for (const field of Object.keys(summary)) assert.ok(S.template.includes('applyJobs.tls.applied.' + field));
+        for (const domain of ['syslog', 'time', 'nginx', 'tls']) assert.ok(S.template.includes('applyJobs.' + domain + '.job'));
+        // Every Settings mutation uses the same distinct audit messages.
+        for (const [status, error, message] of [[503, 'audit_unavailable', /nothing was changed/], [500, 'audit_write_failed', /change WAS made/]]) {
+            handler = () => json({ error }, status);
+            await inst.saveSettings({ session_max_concurrent: '8' });
+            assert.match(inst.settingsSaveError, message);
+            await inst.deleteCluster({ id: 'example' });
+            assert.match(inst.clusterError, message);
+            await inst.restartService();
+            assert.match(inst.restartMessage, message);
+        }
+        sandbox.window = { location: { hostname: 'example.org' } };
+        vm.runInContext(fs.readFileSync(path.join(root, 'app/components/LoginView.js'), 'utf8') + '\nglobalThis.L = LoginView;', sandbox);
+        for (const [status, error, pattern] of [[503, 'audit_unavailable', /Sign-in was blocked.*No sign-in session was issued/], [500, 'audit_write_failed', /sign-in change WAS made.*audit record/]]) {
+            const login = { ...sandbox.L.data(), username: 'test', password: 'test', $emit() { throw Error('failed login must not emit success'); } };
+            handler = () => json({ error }, status);
+            await sandbox.L.methods.doLogin.call(login);
+            assert.match(login.error, pattern);
+            assert.equal(login.loading, false);
+        }
     } else if (scenario === 'ppsm') {
         const inst = await ready();
         const applied = {
@@ -357,7 +434,7 @@ async function main() {
             assert.ok(!csv.includes('9999') && !csv.includes('live.example.org'));
         }
     } else throw new Error('Unknown scenario: ' + scenario);
-    const expected = { bindings: 93, validation: 269, errors: 14, apply: 45, timeout: 13, panels: 27, tls: 92, ppsm: 28 };
+    const expected = { bindings: 93, validation: 269, errors: 14, apply: 45, timeout: 13, panels: 27, tls: 92, ppsm: 28, integration: 83 };
     rawAssert.equal(assertions, expected[scenario], 'complete the exact scenario assertion count');
     console.log('ALL ' + assertions + ' ASSERTIONS PASSED');
 }
