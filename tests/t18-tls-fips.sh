@@ -45,8 +45,12 @@ s_policy() {
         || _tm_afail "the ECDHE curves are not restricted to P-384/P-256"
     grep -Eq '^[[:space:]]*ssl_session_tickets[[:space:]]+off;' "$SITE" || _tm_afail "ssl_session_tickets is not off"
     grep -Eq '^[[:space:]]*ssl_session_timeout[[:space:]]+15m;' "$SITE" || _tm_afail "ssl_session_timeout is not 15m"
-    [ "$(grep -Ec '^[[:space:]]*server_tokens[[:space:]]+off;' "$SITE")" -ge 2 ] \
-        || _tm_afail "server_tokens off is not set in BOTH server blocks"
+    # v1.2.0: the :80 server block is its own site (nginx/topic-manager-http.conf,
+    # switched by Settings), so "both server blocks" are now one per file.
+    grep -Eq '^[[:space:]]*server_tokens[[:space:]]+off;' "$SITE" \
+        || _tm_afail "server_tokens off is not set in the HTTPS server block"
+    grep -Eq '^[[:space:]]*server_tokens[[:space:]]+off;' "${TM_REPO_ROOT}/nginx/topic-manager-http.conf" \
+        || _tm_afail "server_tokens off is not set in the :80 redirect server block"
 }
 tm_case "site-config-carries-the-fips-tls-policy" none s_policy
 

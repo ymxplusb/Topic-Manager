@@ -17,7 +17,8 @@
  * "Interactive authentication required", which is polkit refusing, not the
  * sandbox. This file is that rule.
  *
- * SCOPE. Three units and an explicit verb each. addRule is evaluated for
+ * SCOPE. Seven units and an explicit verb each (v1.2.0 added the four
+ * one-shot apply units, START only). addRule is evaluated for
  * EVERY manage-units action on the system, so anything not matched here falls
  * through to the default policy untouched — this file only ever returns YES,
  * never NO, and never widens anything for any other subject.
@@ -53,6 +54,19 @@ polkit.addRule(function (action, subject) {
      * returns the test's own verdict. It reads configuration and writes
      * nothing; see systemd/topic-manager-nginx-test.service. */
     if (unit === "topic-manager-nginx-test.service" && verb === "start") {
+        return polkit.Result.YES;
+    }
+
+    /* v1.2.0 — "Apply to host". Each unit runs the root helper
+     * /usr/libexec/topic-manager/tm-apply with ONE fixed argument; the helper
+     * re-validates what the application staged and never runs code the
+     * application owns. START only: no stop, restart, kill or edit, and no
+     * other unit. See systemd/topic-manager-apply-*.service. */
+    if (verb === "start" &&
+        (unit === "topic-manager-apply-syslog.service" ||
+         unit === "topic-manager-apply-time.service" ||
+         unit === "topic-manager-apply-nginx.service" ||
+         unit === "topic-manager-apply-tls.service")) {
         return polkit.Result.YES;
     }
 

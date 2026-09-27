@@ -1,0 +1,35 @@
+[Unit]
+Description=Jarvis Topic Manager — audit trail retention (prune by age and row count)
+Documentation=file:/opt/topic-manager/tm/audit_retention.py
+After=topic-manager.service
+
+# v1.2.0 (SRG-APP-000120/000357/000359). Deletes audit rows older than
+# Settings > Logging > Audit retention "days", then the oldest beyond the row
+# limit, and records AUDIT_PRUNE in the SAME transaction; then re-checks the
+# capacity warning. Runs as the service account, never root, and needs no
+# polkit: systemd starts it from topic-manager-audit-prune.timer.
+#
+# UMask=0077 HERE: a oneshot unit does not inherit topic-manager.service's
+# UMask, and a database or journal file this process creates must be 0600 like
+# the ones the service creates (t17).
+
+[Service]
+Type=oneshot
+User=topic-manager
+Group=topic-manager
+UMask=0077
+WorkingDirectory=/opt/topic-manager
+Environment="TM_CONFIG=/etc/topic-manager/config.yaml"
+Environment="TM_CLUSTERS_DIR=/etc/topic-manager/clusters.d"
+Environment="TM_CLUSTER_CERT_DIR=/opt/topic-manager/data/cluster-certs"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+ExecStart=/opt/topic-manager/venv/bin/python3 -m tm.audit_retention
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=topic-manager-audit-prune
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/topic-manager/data

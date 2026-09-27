@@ -1,0 +1,11 @@
+[Unit]
+Description=Jarvis Topic Manager — daily audit retention prune
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+# A host that was off at the scheduled time prunes when it comes back.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

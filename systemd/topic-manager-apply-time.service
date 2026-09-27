@@ -1,0 +1,45 @@
+[Unit]
+Description=Jarvis Topic Manager — apply saved settings to the host: the time source (chrony sources or a systemd-timesyncd drop-in)
+Documentation=file:/usr/libexec/topic-manager/tm-apply
+
+# WHY THIS UNIT EXISTS (v1.2.0)
+#
+# Settings > "Apply to host" changes files under /etc and reloads services,
+# which the topic-manager account cannot do: its service runs under
+# NoNewPrivileges, and sudo is dead under that (see
+# systemd/topic-manager-nginx-test.service). The account may START this unit
+# through polkit (install/polkit/50-topic-manager.rules) and do nothing else
+# with it. The unit runs ONE fixed command as root with ONE fixed argument.
+#
+# The helper reads the request the application staged in
+# /opt/topic-manager/data/apply, trusts none of it, re-validates every value
+# against its own root-owned rules, and never executes anything under
+# /opt/topic-manager (the service account's tree): it is the SYSTEM python3,
+# isolated (-I), standard library only. Its verdict goes to
+# /run/topic-manager-apply/time.result, which the service account can read and
+# cannot write.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /usr/libexec/topic-manager/tm-apply time
+RemainAfterExit=no
+WorkingDirectory=/
+UMask=0022
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=topic-manager-apply
+# Shared by all four apply units and kept between runs: it holds the results.
+RuntimeDirectory=topic-manager-apply
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# Exactly what this domain changes, its backups, the staging it deletes, and
+# what the reload/test tools need. A leading - means "if present".
+ReadWritePaths=-/etc/chrony/sources.d -/etc/systemd/timesyncd.conf.d /var/backups/topic-manager -/opt/topic-manager/data/apply /run
+
+# No [Install] section: never enabled, only started on demand.

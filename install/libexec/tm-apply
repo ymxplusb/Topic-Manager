@@ -1,0 +1,1127 @@
+#!/usr/bin/python3 -I
+"""
+tm-apply — Topic Manager's ROOT apply helper (v1.2.0).
+
+    /usr/libexec/topic-manager/tm-apply <syslog|time|nginx|tls>
+
+Run ONLY by the four fixed one-shot units
+topic-manager-apply-{syslog,time,nginx,tls}.service (root), which the
+application may START through polkit and nothing else. It applies the settings
+an administrator SAVED in Topic Manager to the host:
+
+  syslog  rsyslog forwarding of the audit trail and the nginx logs
+          (/etc/rsyslog.d/30-topic-manager.conf + /etc/nginx/snippets/tm-syslog.conf)
+  time    chrony sources (/etc/chrony/sources.d/topic-manager.sources) or a
+          systemd-timesyncd drop-in (/etc/systemd/timesyncd.conf.d/topic-manager.conf)
+  nginx   rate limits, connection limit (conf.d + three snippets) and the
+          HTTP->HTTPS redirect (the topic-manager-http site + ufw 80/tcp)
+  tls     the server certificate, key and chain (/etc/topic-manager/tls)
+
+THE TRUST BOUNDARY. The request arrives as a staging file written by the
+service account (/opt/topic-manager/data/apply/<domain>.json, 0600). Everything
+in it is treated as hostile:
+  * the staging directory is opened component by component with O_NOFOLLOW,
+    and each file O_NOFOLLOW relative to it; it must be a regular file owned by
+    topic-manager, one link, no group/other bits, under a size cap;
+  * every value is re-validated by this process against its own ROOT-OWNED copy
+    of the rules (lib/settings_schema.py, lib/tls_check.py — installed by
+    root from the release, verified root-owned and not writable by anyone else
+    before they are imported);
+  * NOTHING under /opt/topic-manager is ever executed or imported: that tree
+    and its venv belong to the service account, so running them as root would
+    be a service-account-to-root escalation. This file runs /usr/bin/python3 -I
+    (isolated: no PYTHONPATH, no user site, no script directory on sys.path)
+    with the standard library only, and every tool it runs is a fixed absolute
+    path with a fixed minimal environment.
+
+EVERY APPLY: validate -> render -> test -> back up -> install -> test again ->
+reload -> verify, and on any failure after the install: put the backup back,
+reload, and VERIFY the restore. The verdict goes to
+/run/topic-manager-apply/<domain>.result (root 0644, a directory the service
+account cannot write) and names the step that failed. "rolled_back" is only
+ever written after the restore was checked byte for byte; otherwise the state
+is "failed" and the message says the host may be in a mixed state
+(hazards[misleading-failure-message]).
+
+Staged key material is deleted as soon as it has been read, on every path.
+
+Test mode (tests only): --root DIR prefixes every filesystem path, --bin DIR
+supplies the tools, --lib DIR the shared rules, --svc-user NAME the staging
+owner. Units pass none of these.
+
+Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
+"""
+import argparse
+import datetime
+import errno
+import fcntl
+import glob
+import hashlib
+import json
+import os
+import pwd
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import traceback
+
+DOMAINS = ('syslog', 'time', 'nginx', 'tls')
+SVC_USER = 'topic-manager'
+PROD_LIB = '/usr/libexec/topic-manager/lib'
+
+STAGE_DIR = '/opt/topic-manager/data/apply'
+RESULT_DIR = '/run/topic-manager-apply'
+BACKUP_DIR = '/var/backups/topic-manager/apply'
+BACKUPS_KEPT = 10
+
+RSYSLOG_CONF = '/etc/rsyslog.d/30-topic-manager.conf'
+RSYSLOG_MAIN = '/etc/rsyslog.conf'
+RSYSLOG_WORKDIR = '/var/spool/rsyslog'
+# THE CA FOR SYSLOG TLS LIVES UNDER /etc/rsyslog.d. MEASURED on Ubuntu 24.04:
+# rsyslogd runs under an ENFORCING AppArmor profile (usr.sbin.rsyslogd) that
+# allows /etc/rsyslog.d/** and nothing under /etc/ssl — a CA anywhere else is
+# unreadable to it however its mode bits look. The subdirectory is not
+# matched by rsyslog.conf's /etc/rsyslog.d/*.conf include, so a .pem (or the
+# pre-test file) there is never loaded as configuration. The daemon reads the
+# CA after dropping to the `syslog` user, so it must also be 0644 root:root.
+SYSLOG_DIR = '/etc/rsyslog.d/topic-manager'
+SYSLOG_CA = SYSLOG_DIR + '/syslog-ca.pem'          # the operator's CA (install.sh --syslog-ca)
+SYSTEM_CA_COPY = SYSLOG_DIR + '/system-ca.pem'     # else: a copy of the system trust store
+SYSTEM_CA = '/etc/ssl/certs/ca-certificates.crt'
+OSSL_MODULE_GLOB = '/usr/lib/*/rsyslog/lmnsd_ossl.so'
+NGINX_SYSLOG_SNIPPET = '/etc/nginx/snippets/tm-syslog.conf'
+
+CHRONY_CONF = '/etc/chrony/chrony.conf'
+CHRONY_SOURCES = '/etc/chrony/sources.d/topic-manager.sources'
+TIMESYNCD_DROPIN = '/etc/systemd/timesyncd.conf.d/topic-manager.conf'
+
+LIMITS_CONF = '/etc/nginx/conf.d/topic-manager-limits.conf'
+SNIP_SERVER = '/etc/nginx/snippets/tm-limits-server.conf'
+SNIP_LOGIN = '/etc/nginx/snippets/tm-limits-login.conf'
+SNIP_API = '/etc/nginx/snippets/tm-limits-api.conf'
+HTTP_SITE_AVAILABLE = '/etc/nginx/sites-available/topic-manager-http'
+HTTP_SITE_ENABLED = '/etc/nginx/sites-enabled/topic-manager-http'
+
+TLS_DIR = '/etc/topic-manager/tls'
+TLS_CRT = TLS_DIR + '/server.crt'
+TLS_KEY = TLS_DIR + '/server.key'
+TLS_CHAIN = TLS_DIR + '/chain.pem'
+
+TOOLS = {
+    'systemctl': '/usr/bin/systemctl', 'nginx': '/usr/sbin/nginx',
+    'rsyslogd': '/usr/sbin/rsyslogd', 'chronyd': '/usr/sbin/chronyd',
+    'chronyc': '/usr/bin/chronyc', 'timedatectl': '/usr/bin/timedatectl',
+    'ufw': '/usr/sbin/ufw', 'openssl': '/usr/bin/openssl',
+    'setpriv': '/usr/bin/setpriv', 'test': '/usr/bin/test',
+    'journalctl': '/usr/bin/journalctl',
+}
+STAGE_MAX = 16 * 1024
+PEM_MAX = 64 * 1024
+CMD_TIMEOUT = 60
+HEADER = ('# Managed by Topic Manager (tm-apply %s), rendered from Settings.\n'
+          '# Hand edits are replaced on the next apply; change the setting instead.\n')
+
+
+class ApplyError(Exception):
+    def __init__(self, step, message, details=None):
+        super().__init__(message)
+        self.step = step
+        self.message = message
+        self.details = list(details or [])
+
+
+def now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+# ── context ──────────────────────────────────────────────────────────────────
+class Ctx:
+    def __init__(self, args):
+        self.test = bool(args.root or args.bin or args.lib)
+        self.root = (args.root or '').rstrip('/')
+        self.bindir = args.bin
+        self.lib = args.lib or PROD_LIB
+        self.svc_user = args.svc_user or SVC_USER
+        self.euid = os.geteuid()
+        try:
+            self.svc_uid = pwd.getpwnam(self.svc_user).pw_uid
+        except KeyError:
+            self.svc_uid = None
+        self.details = []
+
+    def p(self, path):
+        return self.root + path if self.root else path
+
+    def tool(self, name):
+        if self.bindir:
+            return os.path.join(self.bindir, name)
+        return TOOLS[name]
+
+    def env(self):
+        path = '/usr/sbin:/usr/bin:/sbin:/bin'
+        if self.bindir:
+            path = self.bindir + ':' + path
+        return {'PATH': path, 'LC_ALL': 'C'}
+
+
+def run(ctx, name, args, timeout=CMD_TIMEOUT, pass_fds=()):
+    """Run a fixed tool. Returns (rc, combined output). Never raises."""
+    try:
+        p = subprocess.run([ctx.tool(name)] + list(args), stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           env=ctx.env(), timeout=timeout, check=False, cwd='/',
+                           pass_fds=tuple(pass_fds))
+    except subprocess.TimeoutExpired:
+        return 124, '%s timed out after %ds' % (name, timeout)
+    except OSError as exc:
+        return 127, '%s could not be run: %s' % (name, exc)
+    return p.returncode, p.stdout.decode('utf-8', 'replace').strip()
+
+
+def _tail(text, n=6):
+    lines = [l for l in (text or '').splitlines() if l.strip()]
+    return ' | '.join(lines[-n:])[:800]
+
+
+# ── the shared rules, root-owned ─────────────────────────────────────────────
+def load_rules(ctx):
+    """Import settings_schema and tls_check from the helper's OWN library
+    directory. In production that directory and both files must be root-owned
+    and writable by nobody else, or nothing is imported."""
+    d = ctx.lib
+    if not ctx.test:
+        for path in (d, os.path.join(d, 'settings_schema.py'), os.path.join(d, 'tls_check.py')):
+            st = os.lstat(path)
+            if stat.S_ISLNK(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
+                raise ApplyError('validate', '%s is not root-owned and private to root; '
+                                 'refusing to import it as root' % path)
+    sys.path.insert(0, d)
+    import settings_schema
+    import tls_check
+    os.environ['TM_OPENSSL'] = ctx.tool('openssl')
+    return settings_schema, tls_check
+
+
+# ── staging: read what the service account wrote, trusting none of it ────────
+def open_stage_dir(ctx):
+    path = ctx.p(STAGE_DIR)
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for comp in [c for c in path.split('/') if c]:
+            try:
+                nfd = os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                              dir_fd=fd)
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                    raise ApplyError('stage', 'the staging path %s has a symlink or a '
+                                     'non-directory at %r; refused' % (STAGE_DIR, comp))
+                if exc.errno == errno.ENOENT:
+                    raise ApplyError('stage', 'no staging directory %s: nothing was requested'
+                                     % STAGE_DIR)
+                raise
+            os.close(fd)
+            fd = nfd
+        st = os.fstat(fd)
+        if st.st_uid != ctx.svc_uid or st.st_mode & 0o022:
+            raise ApplyError('stage', 'the staging directory is not owned by %s or is '
+                             'group/other-writable; refused' % ctx.svc_user)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def read_staged(ctx, dfd, name, limit):
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ApplyError('stage', 'staging file %s is a symlink; refused' % name)
+        if exc.errno == errno.ENOENT:
+            raise ApplyError('stage', 'staging file %s is missing' % name)
+        raise
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise ApplyError('stage', 'staging file %s is not a regular file; refused' % name)
+        if st.st_uid != ctx.svc_uid:
+            raise ApplyError('stage', 'staging file %s is not owned by %s; refused'
+                             % (name, ctx.svc_user))
+        if st.st_nlink != 1:
+            raise ApplyError('stage', 'staging file %s has %d links; refused' % (name, st.st_nlink))
+        if st.st_mode & 0o077:
+            raise ApplyError('stage', 'staging file %s is readable or writable by others '
+                             '(mode %o); refused' % (name, st.st_mode & 0o777))
+        if st.st_size > limit:
+            raise ApplyError('stage', 'staging file %s is larger than %d bytes; refused'
+                             % (name, limit))
+        chunks, total = [], 0
+        while True:
+            b = os.read(fd, 65536)
+            if not b:
+                break
+            total += len(b)
+            if total > limit:
+                raise ApplyError('stage', 'staging file %s grew past %d bytes; refused'
+                                 % (name, limit))
+            chunks.append(b)
+        return b''.join(chunks)
+    finally:
+        os.close(fd)
+
+
+def discard_staged(dfd, domain):
+    for suffix in ('json', 'crt', 'key', 'chain'):
+        try:
+            os.unlink('%s.%s' % (domain, suffix), dir_fd=dfd)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log('could not remove staging file %s.%s: %s' % (domain, suffix, exc))
+
+
+def load_job(ctx, schema, tls_check, domain):
+    """Read and validate the staged request. Returns (job, by, values, blobs).
+    Staging files are removed before this returns, whatever happens."""
+    dfd = open_stage_dir(ctx)
+    try:
+        raw = read_staged(ctx, dfd, '%s.json' % domain, STAGE_MAX)
+        blobs = {}
+        if domain == 'tls':
+            for suffix in ('crt', 'key', 'chain'):
+                try:
+                    blobs[suffix] = read_staged(ctx, dfd, 'tls.%s' % suffix, PEM_MAX)
+                except ApplyError as exc:
+                    if suffix == 'chain' and 'missing' in exc.message:
+                        continue
+                    raise
+    finally:
+        discard_staged(dfd, domain)
+        os.close(dfd)
+    try:
+        doc = json.loads(raw.decode('utf-8'))
+    except (ValueError, UnicodeDecodeError):
+        raise ApplyError('validate', 'the staged request is not valid JSON')
+    if not isinstance(doc, dict) or doc.get('domain') != domain:
+        raise ApplyError('validate', 'the staged request is for another domain')
+    job = doc.get('job')
+    if not isinstance(job, str) or not re.match(r'^[0-9a-f]{16}$', job):
+        raise ApplyError('validate', 'the staged request has no valid job id')
+    by = re.sub(r'[^A-Za-z0-9 ._@\\-]', '?', str(doc.get('requested_by', '?')))[:128]
+    values = {}
+    if domain in schema.DOMAIN_KEYS:
+        given = doc.get('settings')
+        if not isinstance(given, dict):
+            raise ApplyError('validate', 'the staged request carries no settings')
+        for k in schema.DOMAIN_KEYS[domain]:
+            try:
+                values[k] = schema.normalise(k, given.get(k, schema.ADMIN_DEFAULTS[k]))
+            except schema.InvalidSetting as exc:
+                raise ApplyError('validate', 'refused: %s' % exc)
+        extra = sorted(set(given) - set(schema.DOMAIN_KEYS[domain]))
+        if extra:
+            raise ApplyError('validate', 'refused: unexpected setting(s) %s'
+                             % ', '.join(re.sub(r'[^A-Za-z0-9_]', '?', str(k))[:40]
+                                         for k in extra[:5]))
+        problems = schema.check_domain(domain, values)
+        if problems:
+            raise ApplyError('validate', 'refused: %s' % '; '.join(problems))
+    else:
+        want = doc.get('files')
+        if not isinstance(want, dict) or not {'crt', 'key'} <= set(want):
+            raise ApplyError('validate', 'the staged request does not describe its files')
+        for suffix, blob in blobs.items():
+            if hashlib.sha256(blob).hexdigest() != want.get(suffix):
+                raise ApplyError('validate', 'staged file tls.%s does not match the request '
+                                 '(a mixed or partial upload); refused' % suffix)
+        if set(want) != set(blobs):
+            raise ApplyError('validate', 'the staged file set does not match the request')
+    return job, by, values, blobs
+
+
+# ── results ──────────────────────────────────────────────────────────────────
+def write_result(ctx, domain, doc):
+    d = ctx.p(RESULT_DIR)
+    os.makedirs(d, mode=0o755, exist_ok=True)
+    st = os.lstat(d)
+    if stat.S_ISLNK(st.st_mode) or (not ctx.test and (st.st_uid != 0 or st.st_mode & 0o022)):
+        raise RuntimeError('%s is not a root-owned directory; not writing a result there' % d)
+    fd, tmp = tempfile.mkstemp(prefix='.%s.' % domain, dir=d)
+    try:
+        os.write(fd, json.dumps(doc, sort_keys=True, indent=1).encode('utf-8'))
+        os.fchmod(fd, 0o644)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, os.path.join(d, '%s.result' % domain))
+
+
+# ── file operations: never through a symlink ─────────────────────────────────
+def _check_parent(path):
+    parent = os.path.dirname(path)
+    try:
+        st = os.lstat(parent)
+    except FileNotFoundError:
+        raise ApplyError('install', 'directory %s does not exist' % parent)
+    if not stat.S_ISDIR(st.st_mode):
+        raise ApplyError('install', '%s is not a directory (a symlink is refused)' % parent)
+
+
+def read_live(path):
+    """(bytes, mode) of a live regular file, (None, None) if absent. A symlink
+    or anything else in its place is refused."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None, None
+    if not stat.S_ISREG(st.st_mode):
+        raise ApplyError('backup', '%s is not a regular file (a symlink is refused)' % path)
+    with open(path, 'rb') as fh:
+        return fh.read(), stat.S_IMODE(st.st_mode)
+
+
+def write_atomic(ctx, path, data, mode):
+    _check_parent(path)
+    try:
+        st = os.lstat(path)
+        if not stat.S_ISREG(st.st_mode):
+            raise ApplyError('install', '%s exists and is not a regular file; refused' % path)
+    except FileNotFoundError:
+        pass
+    fd, tmp = tempfile.mkstemp(prefix='.tm-apply.', dir=os.path.dirname(path))
+    try:
+        os.fchmod(fd, mode)
+        if ctx.euid == 0:
+            os.fchown(fd, 0, 0)
+        os.write(fd, data)
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        os.replace(tmp, path)
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def remove_file(path):
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(st.st_mode):
+        raise ApplyError('install', '%s is not a regular file; refusing to remove it' % path)
+    os.unlink(path)
+
+
+def read_link(path):
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISLNK(st.st_mode):
+        raise ApplyError('install', '%s exists and is not a symlink; refusing to touch it' % path)
+    return os.readlink(path)
+
+
+def set_link(path, target):
+    _check_parent(path)
+    cur = read_link(path)
+    if target is None:
+        if cur is not None:
+            os.unlink(path)
+        return
+    if cur == target:
+        return
+    tmp = path + '.tm-apply-new'
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    os.symlink(target, tmp)
+    os.replace(tmp, path)
+
+
+# ── the plan and its execution ───────────────────────────────────────────────
+class Plan:
+    def __init__(self):
+        self.files = []        # (path, bytes | None, mode)
+        self.links = []        # (path, target | None)
+        self.pre_tests = []    # callables, before anything is installed
+        self.post_tests = []   # callables, after install, before reload
+        self.reloads = []      # callables
+        self.verifies = []     # callables
+        self.ufw = None        # 'allow' | 'delete' | None
+        self.dirs = []         # directories created (0755 root) before the install
+        self.applied = {}
+        self.details = []
+
+
+def snapshot(plan):
+    snap = {'files': {}, 'links': {}}
+    for path, _data, _mode in plan.files:
+        snap['files'][path] = read_live(path)
+    for path, _target in plan.links:
+        snap['links'][path] = read_link(path)
+    return snap
+
+
+def save_backup(ctx, domain, job, snap):
+    base = ctx.p(BACKUP_DIR)
+    os.makedirs(base, mode=0o700, exist_ok=True)
+    os.chmod(base, 0o700)
+    d = os.path.join(base, '%s-%s-%s' % (
+        domain, datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ'), job))
+    os.mkdir(d, 0o700)
+    manifest = {'files': {}, 'links': snap['links']}
+    for i, (path, (data, mode)) in enumerate(sorted(snap['files'].items())):
+        entry = {'present': data is not None}
+        if data is not None:
+            name = 'f%02d' % i
+            fd = os.open(os.path.join(d, name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+            entry.update(copy=name, mode=mode, sha256=hashlib.sha256(data).hexdigest())
+        manifest['files'][path] = entry
+    with open(os.path.join(d, 'manifest.json'), 'w', encoding='utf-8') as fh:
+        json.dump(manifest, fh, indent=1, sort_keys=True)
+    # Keep the newest BACKUPS_KEPT per domain.
+    mine = sorted(x for x in os.listdir(base) if x.startswith(domain + '-'))
+    for old in mine[:-BACKUPS_KEPT]:
+        shutil.rmtree(os.path.join(base, old), ignore_errors=True)
+    return d
+
+
+def install(ctx, plan):
+    for d in plan.dirs:
+        if not os.path.isdir(d):
+            os.makedirs(d, mode=0o755, exist_ok=True)
+    for path, data, mode in plan.files:
+        if data is None:
+            remove_file(path)
+        else:
+            write_atomic(ctx, path, data, mode)
+    for path, target in plan.links:
+        set_link(path, target)
+
+
+def restore(ctx, snap):
+    """Put the snapshot back and CHECK it. Returns a list of problems."""
+    problems = []
+    for path, (data, mode) in snap['files'].items():
+        try:
+            if data is None:
+                remove_file(path)
+            else:
+                write_atomic(ctx, path, data, mode)
+        except Exception as exc:
+            problems.append('could not restore %s: %s' % (path, exc))
+    for path, target in snap['links'].items():
+        try:
+            set_link(path, target)
+        except Exception as exc:
+            problems.append('could not restore link %s: %s' % (path, exc))
+    for path, (data, _mode) in snap['files'].items():
+        try:
+            now, _ = read_live(path)
+        except ApplyError as exc:
+            problems.append(exc.message)
+            continue
+        if now != data:
+            problems.append('%s does not match its backup after the restore' % path)
+    for path, target in snap['links'].items():
+        try:
+            if read_link(path) != target:
+                problems.append('%s does not point where it did before' % path)
+        except ApplyError as exc:
+            problems.append(exc.message)
+    return problems
+
+
+def verify_installed(plan):
+    for path, data, _mode in plan.files:
+        now, _ = read_live(path)
+        if now != data:
+            raise ApplyError('verify', '%s does not hold what was installed' % path)
+    for path, target in plan.links:
+        if read_link(path) != target:
+            raise ApplyError('verify', '%s does not point where it was set' % path)
+
+
+def execute(ctx, domain, plan):
+    """Run the plan. Returns (state, step, message, details)."""
+    details = list(plan.details)
+    # Nothing below may raise anything but ApplyError before the install: the
+    # caller reports those as "Nothing on the host was changed", which is
+    # only true because no step before the install writes a live file.
+    step = 'test'
+    try:
+        for t in plan.pre_tests:
+            t()
+        step = 'backup'
+        snap = snapshot(plan)
+        ufw_before = ufw_state(ctx) if plan.ufw else None
+        backup = save_backup(ctx, domain, ctx.job, snap)
+    except ApplyError:
+        raise
+    except Exception as exc:
+        raise ApplyError(step, '%s: %s' % (type(exc).__name__, exc))
+    details.append('backup: %s' % backup.replace(ctx.root, '', 1) if ctx.root else 'backup: %s' % backup)
+    try:
+        step = 'install'
+        install(ctx, plan)
+        step = 'test'
+        for t in plan.post_tests:
+            t()
+        step = 'reload'
+        for r in plan.reloads:
+            r()
+        if plan.ufw and ufw_before and ufw_before['active']:
+            step = 'firewall'
+            ufw_apply(ctx, plan.ufw)
+        step = 'verify'
+        verify_installed(plan)
+        for v in plan.verifies:
+            v()
+        if plan.ufw:
+            ufw_verify(ctx, plan.ufw, ufw_before, details)
+    except Exception as exc:
+        err = exc if isinstance(exc, ApplyError) else ApplyError(step, '%s: %s' % (
+            type(exc).__name__, exc))
+        details.extend(err.details)
+        log('FAILED at %s: %s — restoring the backup' % (step, err.message))
+        problems = restore(ctx, snap)
+        if plan.ufw and ufw_before and ufw_before['active']:
+            try:
+                ufw_apply(ctx, 'allow' if ufw_before['port80'] else 'delete')
+                if ufw_state(ctx)['port80'] != ufw_before['port80']:
+                    problems.append('ufw 80/tcp is not back to how it was')
+            except Exception as uexc:
+                problems.append('ufw 80/tcp could not be restored: %s' % uexc)
+        for r in plan.reloads:
+            try:
+                r()
+            except Exception as rexc:
+                problems.append('reload after the restore failed: %s' % getattr(
+                    rexc, 'message', rexc))
+        if problems:
+            details.extend(problems)
+            return ('failed', step, '%s failed at step "%s": %s. The backup could NOT be '
+                    'fully restored, so the host may be in a mixed state: %s'
+                    % (domain, step, err.message, '; '.join(problems)), details)
+        return ('rolled_back', step, '%s failed at step "%s": %s. The previous configuration '
+                'was restored and checked byte for byte.' % (domain, step, err.message), details)
+    return 'ok', 'done', '%s applied and verified.' % domain, details
+
+
+# ── systemd / ufw helpers ────────────────────────────────────────────────────
+def unit_active(ctx, unit):
+    rc, out = run(ctx, 'systemctl', ['is-active', unit])
+    return out.strip().splitlines()[-1:] == ['active'] if out.strip() else False
+
+
+def reload_nginx(ctx):
+    # try-reload-or-restart: nothing is started that was not running (a fresh
+    # install applies before nginx is up).
+    rc, out = run(ctx, 'systemctl', ['try-reload-or-restart', 'nginx.service'])
+    if rc != 0:
+        raise ApplyError('reload', 'nginx did not reload: %s' % _tail(out))
+
+
+def nginx_test(ctx):
+    rc, out = run(ctx, 'nginx', ['-t'])
+    if rc != 0:
+        raise ApplyError('test', 'nginx -t failed: %s' % _tail(out))
+
+
+def ufw_state(ctx):
+    rc, out = run(ctx, 'ufw', ['status'])
+    if rc != 0:
+        # No ufw (or it cannot answer) is "not active": there is nothing to manage.
+        return {'active': False, 'port80': False, 'others': []}
+    active = 'Status: active' in out
+    port80 = bool(re.search(r'^80/tcp\s+ALLOW\b', out, re.M))
+    others = [l.strip() for l in out.splitlines()
+              if re.match(r'^(80(/udp)?|Nginx (HTTP|Full))\s', l.strip()) and 'ALLOW' in l]
+    return {'active': active, 'port80': port80, 'others': others}
+
+
+def ufw_apply(ctx, action):
+    args = ['allow', '80/tcp'] if action == 'allow' else ['delete', 'allow', '80/tcp']
+    rc, out = run(ctx, 'ufw', args)
+    if rc != 0:
+        raise ApplyError('firewall', 'ufw %s failed: %s' % (' '.join(args), _tail(out)))
+
+
+def ufw_verify(ctx, action, before, details):
+    if not before or not before['active']:
+        details.append('ufw is not active: no firewall rule was changed')
+        return
+    st = ufw_state(ctx)
+    if st['port80'] != (action == 'allow'):
+        raise ApplyError('verify', 'ufw 80/tcp is %s after the change'
+                         % ('open' if st['port80'] else 'closed'))
+    details.append('ufw 80/tcp %s' % ('open' if action == 'allow' else 'closed'))
+    if action == 'delete' and st['others']:
+        details.append('NOTE: another ufw rule still opens port 80: %s'
+                       % '; '.join(st['others'][:3]))
+
+
+def access_as(ctx, user, path):
+    """Ask the KERNEL whether `user` can read `path` (never inferred from mode
+    bits)."""
+    rc, out = run(ctx, 'setpriv', ['--reuid', user, '--regid', user, '--init-groups',
+                                   ctx.tool('test'), '-r', path])
+    return rc == 0
+
+
+# ── domain: syslog ───────────────────────────────────────────────────────────
+def render_rsyslog(v, ca_path):
+    head = HEADER % 'syslog'
+    if v['syslog_enabled'] != 'true':
+        return (head + '# Remote syslog forwarding is OFF (Settings > Logging > Remote syslog).\n'
+                '# nginx sends nothing to syslog while it is off (snippets/tm-syslog.conf).\n'
+                ).encode()
+    proto = v['syslog_protocol']
+    lines = [
+        head,
+        '# Forwards the Topic Manager audit trail (topic-manager-audit), the apply',
+        '# helper (topic-manager-apply) and the nginx access/error logs',
+        '# (tm_nginx_access, tm_nginx_error) to %s:%s over %s.' % (
+            v['syslog_host'], v['syslog_port'], proto.upper()),
+        '# RFC 5424: APP-NAME is the configured application identifier and MSGID',
+        '# the source program. A disk-assisted queue holds messages while the',
+        '# collector is unreachable (TCP and TLS; UDP cannot tell).',
+        'template(name="tm_forward_fmt" type="string"',
+        '         string="<%%PRI%%>1 %%TIMESTAMP:::date-rfc3339%% %%HOSTNAME%% %s '
+        '%%PROCID%% %%programname%% -%%msg:::sp-if-no-1st-sp%%%%msg:::drop-last-lf%%\\n")'
+        % v['syslog_app_id'],
+        'ruleset(name="tm_forward") {',
+        '    action(type="omfwd" name="tm_forward"',
+        '           target="%s" port="%s" protocol="%s"' % (
+            v['syslog_host'], v['syslog_port'], 'udp' if proto == 'udp' else 'tcp'),
+        '           template="tm_forward_fmt"',
+    ]
+    if proto in ('tcp', 'tls'):
+        lines += ['           TCP_Framing="octet-counted"']
+    if proto == 'tls':
+        lines += ['           StreamDriver="ossl" StreamDriverMode="1"',
+                  '           StreamDriverAuthMode="x509/name"',
+                  '           StreamDriverPermittedPeers="%s"' % v['syslog_host'],
+                  '           StreamDriver.CAFile="%s"' % ca_path]
+    if proto in ('tcp', 'tls'):
+        lines += ['           queue.type="LinkedList" queue.filename="tm_forward"',
+                  '           queue.maxDiskSpace="256m" queue.saveOnShutdown="on"',
+                  '           action.resumeRetryCount="-1" action.resumeInterval="10")']
+    else:
+        lines[-1] += ')'
+    lines += [
+        '}',
+        'if ($programname == "topic-manager-audit" or $programname == "topic-manager-apply") then {',
+        '    call tm_forward',
+        '}',
+        '# nginx lines are forwarded only; the access and error log files are the',
+        '# local copy, so they are not written to /var/log/syslog a second time.',
+        'if ($programname == "tm_nginx_access" or $programname == "tm_nginx_error") then {',
+        '    call tm_forward',
+        '    stop',
+        '}',
+        '',
+    ]
+    return '\n'.join(lines).encode()
+
+
+def render_nginx_syslog(v):
+    head = HEADER % 'syslog'
+    if v['syslog_enabled'] != 'true':
+        return (head + '# Remote syslog is OFF: nginx logs to its files only.\n').encode()
+    return (head +
+            '# Included in the topic-manager server block. The local rsyslog forwards\n'
+            '# these (/etc/rsyslog.d/30-topic-manager.conf); the files stay as they are.\n'
+            'access_log syslog:server=unix:/dev/log,facility=local5,tag=tm_nginx_access,'
+            'severity=info;\n'
+            'error_log  syslog:server=unix:/dev/log,facility=local5,tag=tm_nginx_error warn;\n'
+            ).encode()
+
+
+def plan_syslog(ctx, v):
+    plan = Plan()
+    ca = None
+    enabled = v['syslog_enabled'] == 'true'
+    sdir = ctx.p(SYSLOG_DIR)
+    if os.path.lexists(sdir) and not (os.path.isdir(sdir) and not os.path.islink(sdir)):
+        raise ApplyError('validate', '%s exists and is not a directory; refused' % SYSLOG_DIR)
+    if enabled and v['syslog_protocol'] == 'tls':
+        # rsyslogd -N1 does NOT notice a missing netstream driver (measured:
+        # it is loaded at connect time), so the module is looked for here.
+        if not glob.glob(ctx.p(OSSL_MODULE_GLOB)):
+            raise ApplyError('validate', 'syslog over TLS needs the rsyslog-openssl package '
+                             '(lmnsd_ossl.so is not installed). Install rsyslog-openssl, or '
+                             'choose TCP or UDP.')
+        if os.path.isfile(ctx.p(SYSLOG_CA)):
+            ca = SYSLOG_CA
+            plan.details.append('TLS: the collector is verified against the CA in %s' % SYSLOG_CA)
+        else:
+            # No dedicated CA: the system trust store, COPIED where the
+            # confined daemon can read it.
+            try:
+                with open(ctx.p(SYSTEM_CA), 'rb') as fh:
+                    bundle = fh.read()
+            except OSError:
+                raise ApplyError('validate', 'no CA for syslog TLS: %s is absent and the system '
+                                 'trust store %s cannot be read' % (SYSLOG_CA, SYSTEM_CA))
+            ca = SYSTEM_CA_COPY
+            plan.files.append((ctx.p(SYSTEM_CA_COPY), bundle, 0o644))
+            plan.details.append('TLS: the collector is verified against the system trust store '
+                                '(copied to %s; install.sh --syslog-ca sets a dedicated CA)'
+                                % SYSTEM_CA_COPY)
+        plan.details.append('TLS: the collector certificate must name %s' % v['syslog_host'])
+
+        def ca_readable():
+            if ctx.test:
+                return
+            if not access_as(ctx, 'syslog', ca):
+                raise ApplyError('verify', 'the syslog user cannot read %s, so rsyslog could '
+                                 'not verify the collector' % ca)
+        plan.verifies.append(ca_readable)
+    conf = render_rsyslog(v, ca)
+    plan.files += [(ctx.p(RSYSLOG_CONF), conf, 0o644),
+                   (ctx.p(NGINX_SYSLOG_SNIPPET), render_nginx_syslog(v), 0o644)]
+    plan.dirs.append(sdir)
+
+    def pre():
+        if not enabled:
+            # A comments-only file is refused by -N1 ("no active actions"),
+            # and there is nothing in it to test.
+            return
+        # Inside /etc/rsyslog.d so the CONFINED rsyslogd may read it (AppArmor,
+        # see SYSLOG_DIR), and NOT named *.conf, so the live daemon's
+        # /etc/rsyslog.d/*.conf include never loads it. Nothing is created
+        # that is not removed again.
+        fd, path = tempfile.mkstemp(prefix='.tm-pretest-', suffix='.rsyslog',
+                                    dir=os.path.dirname(ctx.p(RSYSLOG_CONF)))
+        try:
+            os.fchmod(fd, 0o644)
+            os.write(fd, ('global(workDirectory="%s")\n' % RSYSLOG_WORKDIR).encode() + conf)
+            os.close(fd)
+            fd = None
+            rc, out = run(ctx, 'rsyslogd', ['-N1', '-f', path])
+        finally:
+            if fd is not None:
+                os.close(fd)
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        if rc != 0:
+            raise ApplyError('test', 'rsyslogd -N1 refused the rendered configuration: %s'
+                             % _tail(out))
+
+    def post_rsyslog():
+        rc, out = run(ctx, 'rsyslogd', ['-N1'])
+        if rc != 0:
+            raise ApplyError('test', 'rsyslogd -N1 failed on the full configuration: %s'
+                             % _tail(out))
+
+    def reload_rsyslog():
+        rc, out = run(ctx, 'systemctl', ['restart', 'rsyslog.service'])
+        if rc != 0:
+            raise ApplyError('reload', 'rsyslog did not restart: %s' % _tail(out))
+
+    def verify_rsyslog():
+        if not unit_active(ctx, 'rsyslog.service'):
+            raise ApplyError('verify', 'rsyslog is not active after the restart')
+
+    plan.pre_tests.append(pre)
+    plan.post_tests += [post_rsyslog, lambda: nginx_test(ctx)]
+    plan.reloads += [reload_rsyslog, lambda: reload_nginx(ctx)]
+    plan.verifies.append(verify_rsyslog)
+    plan.applied = dict(v)
+    if v['syslog_enabled'] == 'true':
+        plan.details.append('forwarding to %s:%s/%s as %s' % (
+            v['syslog_host'], v['syslog_port'], v['syslog_protocol'], v['syslog_app_id']))
+        if v['syslog_protocol'] == 'udp':
+            plan.details.append('UDP gives no delivery confirmation; TCP or TLS is recommended')
+    else:
+        plan.details.append('remote forwarding is off')
+    return plan
+
+
+# ── domain: time ─────────────────────────────────────────────────────────────
+def time_daemon(ctx):
+    if unit_active(ctx, 'chrony.service') or unit_active(ctx, 'chronyd.service'):
+        return 'chrony'
+    if unit_active(ctx, 'systemd-timesyncd.service'):
+        return 'timesyncd'
+    if os.path.exists(ctx.p(TOOLS['chronyd'])) or (ctx.bindir and os.path.exists(ctx.tool('chronyd'))):
+        return 'chrony'
+    return None
+
+
+def plan_time(ctx, v):
+    plan = Plan()
+    servers = [s for s in v['ntp_servers'].split(',') if s]
+    daemon = time_daemon(ctx)
+    if daemon is None:
+        raise ApplyError('validate', 'neither chrony nor systemd-timesyncd is running on this '
+                         'host; there is no time daemon to configure')
+    plan.details.append('time daemon: %s' % daemon)
+    head = (HEADER % 'time').encode()
+    if daemon == 'chrony':
+        body = (head + b''.join(('server %s iburst maxpoll 16\n' % s).encode() for s in servers)
+                if servers else None)
+        plan.files.append((ctx.p(CHRONY_SOURCES), body, 0o644))
+        main_conf = ctx.p(CHRONY_CONF)
+        try:
+            with open(main_conf, encoding='utf-8', errors='replace') as fh:
+                reads_dir = bool(re.search(r'^\s*sourcedir\s+/etc/chrony/sources\.d\s*$',
+                                           fh.read(), re.M))
+        except OSError:
+            reads_dir = False
+        if servers and not reads_dir:
+            raise ApplyError('validate', '%s has no "sourcedir /etc/chrony/sources.d" line, so '
+                             'chrony would ignore the servers. Add it, then apply again.'
+                             % CHRONY_CONF)
+
+        def pre():
+            if not servers:
+                return
+            # Beside the live file, where chronyd's own AppArmor profile lets it
+            # read, and NOT named *.sources, so `sourcedir` never loads it.
+            fd, path = tempfile.mkstemp(prefix='.tm-pretest-', suffix='.conf',
+                                        dir=os.path.dirname(ctx.p(CHRONY_SOURCES)))
+            try:
+                os.fchmod(fd, 0o644)
+                os.write(fd, body)
+                os.close(fd)
+                fd = None
+                rc, out = run(ctx, 'chronyd', ['-p', '-f', path])
+            finally:
+                if fd is not None:
+                    os.close(fd)
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+            if rc != 0:
+                raise ApplyError('test', 'chronyd -p refused the rendered sources: %s' % _tail(out))
+
+        def reload_chrony():
+            rc, out = run(ctx, 'chronyc', ['reload', 'sources'])
+            if rc != 0:
+                raise ApplyError('reload', 'chronyc reload sources failed: %s' % _tail(out))
+
+        def verify_chrony():
+            rc, out = run(ctx, 'chronyc', ['-n', '-c', 'sources'])
+            if rc != 0:
+                raise ApplyError('verify', 'chronyc sources failed: %s' % _tail(out))
+            plan.details.append('chrony now lists %d source(s)' % len(
+                [l for l in out.splitlines() if l.strip()]))
+
+        plan.pre_tests.append(pre)
+        plan.reloads.append(reload_chrony)
+        plan.verifies.append(verify_chrony)
+    else:
+        body = (head + ('[Time]\nNTP=%s\n' % ' '.join(servers)).encode()) if servers else None
+        plan.files.append((ctx.p(TIMESYNCD_DROPIN), body, 0o644))
+
+        def reload_timesyncd():
+            rc, out = run(ctx, 'systemctl', ['restart', 'systemd-timesyncd.service'])
+            if rc != 0:
+                raise ApplyError('reload', 'systemd-timesyncd did not restart: %s' % _tail(out))
+
+        def verify_timesyncd():
+            if not unit_active(ctx, 'systemd-timesyncd.service'):
+                raise ApplyError('verify', 'systemd-timesyncd is not active after the restart')
+            if servers:
+                rc, out = run(ctx, 'timedatectl', ['show-timesync', '-p', 'SystemNTPServers',
+                                                   '--value'])
+                if rc != 0 or out.split() != servers:
+                    raise ApplyError('verify', 'systemd-timesyncd reports servers [%s], '
+                                     'expected [%s]' % (out.strip()[:200], ' '.join(servers)))
+
+        plan.reloads.append(reload_timesyncd)
+        plan.verifies.append(verify_timesyncd)
+    if not servers:
+        plan.details.append('no servers set: the Topic Manager source file is removed and the '
+                            "host's own time configuration is left alone")
+    plan.applied = dict(v)
+    return plan
+
+
+# ── domain: nginx ────────────────────────────────────────────────────────────
+def plan_nginx(ctx, v):
+    plan = Plan()
+    head = HEADER % 'nginx'
+    limits = (head +
+              '# http context: the zones the Topic Manager site uses. Rates per client address.\n'
+              'limit_req_zone  $binary_remote_addr zone=tm_login:10m rate=%sr/m;\n'
+              'limit_req_zone  $binary_remote_addr zone=tm_api:10m   rate=%sr/m;\n'
+              'limit_conn_zone $binary_remote_addr zone=tm_conn:10m;\n'
+              % (v['ratelimit_login_per_min'], v['ratelimit_api_per_min']))
+    plan.files += [
+        (ctx.p(LIMITS_CONF), limits.encode(), 0o644),
+        (ctx.p(SNIP_SERVER), (head + 'limit_conn tm_conn %s;\n'
+                              % v['ratelimit_conn_per_ip']).encode(), 0o644),
+        (ctx.p(SNIP_LOGIN), (head + 'limit_req zone=tm_login burst=%s nodelay;\n'
+                             % v['ratelimit_login_burst']).encode(), 0o644),
+        (ctx.p(SNIP_API), (head + 'limit_req zone=tm_api burst=%s nodelay;\n'
+                           % v['ratelimit_api_burst']).encode(), 0o644),
+    ]
+    redirect = v['http_redirect_enabled'] == 'true'
+    if redirect and not os.path.isfile(ctx.p(HTTP_SITE_AVAILABLE)):
+        raise ApplyError('validate', '%s is not installed, so the HTTP redirect cannot be '
+                         'enabled. Re-run the installer or the upgrade.' % HTTP_SITE_AVAILABLE)
+    plan.links.append((ctx.p(HTTP_SITE_ENABLED), ctx.p(HTTP_SITE_AVAILABLE) if redirect else None))
+    plan.ufw = 'allow' if redirect else 'delete'
+    was_active = unit_active(ctx, 'nginx.service')
+
+    def verify_nginx():
+        if was_active and not unit_active(ctx, 'nginx.service'):
+            raise ApplyError('verify', 'nginx is not active after the reload')
+
+    plan.post_tests.append(lambda: nginx_test(ctx))
+    plan.reloads.append(lambda: reload_nginx(ctx))
+    plan.verifies.append(verify_nginx)
+    plan.applied = dict(v)
+    plan.details.append('login %s r/m burst %s; API %s r/m burst %s; %s connections per address'
+                        % (v['ratelimit_login_per_min'], v['ratelimit_login_burst'],
+                           v['ratelimit_api_per_min'], v['ratelimit_api_burst'],
+                           v['ratelimit_conn_per_ip']))
+    plan.details.append('HTTP redirect (port 80): %s' % ('on' if redirect else 'off'))
+    return plan
+
+
+# ── domain: tls ──────────────────────────────────────────────────────────────
+def plan_tls(ctx, tls_check, blobs):
+    plan = Plan()
+    try:
+        info = tls_check.validate(blobs['crt'], blobs['key'], blobs.get('chain'))
+    except tls_check.CertInvalid as exc:
+        raise ApplyError('validate', 'refused: %s' % exc)
+    chain = b''.join(tls_check.split_certs(blobs.get('chain') or b''))
+    leaf = tls_check.split_certs(blobs['crt'])[0]
+    key = blobs['key']
+    if not key.endswith(b'\n'):
+        key += b'\n'
+    tls_dir = ctx.p(TLS_DIR)
+    st = os.lstat(tls_dir) if os.path.lexists(tls_dir) else None
+    if st is None or not stat.S_ISDIR(st.st_mode):
+        raise ApplyError('validate', '%s is missing or not a directory' % TLS_DIR)
+    # nginx serves ssl_certificate as leaf + chain, so the chain is appended.
+    plan.files += [(ctx.p(TLS_CRT), leaf + chain, 0o644),
+                   (ctx.p(TLS_KEY), key, 0o600),
+                   (ctx.p(TLS_CHAIN), chain or None, 0o644)]
+    was_active = unit_active(ctx, 'nginx.service')
+
+    def verify_served():
+        if not was_active or ctx.test:
+            if not was_active:
+                plan.details.append('nginx is not running; the certificate is served when it starts')
+            return
+        rc, out = run(ctx, 'openssl', ['s_client', '-connect', '127.0.0.1:443',
+                                       '-servername', 'localhost', '-showcerts'], timeout=20)
+        served = tls_check.split_certs(out.encode())
+        if not served:
+            raise ApplyError('verify', 'could not read the certificate nginx now serves')
+        got, _ = tls_check.describe_installed(served[0])
+        if not got or got.get('not_after') != info['not_after'] or \
+                got.get('subject') != info['subject']:
+            raise ApplyError('verify', 'nginx is not serving the new certificate after the reload')
+        plan.details.append('nginx serves the new certificate on 127.0.0.1:443')
+
+    plan.post_tests.append(lambda: nginx_test(ctx))
+    plan.reloads.append(lambda: reload_nginx(ctx))
+    plan.verifies.append(verify_served)
+    plan.applied = {'subject': info['subject'], 'issuer': info['issuer'],
+                    'not_after': info['not_after'], 'key_type': info['key_type'],
+                    'chain_count': str(info['chain_count'])}
+    plan.details.append('%s certificate, valid until %s, %d chain certificate(s)'
+                        % (info['key_type'], info['not_after'], info['chain_count']))
+    plan.details.extend(info['warnings'])
+    return plan
+
+
+# ── main ─────────────────────────────────────────────────────────────────────
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog='tm-apply')
+    ap.add_argument('domain', choices=DOMAINS)
+    ap.add_argument('--root', help=argparse.SUPPRESS)
+    ap.add_argument('--bin', help=argparse.SUPPRESS)
+    ap.add_argument('--lib', help=argparse.SUPPRESS)
+    ap.add_argument('--svc-user', help=argparse.SUPPRESS)
+    args = ap.parse_args(argv)
+    os.umask(0o022)
+    ctx = Ctx(args)
+    domain = args.domain
+    ctx.job = 'unknown'
+    doc = {'domain': domain, 'job': None, 'state': 'running', 'started_at': now_iso(),
+           'finished_at': None, 'step': 'stage', 'message': 'running', 'details': [],
+           'requested_by': None}
+    if ctx.euid != 0 and not ctx.test:
+        print('tm-apply must run as root (from its systemd unit)', file=sys.stderr)
+        return 2
+    os.makedirs(ctx.p(RESULT_DIR), mode=0o755, exist_ok=True)
+    lock = open(os.path.join(ctx.p(RESULT_DIR), '.lock'), 'a')
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    state, step, message, details = 'failed', 'stage', '', []
+    try:
+        if ctx.svc_uid is None:
+            raise ApplyError('stage', 'the service account %s does not exist' % ctx.svc_user)
+        schema, tls_check = load_rules(ctx)
+        job, by, values, blobs = load_job(ctx, schema, tls_check, domain)
+        ctx.job = job
+        doc.update(job=job, requested_by=by)
+        write_result(ctx, domain, doc)
+        log('apply %s job=%s requested by %s' % (domain, job, by))
+        if domain == 'syslog':
+            plan = plan_syslog(ctx, values)
+        elif domain == 'time':
+            plan = plan_time(ctx, values)
+        elif domain == 'nginx':
+            plan = plan_nginx(ctx, values)
+        else:
+            plan = plan_tls(ctx, tls_check, blobs)
+            blobs = None
+        state, step, message, details = execute(ctx, domain, plan)
+        if state == 'ok':
+            doc['applied'] = plan.applied
+    except ApplyError as exc:
+        # Before the install step: nothing on the host was changed.
+        state, step = 'failed', exc.step
+        message = '%s was not applied (step "%s"): %s. Nothing on the host was changed.' % (
+            domain, exc.step, exc.message)
+        details = exc.details
+    except Exception as exc:
+        state, step = 'failed', 'internal'
+        message = ('%s was not applied: internal error %s. Check journalctl -u '
+                   'topic-manager-apply-%s for the traceback.' % (domain, type(exc).__name__,
+                                                                 domain))
+        traceback.print_exc()
+    doc.update(state=state, step=step, message=message, details=[str(d)[:500] for d in details],
+               finished_at=now_iso())
+    try:
+        write_result(ctx, domain, doc)
+    except Exception as exc:
+        print('could not write the result: %s' % exc, file=sys.stderr)
+    log('%s: %s' % (state.upper(), message))
+    for d in details:
+        log('  %s' % d)
+    return 0 if state == 'ok' else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
