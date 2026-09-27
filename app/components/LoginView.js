@@ -43,8 +43,22 @@ const LoginView = {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username: this.username, password: this.password }),
                 });
-                const data = await r.json();
-                if (!r.ok) { this.error = data.error || 'Login failed'; return; }
+                // v1.2.0: nginx rate-limits sign-in. Its 429 is JSON when the
+                // site config is current, but a response that is NOT JSON
+                // (an older site file, a proxy in between) must not land in
+                // the catch below and be reported as a network error.
+                let data = {};
+                try { data = await r.json(); } catch (_) { data = {}; }
+                if (r.status === 429 && data.code === 'rate_limited') {
+                    this.error = 'Too many sign-in attempts from this address. Wait a minute and try again.';
+                    return;
+                }
+                if (!r.ok) {
+                    this.error = data.error || (r.status === 429
+                        ? 'Too many sign-in attempts from this address. Wait a minute and try again.'
+                        : 'Login failed (HTTP ' + r.status + ')');
+                    return;
+                }
                 // The server's own timeout travels with the user, so the idle
                 // clock the browser arms is the one the session dies on.
                 this.$emit('logged-in', data.user, data.timeout_minutes);
