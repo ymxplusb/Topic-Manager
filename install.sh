@@ -26,6 +26,20 @@
 #                           self-signed ECDSA P-256 placeholder is generated
 #   --non-interactive       never prompt; fail if a required value is missing
 #
+#   v1.2.0 host settings (each is also a Settings pane; the flag only seeds it):
+#   --syslog-host HOST      forward the audit trail + nginx logs to this collector
+#   --syslog-port PORT      default 6514 (TLS); 514 is usual for UDP/TCP
+#   --syslog-protocol P     udp | tcp | tls (default tls; needs rsyslog-openssl)
+#   --syslog-app-id ID      the RFC 5424 APP-NAME sent (default topic-manager)
+#   --syslog-ca PATH        CA the collector's certificate is verified against
+#                           (default: the system trust store)
+#   --ntp-server LIST       comma-separated NTP servers (up to 5); default: leave
+#                           the host's own time configuration alone
+#   --install-chrony        install chrony even where systemd-timesyncd runs.
+#                           chrony and systemd-timesyncd conflict: this REMOVES
+#                           systemd-timesyncd (the only removal ever allowed)
+#   --no-http-redirect      no :80 listener at all, and ufw 80/tcp stays closed
+#
 # There are NO environment defaults for the directory. On a fresh host the
 # LDAP values come from the flags above or from prompts; an existing
 # config.yaml is kept, and refused if it lacks auth.ldap_server,
@@ -413,6 +427,10 @@ apt_install_from_bundle() {
                 -o "Dir::Etc::Preferences=${tmp}/preferences" -o "Dir::Etc::PreferencesParts=${tmp}/prefparts"
                 -o "Acquire::Languages=none" -o "APT::Get::List-Cleanup=false" -o "APT::Sandbox::User=root")
     local inst_opts=(--no-install-recommends --no-download --no-remove)
+    # v1.2.0: APT_ALLOW_REMOVE names the ONLY packages a plan may remove
+    # (install_time_daemon sets it to systemd-timesyncd for --install-chrony).
+    # Anything else the plan would remove is still refused below.
+    [[ -z "${APT_ALLOW_REMOVE:-}" ]] || inst_opts=(--no-install-recommends --no-download)
     info "Resolving from the offline bundle (never downgrades, never replaces FIPS packages; ${#fips[@]} FIPS package(s) held): $*"
     DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" update -qq || rc=$?
     if [[ $rc -eq 0 ]]; then
@@ -450,6 +468,9 @@ apt_install_from_bundle() {
             name="${BASH_REMATCH[1]}"; ver="${BASH_REMATCH[2]}"
             [[ -z "${is_fips[${name%%:*}]:-}" ]] || plan_bad+=("${name}: FIPS package would be replaced by ${ver}")
             plan_new+=("${name}=${ver}")
+        elif [[ "$line" == Remv\ * && -n "${APT_ALLOW_REMOVE:-}" \
+                && " ${APT_ALLOW_REMOVE} " == *" $(r="${line#Remv }"; printf '%s' "${r%% *}") "* ]]; then
+            info "  the plan removes ${line#Remv } (explicitly allowed: ${APT_ALLOW_REMOVE})"
         elif [[ "$line" == Remv\ * ]]; then
             plan_bad+=("${line#Remv }: would be REMOVED")
         fi
@@ -541,6 +562,8 @@ PYKEYS
 OPT_TLS_CERT=""; OPT_TLS_KEY=""; OPT_SERVER_NAME=""
 OPT_LDAP_URL=""; OPT_LDAP_BASE_DN=""; OPT_LDAP_DOMAIN=""; OPT_LDAP_GROUP=""
 OPT_LDAP_BIND_DN=""; OPT_LDAP_CA_CERT=""; NON_INTERACTIVE=false
+OPT_SYSLOG_HOST=""; OPT_SYSLOG_PORT=""; OPT_SYSLOG_PROTOCOL=""; OPT_SYSLOG_APP_ID=""
+OPT_SYSLOG_CA=""; OPT_NTP_SERVERS=""; OPT_INSTALL_CHRONY=false; OPT_HTTP_REDIRECT=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --tls-cert)        shift; OPT_TLS_CERT="${1:-}" ;;
@@ -553,7 +576,15 @@ while [[ $# -gt 0 ]]; do
         --ldap-bind-dn)    shift; OPT_LDAP_BIND_DN="${1:-}" ;;
         --ldap-ca-cert)    shift; OPT_LDAP_CA_CERT="${1:-}" ;;
         --non-interactive) NON_INTERACTIVE=true ;;
-        -h|--help)         sed -n '2,42p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --syslog-host)     shift; OPT_SYSLOG_HOST="${1:-}" ;;
+        --syslog-port)     shift; OPT_SYSLOG_PORT="${1:-}" ;;
+        --syslog-protocol) shift; OPT_SYSLOG_PROTOCOL="${1:-}" ;;
+        --syslog-app-id)   shift; OPT_SYSLOG_APP_ID="${1:-}" ;;
+        --syslog-ca)       shift; OPT_SYSLOG_CA="${1:-}" ;;
+        --ntp-server)      shift; OPT_NTP_SERVERS="${1:-}" ;;
+        --install-chrony)  OPT_INSTALL_CHRONY=true ;;
+        --no-http-redirect) OPT_HTTP_REDIRECT=false ;;
+        -h|--help)         sed -n '2,56p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *)                 die "Unknown option: $1 (try --help)" ;;
     esac
     shift
@@ -564,6 +595,44 @@ done
 SERVER_NAME="${OPT_SERVER_NAME:-$(hostname -f 2>/dev/null || hostname)}"
 [[ "$SERVER_NAME" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,252}[A-Za-z0-9])?$ ]] \
     || die "Server name '${SERVER_NAME}' is not a valid host name. Pass --server-name <fqdn>."
+
+# ─── v1.2.0 host-setting flags: validated BEFORE anything changes ───────────
+# The same validator the application runs on PUT /api/settings and the root
+# apply helper runs again (tm/settings_schema.py, standard library only, so the
+# system python3 can load it before the venv exists).
+SEED_PAIRS=()
+[[ -z "$OPT_SYSLOG_HOST" ]]     || SEED_PAIRS+=("syslog_enabled=true" "syslog_host=${OPT_SYSLOG_HOST}")
+[[ -z "$OPT_SYSLOG_PORT" ]]     || SEED_PAIRS+=("syslog_port=${OPT_SYSLOG_PORT}")
+[[ -z "$OPT_SYSLOG_PROTOCOL" ]] || SEED_PAIRS+=("syslog_protocol=${OPT_SYSLOG_PROTOCOL}")
+[[ -z "$OPT_SYSLOG_APP_ID" ]]   || SEED_PAIRS+=("syslog_app_id=${OPT_SYSLOG_APP_ID}")
+[[ -z "$OPT_NTP_SERVERS" ]]     || SEED_PAIRS+=("ntp_servers=${OPT_NTP_SERVERS}")
+[[ -z "$OPT_HTTP_REDIRECT" ]]   || SEED_PAIRS+=("http_redirect_enabled=${OPT_HTTP_REDIRECT}")
+if [[ ${#SEED_PAIRS[@]} -gt 0 ]]; then
+    SEED_ERR="$(python3 - "$SCRIPT_DIR" "${SEED_PAIRS[@]}" <<'PYSEED' 2>&1
+import sys
+sys.path.insert(0, sys.argv[1])
+from tm import settings_schema as s
+vals = {}
+for pair in sys.argv[2:]:
+    k, _, v = pair.partition('=')
+    try:
+        vals[k] = s.normalise(k, v)
+    except s.InvalidSetting as exc:
+        flag = {'ntp_servers': 'ntp-server', 'http_redirect_enabled': 'no-http-redirect',
+                'syslog_enabled': 'syslog-host'}.get(k, k.replace('_', '-'))
+        print('--%s: %s' % (flag, exc.reason)); sys.exit(1)
+if vals.get('syslog_enabled') == 'true':
+    full = dict(s.ADMIN_DEFAULTS); full.update(vals)
+    for problem in s.check_domain('syslog', full):
+        print(problem); sys.exit(1)
+PYSEED
+)" || die "Invalid host setting: ${SEED_ERR}. Nothing has been changed."
+fi
+[[ -z "$OPT_SYSLOG_CA" || -f "$OPT_SYSLOG_CA" ]] || die "--syslog-ca ${OPT_SYSLOG_CA}: no such file. Nothing has been changed."
+if [[ -n "$OPT_SYSLOG_CA" ]]; then
+    openssl x509 -in "$OPT_SYSLOG_CA" -noout >/dev/null 2>&1 \
+        || die "--syslog-ca ${OPT_SYSLOG_CA} is not a PEM certificate. Nothing has been changed."
+fi
 
 # ─── root check ──────────────────────────────────────────────────────────────
 [[ $EUID -eq 0 ]] || die "Run with sudo: sudo bash install.sh"
@@ -669,7 +738,8 @@ fi
 # dependency is installed from a binary wheel (pip --only-binary :all:), which
 # is also what the offline bundle carries, so a STIG'd host never needs a
 # toolchain. polkitd is what lets the Settings restart control act.
-REQUIRED_PKGS=(python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl)
+REQUIRED_PKGS=(python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl
+               rsyslog rsyslog-openssl)
 pkg_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"; }
 MISSING_PKGS=()
 for p in "${REQUIRED_PKGS[@]}"; do pkg_installed "$p" || MISSING_PKGS+=("$p"); done
@@ -686,6 +756,43 @@ for p in "${REQUIRED_PKGS[@]}"; do
     pkg_installed "$p" || die "Required package ${p} is still not installed."
 done
 success "System dependencies ready"
+
+# ─── time daemon (v1.2.0) ────────────────────────────────────────────────────
+# Settings > System > Time source configures chrony or systemd-timesyncd,
+# whichever runs. chrony and systemd-timesyncd CONFLICT: installing chrony
+# removes systemd-timesyncd. So chrony is installed only where no time daemon
+# is present, or where --install-chrony asks for it (the Ubuntu 24.04 STIG
+# requires chrony); a stock host keeps systemd-timesyncd otherwise. The ONE
+# removal ever allowed is systemd-timesyncd, checked in the simulated plan.
+install_time_daemon() {
+    local plan rm_other
+    if pkg_installed chrony; then
+        success "Time daemon: chrony"
+        return 0
+    fi
+    if pkg_installed systemd-timesyncd && [[ $OPT_INSTALL_CHRONY != true ]]; then
+        success "Time daemon: systemd-timesyncd (kept; --install-chrony switches to chrony)"
+        mkdir -p /etc/systemd/timesyncd.conf.d
+        return 0
+    fi
+    if pkg_installed systemd-timesyncd; then
+        warn "--install-chrony: installing chrony REMOVES systemd-timesyncd (they conflict)."
+    fi
+    if [[ $ONLINE == true ]]; then
+        plan="$(LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get -s install --no-install-recommends chrony 2>&1)" \
+            || die "apt cannot plan the chrony install: ${plan}"
+        rm_other="$(printf '%s\n' "$plan" | awk '/^Remv / && $2 != "systemd-timesyncd" { print $2 }')"
+        [[ -z "$rm_other" ]] || die "Installing chrony would also remove: ${rm_other//$'\n'/ }. Refused; nothing
+     was changed by this step. Install chrony by hand if that is intended."
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends chrony \
+            || die "chrony could not be installed."
+    else
+        APT_ALLOW_REMOVE="systemd-timesyncd" apt_install_from_bundle "${SCRIPT_DIR}/install/packages/apt" chrony
+    fi
+    pkg_installed chrony || die "chrony is still not installed."
+    success "Time daemon: chrony (installed)"
+}
+install_time_daemon
 
 # ─── Python version check ────────────────────────────────────────────────────
 PY_VER=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
@@ -719,6 +826,10 @@ safe_install_dir 750 "$APP_USER" "$APP_USER" "$CLUSTERS_DIR"
 # Uploaded Kafka TLS material. 0700: nothing but the service reads it, and
 # it is already inside the unit ReadWritePaths.
 safe_install_dir 700 "$APP_USER" "$APP_USER" "$CERT_DIR"
+# v1.2.0: where the application stages "Apply to host" requests for the root
+# helper. The service's own, 0700; the helper refuses anything in it that is
+# not a private regular file owned by ${APP_USER}.
+safe_install_dir 700 "$APP_USER" "$APP_USER" "${DATA_DIR}/apply"
 # Restore points. root-only: they hold config.yaml verbatim.
 safe_install_dir 700 root root "$BACKUP_ROOT"
 success "Directories created"
@@ -905,6 +1016,16 @@ else
     info "Config already exists — not overwritten (its directory settings were checked above)."
 fi
 
+# ─── v1.2.0 host settings: seeded into tm.db as the service account ─────────
+# run_as_app — the application's own CLI (tm/apply.py) as ${APP_USER}: it owns
+# tm.db, and a database created here must be the service's (0600). The seed
+# is audited as SETTINGS_UPDATE by "installer".
+run_as_app() {
+    ( cd / && sudo -u "$APP_USER" env TM_CONFIG="$CONFIG_FILE" TM_CLUSTERS_DIR="$CLUSTERS_DIR" \
+        TM_CLUSTER_CERT_DIR="$CERT_DIR" PYTHONPATH="$APP_HOME" PYTHONDONTWRITEBYTECODE=1 \
+        "${VENV}/bin/python3" -m tm.apply --by installer "$@" )
+}
+
 # ─── cluster profiles ───────────────────────────────────────────────────────
 # A REINSTALL over an existing host finds a config.yaml that still carries
 # the clusters: block, so this runs on install as well as on upgrade. It is
@@ -922,6 +1043,11 @@ chown "$APP_USER":"$APP_USER" "$CLUSTERS_FILE"
 chmod 640 "$CLUSTERS_FILE"
 success "Cluster profiles at ${CLUSTERS_FILE}"
 
+# The host-setting flags, saved BEFORE the nginx and firewall steps read them.
+if [[ ${#SEED_PAIRS[@]} -gt 0 ]]; then
+    run_as_app seed "${SEED_PAIRS[@]}" || die "Could not save the host settings given as flags."
+fi
+
 # ─── systemd service ─────────────────────────────────────────────────────────
 info "Installing systemd service..."
 install -m 644 -o root -g root \
@@ -932,9 +1058,32 @@ install -m 644 -o root -g root \
 install -m 644 -o root -g root \
     "${SCRIPT_DIR}/systemd/topic-manager-nginx-test.service" \
     /etc/systemd/system/topic-manager-nginx-test.service
+# v1.2.0: the four one-shot apply units (root, started on demand through
+# polkit, never enabled) and the daily audit prune (the service account).
+for u in topic-manager-apply-syslog.service topic-manager-apply-time.service \
+         topic-manager-apply-nginx.service topic-manager-apply-tls.service \
+         topic-manager-audit-prune.service topic-manager-audit-prune.timer; do
+    install -m 644 -o root -g root "${SCRIPT_DIR}/systemd/${u}" "/etc/systemd/system/${u}"
+done
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}" --quiet
-success "Service installed: ${SERVICE_NAME}"
+success "Service installed: ${SERVICE_NAME} (+ 4 apply units, audit prune timer)"
+
+# ─── the root apply helper (v1.2.0) ─────────────────────────────────────────
+# root:root, and nothing under it writable by anyone else: the helper runs as
+# root and imports ONLY its own lib/ copies of the two shared rule modules. It
+# never imports or executes anything under ${APP_HOME} (the service account's
+# tree) — the helper refuses a lib/ that is not root-owned and private.
+install_apply_helper() {   # install_apply_helper <source-tree>
+    local src="$1" lx=/usr/libexec/topic-manager
+    [[ -L "$lx" || -L "${lx}/lib" ]] && fail "${lx} (or its lib/) is a symlink; refusing to install root code through it."
+    install -d -m 755 -o root -g root "$lx" "${lx}/lib"
+    install -m 755 -o root -g root "${src}/install/libexec/tm-apply" "${lx}/tm-apply"
+    install -m 644 -o root -g root "${src}/tm/settings_schema.py" "${lx}/lib/settings_schema.py"
+    install -m 644 -o root -g root "${src}/tm/tls_check.py" "${lx}/lib/tls_check.py"
+}
+install_apply_helper "$SCRIPT_DIR"
+success "Apply helper installed: /usr/libexec/topic-manager/tm-apply (root:root 0755)"
 
 # ─── polkit ─────────────────────────────────────────────────────────────────
 # sudo cannot work under NoNewPrivileges=true (measured on prod), so the
@@ -962,7 +1111,43 @@ sed -i "s|server_name YOUR-HOSTNAME.YOUR-DOMAIN.com _;|server_name ${SERVER_NAME
     /etc/nginx/sites-available/topic-manager
 ln -sf /etc/nginx/sites-available/topic-manager /etc/nginx/sites-enabled/topic-manager
 rm -f /etc/nginx/sites-enabled/default
-success "nginx site configured for ${SERVER_NAME}"
+
+# v1.2.0: what Settings manages lives in files the root helper renders. The
+# release's defaults are laid down only where a file is ABSENT, so a reinstall
+# keeps the operator's applied choices; the apply at the end of this script
+# brings every one of them in line with tm.db either way.
+install_if_absent() {   # install_if_absent <mode> <src> <dest>
+    [[ -L "$3" ]] && fail "$3 is a symlink; refusing to install through it."
+    [[ -e "$3" ]] && return 0
+    install -D -m "$1" -o root -g root "$2" "$3"
+}
+install_if_absent 644 "${SCRIPT_DIR}/nginx/tm-limits.conf" /etc/nginx/conf.d/topic-manager-limits.conf
+for f in tm-limits-server tm-limits-login tm-limits-api tm-syslog; do
+    install_if_absent 644 "${SCRIPT_DIR}/nginx/${f}.conf" "/etc/nginx/snippets/${f}.conf"
+done
+# The :80 redirect is its own site; it is ENABLED only when Settings says so.
+install -m 644 -o root -g root "${SCRIPT_DIR}/nginx/topic-manager-http.conf" /etc/nginx/sites-available/topic-manager-http
+sed -i "s|server_name YOUR-HOSTNAME.YOUR-DOMAIN.com _;|server_name ${SERVER_NAME} _;|" \
+    /etc/nginx/sites-available/topic-manager-http
+HTTP_REDIRECT="$(run_as_app get http_redirect_enabled)" || die "Could not read the HTTP redirect setting from tm.db."
+if [[ "$HTTP_REDIRECT" == true ]]; then
+    ln -sf /etc/nginx/sites-available/topic-manager-http /etc/nginx/sites-enabled/topic-manager-http
+else
+    rm -f /etc/nginx/sites-enabled/topic-manager-http
+fi
+success "nginx site configured for ${SERVER_NAME} (HTTP redirect: ${HTTP_REDIRECT})"
+
+# ─── rsyslog (v1.2.0) ───────────────────────────────────────────────────────
+# The forwarding rule is rendered by the apply helper; the release's default
+# (forwarding OFF) is laid down where absent. The syslog TLS CA lives under
+# /etc/rsyslog.d/topic-manager because rsyslogd's AppArmor profile reads
+# nothing under /etc/ssl (measured), and 0644 because it reads it as `syslog`.
+install -d -m 755 -o root -g root /etc/rsyslog.d/topic-manager
+install_if_absent 644 "${SCRIPT_DIR}/install/rsyslog/30-topic-manager.conf" /etc/rsyslog.d/30-topic-manager.conf
+if [[ -n "$OPT_SYSLOG_CA" ]]; then
+    install -m 644 -o root -g root "$OPT_SYSLOG_CA" /etc/rsyslog.d/topic-manager/syslog-ca.pem
+    success "Syslog TLS CA installed: /etc/rsyslog.d/topic-manager/syslog-ca.pem"
+fi
 
 # ─── TLS certificate ─────────────────────────────────────────────────────────
 # v1.1.0: nginx cannot start without a certificate, so a fresh install used to
@@ -1024,20 +1209,28 @@ manage_nginx_ssl_protocols /etc/nginx/nginx.conf \
 # never a "ports open" claim. Not fatal: everything else is installed by now.
 # The status is read whole and matched in-shell, not piped to grep -q, which
 # under pipefail can SIGPIPE ufw and read an active firewall as inactive.
+# v1.2.0: 80/tcp only while the HTTP redirect is ON (HTTP_REDIRECT, read from
+# tm.db above): a reinstall on a host where an operator turned it off must not
+# open it again. The apply helper closes it when the redirect goes off later.
 open_firewall_ports() {
-    local port out failed="" st
+    local port out failed="" st ports=(443/tcp)
+    [[ "${HTTP_REDIRECT:-true}" != true ]] || ports=(80/tcp 443/tcp)
     command -v ufw >/dev/null 2>&1 || return 0
     st="$(ufw status 2>/dev/null || true)"
     [[ "$st" == *"Status: active"* ]] || return 0
-    info "Opening firewall ports 80 and 443..."
-    for port in 80/tcp 443/tcp; do
+    info "Opening firewall ports ${ports[*]}..."
+    for port in "${ports[@]}"; do
         out="$(ufw allow "$port" 2>&1)" || failed="${failed} ${port} (${out%%$'\n'*})"
     done
     if [[ -z "$failed" ]]; then
-        success "Firewall ports 80/443 open"
+        if [[ ${#ports[@]} -eq 2 ]]; then
+            success "Firewall ports 80/443 open"
+        else
+            success "Firewall port 443 open (80 stays closed: the HTTP redirect is off)"
+        fi
     else
         warn "ufw is active but could NOT open:${failed}"
-        warn "  The site is unreachable until you run: sudo ufw allow 80/tcp; sudo ufw allow 443/tcp"
+        warn "  The site is unreachable until you run: $(printf 'sudo ufw allow %s; ' "${ports[@]}" | sed 's/; $//')"
     fi
 }
 open_firewall_ports
@@ -1116,6 +1309,37 @@ DIR_STATE="$(stat -c '%a %U' "$DATA_DIR" 2>/dev/null || echo missing)"
 [[ "$DIR_STATE" == "700 ${APP_USER}" ]] \
     || die "${DATA_DIR} is '${DIR_STATE}', expected '700 ${APP_USER}'."
 success "Audit database private: tm.db 0600, data/ 0700, owned by ${APP_USER}"
+
+# ─── v1.2.0: apply the host settings saved in tm.db ─────────────────────────
+# Through the SAME path the Settings "Apply to host" button takes: the service
+# account stages, the fixed one-shot unit runs the root helper, and the
+# helper's verdict is read back (and audited, with the applied values kept for
+# the PPSM, contract CC-1). A fresh install applies the defaults, so what is
+# live is recorded from the first minute. A failed apply is rolled back by the
+# helper and stops the install here, loudly: the service is up, the host
+# setting named is not.
+apply_saved_settings() {
+    local d st msg failed=""
+    run_as_app stage all >/dev/null || die "Could not stage the host settings for apply (see above)."
+    for d in syslog time nginx; do
+        systemctl start "topic-manager-apply-${d}.service" >/dev/null 2>&1 || true
+        st="$(run_as_app result "$d" 2>/dev/null)" || st=""
+        msg="$(printf '%s' "$st" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("state","?") + ": " + d.get("message",""))' 2>/dev/null || echo "?: no result")"
+        if [[ "$msg" == ok:* ]]; then
+            success "Applied ${d}: ${msg#ok: }"
+        else
+            warn "Apply ${d} did NOT succeed — ${msg}"
+            failed="${failed} ${d}"
+        fi
+    done
+    [[ -z "$failed" ]] || die "The service is installed and running, but applying${failed} to the host failed
+     (each failed domain was rolled back by the helper; its message is above).
+     See: journalctl -u topic-manager-apply-<domain> and TROUBLESHOOTING.md -> Apply to host."
+}
+apply_saved_settings
+systemctl enable --now topic-manager-audit-prune.timer --quiet \
+    || warn "The audit prune timer could not be enabled: systemctl enable --now topic-manager-audit-prune.timer"
+success "Audit retention: topic-manager-audit-prune.timer (daily)"
 
 # ─── summary ─────────────────────────────────────────────────────────────────
 echo ""

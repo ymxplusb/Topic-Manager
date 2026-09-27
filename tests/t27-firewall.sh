@@ -82,6 +82,21 @@ a_failure_is_loud() {
 }
 tm_case "a-failed-rule-is-a-loud-warning-never-a-claim" none a_failure_is_loud
 
+a_redirect_off_leaves_80_closed() {
+    # v1.2.0: an operator who turned the HTTP redirect OFF must not have 80/tcp
+    # re-opened by a reinstall. install.sh reads the setting from tm.db into
+    # HTTP_REDIRECT before this step.
+    _stub active
+    sed -i 's/^open_firewall_ports$/HTTP_REDIRECT=false open_firewall_ports/' "${TM_TMP}/fw.sh"
+    grep -q '^HTTP_REDIRECT=false open_firewall_ports$' "${TM_TMP}/fw.sh" || tm_die "could not set HTTP_REDIRECT in the harness"
+    _run
+    tm_assert_rc 0 "$RC" "$(cat "${TM_TMP}/out")"
+    grep -qx 'allow 80/tcp' "${TM_TMP}/calls" && _tm_afail "80/tcp was opened although the HTTP redirect is OFF"
+    grep -qx 'allow 443/tcp' "${TM_TMP}/calls" || _tm_afail "443/tcp was not opened"
+    tm_assert_grep "Firewall port 443 open (80 stays closed: the HTTP redirect is off)" "${TM_TMP}/out"
+}
+tm_case "redirect-off-reinstall-opens-443-only" none a_redirect_off_leaves_80_closed
+
 a_no_invalid_ufw_flags_anywhere() {
     grep -rnE 'ufw[[:space:]]+(-[^ ]*[[:space:]]+)*--(quiet|silent|yes|assume-yes)' \
         "$INSTALL_SH" "${TM_REPO_ROOT}/install" "${TM_REPO_ROOT}/docs" "${TM_REPO_ROOT}/README.md" \

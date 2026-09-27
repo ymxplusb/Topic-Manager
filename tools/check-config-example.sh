@@ -51,6 +51,7 @@ clu = load_mapping(clu_path)
 
 # Keys the application actually reads. Sources:
 #   tm/app.py        server.secret_key, session.timeout_minutes
+#   tm/settings_schema.py  session.max_concurrent (the one-time seed, v1.2.0)
 #   tm/auth.py       auth.ldap_server, ldap_domain, ldap_base_dn, required_group
 #   tm/models.py     audit.db_path
 #
@@ -63,7 +64,7 @@ clu = load_mapping(clu_path)
 REQUIRED = {
     "server":   ["host", "port", "secret_key"],
     "auth":     ["ldap_server", "ldap_domain", "ldap_base_dn", "required_group"],
-    "session":  ["timeout_minutes"],
+    "session":  ["timeout_minutes", "max_concurrent"],
     "audit":    ["db_path"],
 }
 
@@ -76,6 +77,14 @@ for section, keys in REQUIRED.items():
     for k in keys:
         if k not in cfg[section]:
             missing.append("%s.%s" % (section, k))
+
+# v1.2.0: session.max_concurrent SEEDS Settings > Sessions on a fresh
+# install (install.sh writes config.yaml from this example), so it must be the
+# owner's fresh default, 3 — the example said 5 until v1.2.0, which would have
+# made every new host start at 5.
+if isinstance(cfg.get("session"), dict) and "max_concurrent" in cfg["session"]         and str(cfg["session"]["max_concurrent"]) != "3":
+    missing.append("session.max_concurrent is %r; it seeds the fresh-install default, "
+                   "which is 3" % cfg["session"]["max_concurrent"])
 
 if "clusters" in cfg:
     missing.append("clusters MUST NOT be in config.yaml.example any more "

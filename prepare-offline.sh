@@ -265,7 +265,13 @@ bundle_apt_packages() {
 }
 
 info "Downloading apt packages and their dependencies (requires an Ubuntu 24.04 host)..."
-PKGS="python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl"
+# v1.2.0: rsyslog + rsyslog-openssl (Settings > Remote syslog, TLS through the
+# host's OpenSSL, so its FIPS provider) and chrony (Settings > Time source).
+# chrony CONFLICTS with systemd-timesyncd: install.sh installs it only where no
+# time daemon runs or --install-chrony is given, and then allows exactly one
+# removal, systemd-timesyncd. It is bundled so an air-gapped STIG host (which
+# requires chrony) can have it.
+PKGS="python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl rsyslog rsyslog-openssl chrony"
 if command -v apt-get &>/dev/null && command -v apt-cache &>/dev/null; then
     # shellcheck disable=SC2086  # PKGS is a word list by design
     bundle_apt_packages "$APT_PKG_DIR" $PKGS

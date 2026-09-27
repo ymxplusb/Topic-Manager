@@ -136,12 +136,33 @@ BASELINE_PATHS=(
   "$CONFIG_DIR" "${CONFIG_DIR}/config.yaml" "${CONFIG_DIR}/tls"
   "$CLUSTERS_DIR" "$CLUSTERS_FILE" "$CERT_DIR"
   "${CONFIG_DIR}/tls/server.crt" "${CONFIG_DIR}/tls/server.key"
+  "${CONFIG_DIR}/tls/chain.pem"
   "/etc/nginx/sites-available/topic-manager"
   "/etc/nginx/snippets/tm-security-headers.conf"
   "/etc/systemd/system/topic-manager.service"
   "$DROPIN_DIR"
   "/etc/logrotate.d/topic-manager"
 )
+
+# v1.2.0: the files Settings > "Apply to host" manages (rendered by the root
+# helper /usr/libexec/topic-manager/tm-apply). They are OPERATOR STATE, like
+# config.yaml: an upgrade keeps them (the release's copies are laid down only
+# where absent), backs them up in Phase 4, puts them back on a rollback, and
+# re-applies what tm.db holds at the end (Phase 12) — it never reverts an
+# operator's choice to the release default.
+V120_MANAGED=(
+  /etc/nginx/conf.d/topic-manager-limits.conf
+  /etc/nginx/snippets/tm-limits-server.conf /etc/nginx/snippets/tm-limits-login.conf
+  /etc/nginx/snippets/tm-limits-api.conf /etc/nginx/snippets/tm-syslog.conf
+  /etc/nginx/sites-available/topic-manager-http /etc/nginx/sites-enabled/topic-manager-http
+  /etc/rsyslog.d/30-topic-manager.conf /etc/rsyslog.d/topic-manager
+  /etc/chrony/sources.d/topic-manager.sources
+  /etc/systemd/timesyncd.conf.d/topic-manager.conf)
+# (closed on its last entry: tests extract BASELINE_PATHS up to the only
+# line in this file that is a bare ")", and a second one would break them)
+V120_UNITS=(topic-manager-apply-syslog.service topic-manager-apply-time.service
+            topic-manager-apply-nginx.service topic-manager-apply-tls.service
+            topic-manager-audit-prune.service topic-manager-audit-prune.timer)
 
 # ─── flags ───────────────────────────────────────────────────────────────────
 SKIP_OS=false; OFFLINE_FORCED=false; BACKUP_ONLY=false; DRY_RUN=false
@@ -643,6 +664,64 @@ verify_clone_commit() {
     info "Cloned tree verified: HEAD is ${got}"
 }
 
+# install_apply_helper <source-tree> — the ROOT apply helper and its two rule
+# modules, root:root. Byte-identical in install.sh (t38).
+install_apply_helper() {   # install_apply_helper <source-tree>
+    local src="$1" lx=/usr/libexec/topic-manager
+    [[ -L "$lx" || -L "${lx}/lib" ]] && fail "${lx} (or its lib/) is a symlink; refusing to install root code through it."
+    install -d -m 755 -o root -g root "$lx" "${lx}/lib"
+    install -m 755 -o root -g root "${src}/install/libexec/tm-apply" "${lx}/tm-apply"
+    install -m 644 -o root -g root "${src}/tm/settings_schema.py" "${lx}/lib/settings_schema.py"
+    install -m 644 -o root -g root "${src}/tm/tls_check.py" "${lx}/lib/tls_check.py"
+}
+
+# install_if_absent <mode> <src> <dest> — the release's default for a managed
+# file, ONLY where there is none. Byte-identical in install.sh (t38).
+install_if_absent() {   # install_if_absent <mode> <src> <dest>
+    [[ -L "$3" ]] && fail "$3 is a symlink; refusing to install through it."
+    [[ -e "$3" ]] && return 0
+    install -D -m "$1" -o root -g root "$2" "$3"
+}
+
+# run_as_app <tm.apply args> — the application's own CLI as the service account.
+run_as_app() {
+    ( cd / && sudo -u "$APP_USER" env TM_CONFIG="$CONFIG_FILE" TM_CLUSTERS_DIR="$CLUSTERS_DIR" \
+        TM_CLUSTER_CERT_DIR="$CERT_DIR" PYTHONPATH="$APP_HOME" PYTHONDONTWRITEBYTECODE=1 \
+        "${VENV}/bin/python3" -m tm.apply --by upgrade "$@" )
+}
+
+# backup_v120_managed <backup-dir> — every managed file (and the :80 link) as
+# it is, plus a marker: a restore point WITH the marker knows which of these
+# were absent; one WITHOUT it predates v1.2.0, when none of them existed.
+backup_v120_managed() {   # backup_v120_managed <backup-dir>
+    local BD="$1" f
+    install -d -m 700 "${BD}/system/v120"
+    for f in "${V120_MANAGED[@]}"; do
+        [[ -e "$f" || -L "$f" ]] || continue
+        mkdir -p "${BD}/system/v120$(dirname "$f")"
+        cp -a -- "$f" "${BD}/system/v120${f}"
+    done
+    : > "${BD}/system/v120/.present"
+}
+
+# restore_v120_managed <backup-dir> — put them back exactly; from a restore
+# point older than v1.2.0 remove them (the old site file has its own :80
+# block, and an enabled topic-manager-http beside it would be a duplicate).
+restore_v120_managed() {   # restore_v120_managed <backup-dir>
+    local BD="$1" f
+    for f in "${V120_MANAGED[@]}"; do
+        rm -rf -- "$f"
+        if [[ -f "${BD}/system/v120/.present" ]] && [[ -e "${BD}/system/v120${f}" || -L "${BD}/system/v120${f}" ]]; then
+            mkdir -p "$(dirname "$f")"
+            cp -a -- "${BD}/system/v120${f}" "$f"
+        fi
+    done
+    if [[ ! -f "${BD}/system/v120/.present" ]]; then
+        systemctl disable --now topic-manager-audit-prune.timer >/dev/null 2>&1 || true
+    fi
+    systemctl try-restart rsyslog.service >/dev/null 2>&1 || true
+}
+
 # ─── systemd unit drop-in ────────────────────────────────────────────────────
 # ${DROPIN_DIR} is not a system file this script re-creates from the source
 # tree — it is where an operator puts TM_SECRET_KEY and TM_LDAP_BIND_PASSWORD
@@ -864,6 +943,7 @@ restore_from_backup() {
     restore_cluster_store "$BD"
     [[ -f "${BD}/system/logrotate-topic-manager" ]] && \
         cp -a "${BD}/system/logrotate-topic-manager" /etc/logrotate.d/topic-manager
+    restore_v120_managed "$BD"
     [[ -f "${BD}/venv.tar.gz" ]] && { rm -rf "$VENV"; tar -xzf "${BD}/venv.tar.gz" -C "$APP_HOME"; }
 
     local p
@@ -1224,6 +1304,23 @@ for p in "${BASELINE_PATHS[@]}"; do
         "$(stat -c '%a' "$p")" "$(stat -c '%U:%G' "$p")" "$p"
 done
 info "These exact values are captured in Phase 4 and re-applied in Phase 10."
+
+# v1.2.0 host settings. Reported, not blocked: the upgrade installs no OS
+# packages, and each feature fails its own apply with the package named.
+for _pkg in rsyslog rsyslog-openssl; do
+    if [[ "$(dpkg-query -W -f='${Status}' "$_pkg" 2>/dev/null || true)" == *"install ok installed"* ]]; then
+        row PASS "package ${_pkg}" "installed"
+    else
+        row WARN "package ${_pkg}" "absent — Settings > Remote syslog$([[ $_pkg == rsyslog-openssl ]] && echo ' over TLS') will fail to apply until it is installed"
+    fi
+done
+if systemctl is-active --quiet chrony 2>/dev/null; then
+    row PASS "time daemon" "chrony"
+elif systemctl is-active --quiet systemd-timesyncd 2>/dev/null; then
+    row PASS "time daemon" "systemd-timesyncd"
+else
+    row WARN "time daemon" "neither chrony nor systemd-timesyncd is active — Settings > Time source cannot apply"
+fi
 
 # =============================================================================
 phase "Phase 3 — Upgrade blockers (v${INSTALLED_VER} → target)"
@@ -1719,6 +1816,7 @@ fi
 backup_dropin "$BACKUP_DIR"
 [[ -f /etc/logrotate.d/topic-manager ]] && \
     cp -a /etc/logrotate.d/topic-manager "${BACKUP_DIR}/system/logrotate-topic-manager"
+backup_v120_managed "$BACKUP_DIR"
 
 {
     echo "topic_manager_version=${INSTALLED_VER}"
@@ -2003,6 +2101,31 @@ if [[ -n "$PREV_SN" ]] && ! grep -q "YOUR-HOSTNAME" <<<"$PREV_SN"; then
 fi
 ln -sf /etc/nginx/sites-available/topic-manager /etc/nginx/sites-enabled/topic-manager
 rm -f /etc/nginx/sites-enabled/default
+
+# v1.2.0: the managed files are kept (release defaults only where absent), the
+# :80 redirect becomes its own site. From a release BEFORE v1.2.0 the old site
+# file carried the :80 block, so the redirect site is enabled to match; from
+# v1.2.0 on, the link is left exactly as the operator's last apply left it.
+install_if_absent 644 "${WORK_DIR}/nginx/tm-limits.conf" /etc/nginx/conf.d/topic-manager-limits.conf
+for f in tm-limits-server tm-limits-login tm-limits-api tm-syslog; do
+    install_if_absent 644 "${WORK_DIR}/nginx/${f}.conf" "/etc/nginx/snippets/${f}.conf"
+done
+install -m 644 -o root -g root "${WORK_DIR}/nginx/topic-manager-http.conf" /etc/nginx/sites-available/topic-manager-http
+if [[ -n "$PREV_SN" ]] && ! grep -q "YOUR-HOSTNAME" <<<"$PREV_SN"; then
+    sed -i "s|server_name .*;|server_name ${PREV_SN};|" /etc/nginx/sites-available/topic-manager-http
+fi
+if [[ ! -f "${BACKUP_DIR}/system/v120/.present" ]]; then
+    ln -sf /etc/nginx/sites-available/topic-manager-http /etc/nginx/sites-enabled/topic-manager-http
+    info "HTTP redirect: now its own site (enabled, as the previous release's :80 block was)"
+fi
+install -d -m 755 -o root -g root /etc/rsyslog.d/topic-manager
+install_if_absent 644 "${WORK_DIR}/install/rsyslog/30-topic-manager.conf" /etc/rsyslog.d/30-topic-manager.conf
+safe_install_dir 700 "$APP_USER" "$APP_USER" "${APP_HOME}/data/apply"
+install_apply_helper "$WORK_DIR"
+for u in "${V120_UNITS[@]}"; do
+    install -m 644 -o root -g root "${WORK_DIR}/systemd/${u}" "/etc/systemd/system/${u}"
+done
+success "Apply helper, apply units and the audit prune timer installed; managed files kept"
 
 info "Installing systemd unit and logrotate ..."
 cp "${WORK_DIR}/systemd/topic-manager.service" /etc/systemd/system/
@@ -2350,6 +2473,33 @@ else
     warn "  sudo bash upgrade-full.sh --restore ${TIMESTAMP}"
 fi
 
+# --- v1.2.0: re-apply the saved host settings. The managed files were kept
+# (Phase 9) and are now brought in line with tm.db through the same path as
+# Settings > "Apply to host". NOT a rollback trigger: each domain's helper
+# rolls itself back, the application is verified healthy above, and a
+# failure here names the domain and the fix.
+info "Re-applying the saved host settings (syslog, time, nginx) ..."
+REAPPLY_FAILED=""
+if run_as_app stage all >/dev/null; then
+    for d in syslog time nginx; do
+        systemctl start "topic-manager-apply-${d}.service" >/dev/null 2>&1 || true
+        st="$(run_as_app result "$d" 2>/dev/null)" || st=""
+        msg="$(printf '%s' "$st" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("state","?") + ": " + d.get("message",""))' 2>/dev/null || echo "?: no result")"
+        if [[ "$msg" == ok:* ]]; then
+            success "Re-applied ${d}: ${msg#ok: }"
+        else
+            warn "Re-apply ${d} did NOT succeed — ${msg}"
+            REAPPLY_FAILED="${REAPPLY_FAILED} ${d}"
+        fi
+    done
+else
+    warn "Could not stage the saved host settings; nothing was re-applied."
+    REAPPLY_FAILED=" syslog time nginx"
+fi
+systemctl enable --now topic-manager-audit-prune.timer >/dev/null 2>&1 \
+    && success "Audit retention: topic-manager-audit-prune.timer (daily)" \
+    || warn "The audit prune timer could not be enabled: systemctl enable --now topic-manager-audit-prune.timer"
+
 info "Installed third-party components:"
 "${VENV}/bin/pip" freeze | sed 's/^/    /'
 "${VENV}/bin/pip" freeze > "${BACKUP_DIR}/manifest/pip-freeze-after.txt"
@@ -2388,6 +2538,11 @@ if [[ -d "${BACKUP_DIR}/system/${DROPIN_BACKUP_NAME}" ]]; then
 echo "    systemd unit drop-in (TM_SECRET_KEY / TM_LDAP_BIND_PASSWORD)"
 fi
 echo "    ownership and modes on ${RESTORED_N} paths, verbatim"
+echo "    Settings-managed host files (rate limits, HTTP redirect, syslog, time) kept and re-applied"
+if [[ -n "$REAPPLY_FAILED" ]]; then
+echo "    ${YELLOW}NOT re-applied:${REAPPLY_FAILED}${NC} — see the warnings above and"
+echo "      TROUBLESHOOTING.md -> Apply to host; re-apply from Settings once fixed"
+fi
 echo
 echo "${BOLD}Post-upgrade checklist:${NC}"
 echo "  1. Test an interactive AD login at https://$(hostname -f 2>/dev/null || hostname)"

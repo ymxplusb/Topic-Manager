@@ -60,14 +60,21 @@ session:
   timeout_minutes: 15
   # Maximum simultaneous sessions per user. 0 = unlimited.
   # When the limit is reached the login attempt is rejected with HTTP 429.
-  max_concurrent: 5
+  # v1.2.0: this now lives in Settings > Security > Sessions (default 3). The
+  # value here only SEEDS that setting the first time the service starts on a
+  # database that has none; after that Settings wins, and a different value
+  # here is logged as a warning at every start and otherwise ignored.
+  max_concurrent: 3
 
 audit:
   db_path: "/opt/topic-manager/data/tm.db"
 
 logging:
   log_level: "INFO"    # DEBUG / INFO / WARNING / ERROR
-  # Set syslog_enabled: true to send auth events and errors to the local
-  # syslog daemon (/dev/log, facility daemon). Forwarding them off the host is
-  # the host's own syslog configuration (remote syslog is planned for v1.2.0).
+  # Set syslog_enabled: true to send the application's own diagnostic log
+  # (auth events, errors) to the local syslog daemon (/dev/log, facility
+  # daemon). This flag does NOT govern the audit trail: since v1.2.0 every
+  # audit record is always sent to local syslog (facility authpriv, tag
+  # topic-manager-audit), and forwarding it off the host is set in
+  # Settings > Logging > Remote syslog.
   syslog_enabled: false
