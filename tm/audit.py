@@ -41,6 +41,13 @@ SYSLOG_IDENT = 'topic-manager-audit'
 _LOG_AUTHPRIV = 10
 SEV_CRIT, SEV_WARNING, SEV_INFO = 2, 4, 6
 _MAX_DATAGRAM = 4096
+#: The longest one datagram may wait for room in the syslog daemon's receive
+#: queue. A Unix datagram send BLOCKS while the receiver's queue is full
+#: (net.unix.max_dgram_qlen: 512 on a host, 10 in a container's netns), so a
+#: stalled journald/rsyslog used to hang every gunicorn worker that wrote an
+#: audit record, forever. Past this bound the send is a failure (False), the
+#: record stays in the audit database, and the failure is logged at CRITICAL.
+SYSLOG_SEND_TIMEOUT = 0.5
 _CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f  ]')
 
 
@@ -76,19 +83,38 @@ def syslog_send(message, severity=SEV_INFO):
     try:
         s = socket.socket(af_unix, socket.SOCK_DGRAM)
         try:
+            s.settimeout(SYSLOG_SEND_TIMEOUT)     # never an unbounded wait
             s.connect(_syslog_path())
             s.send(data)
         finally:
             s.close()
         return True
+    except socket.timeout:
+        log.error('audit syslog: %s did not accept the record within %.1f s (its receive '
+                  'queue is full: the syslog daemon is stalled or not reading)',
+                  _syslog_path(), SYSLOG_SEND_TIMEOUT)
+        return False
     except OSError as exc:
-        log.warning('audit syslog: could not send to %s: %s', _syslog_path(), exc)
+        log.error('audit syslog: could not send to %s: %s', _syslog_path(), exc)
         return False
 
 
 def emit(record, severity=SEV_INFO):
-    """Send a COMMITTED audit record to syslog."""
-    return syslog_send(format_record(record), severity)
+    """Send a COMMITTED audit record to syslog. Returns syslog_send's verdict.
+
+    Every caller emits AFTER its commit, so the action has happened and its
+    record IS in the audit database; the owner's ruling (an action whose
+    record cannot be written does not happen) is already satisfied, and a
+    syslog failure here cannot undo either. It is not silent: the whole
+    record goes to the application log at CRITICAL as AUDIT_SYSLOG_FAILED, so
+    the gap in the off-host copy is visible and can be reconciled from the
+    database export."""
+    ok = syslog_send(format_record(record), severity)
+    if not ok:
+        log.critical('AUDIT_SYSLOG_FAILED: a committed audit record did NOT reach syslog, so it '
+                     'was not forwarded off the host; it is in the audit database: %s',
+                     format_record(record))
+    return ok
 
 
 class AuditUnavailable(RuntimeError):

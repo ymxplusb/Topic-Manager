@@ -2314,3 +2314,53 @@ TESTS|t38-install-upgrade-v120.sh
 EQUIV|no
 ANCHOR|install_if_absent 644 "${WORK_DIR}/nginx/tm-limits.conf" /etc/nginx/conf.d/topic-manager-limits.conf
 REPLACE|install -m 644 "${WORK_DIR}/nginx/tm-limits.conf" /etc/nginx/conf.d/topic-manager-limits.conf
+
+# ─── v1.2.0: the audit syslog send is bounded (a full queue never hangs) ─────
+--- M281
+DESC|audit: the syslog send blocks again (the defect exactly as it shipped)
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|            s.settimeout(SYSLOG_SEND_TIMEOUT)     # never an unbounded wait
+
+--- M282
+DESC|audit: the send bound is 5 s, not sub-second
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|SYSLOG_SEND_TIMEOUT = 0.5
+REPLACE|SYSLOG_SEND_TIMEOUT = 5.0
+
+--- M283
+DESC|audit: a timed-out send reports success
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|                  _syslog_path(), SYSLOG_SEND_TIMEOUT)
+ANCHOR|        return False
+REPLACE|                  _syslog_path(), SYSLOG_SEND_TIMEOUT)
+REPLACE|        return True
+
+--- M284
+DESC|audit: a full queue is reported as a generic send error (the reason is lost)
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    except socket.timeout:
+REPLACE|    except ZeroDivisionError:
+
+--- M285
+DESC|audit: a committed record that missed syslog is silent
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    if not ok:
+REPLACE|    if False:
+
+--- M286
+DESC|app: the diagnostic SysLogHandler blocks on a full queue again
+TESTS|t32-audit-syslog.sh
+TARGET|py:app
+EQUIV|no
+ANCHOR|        self.socket.settimeout(audit.SYSLOG_SEND_TIMEOUT)
+REPLACE|        pass

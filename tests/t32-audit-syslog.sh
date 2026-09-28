@@ -53,8 +53,14 @@ YAML
 }
 
 # The prelude every probe shares: a bound syslog socket and a way to read it.
+# Every probe is BOUNDED: a send that blocks (a full receiver queue) must be a
+# FAIL of that case, never a stalled job. faulthandler's watchdog thread fires
+# even while the main thread is stuck inside send(): it prints every thread's
+# stack and exits. _run adds timeout(1) outside it where the host has one.
 _PRELUDE='
-import json, os, socket, sqlite3, datetime, logging, io
+import faulthandler, os
+faulthandler.dump_traceback_later(int(os.environ.get("TM_PROBE_TIMEOUT") or 120), exit=True)
+import json, socket, sqlite3, datetime, logging, io
 SOCK = os.environ["TM_SYSLOG_SOCKET"]
 try: os.unlink(SOCK)
 except FileNotFoundError: pass
@@ -73,8 +79,11 @@ def break_audit():
     d.commit(); d.close()
 '
 
-_run() {   # _run <python body>
+_run() {   # _run <python body>   (TM_PROBE_TIMEOUT: seconds, default 120)
     printf '%s\n%s\n' "$_PRELUDE" "$1" > "${TM_TMP}/probe.py"
+    local -a bound=()
+    command -v timeout >/dev/null 2>&1 && bound=(timeout -k 5 "$(( ${TM_PROBE_TIMEOUT:-120} + 15 ))")
+    ${bound[@]+"${bound[@]}"} env \
     PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 TM_CONFIG="${TM_TMP}/config.yaml" \
         TM_TEST_DB="${TM_TMP}/tm.db" TM_CLUSTERS_DIR="${TM_TMP}/clusters.d" \
         TM_CLUSTER_CERT_DIR="${TM_TMP}/cluster-certs" TM_SYSLOG_SOCKET="${TM_TMP}/log.sock" \
@@ -104,9 +113,10 @@ from tm.models import init_db
 from tm import audit
 cfg = load_config(); init_db(cfg)
 acts = '''${acts}'''.split()
+got = []
 for a in acts:
     audit.log_action(cfg, 'user\nFORGED', a, 'target-' + a, 'detail\r\nline2', 'c1')
-got = drain()
+    got += drain()      # as a daemon reads: the queue holds 10 datagrams in a container
 print('sent=%d got=%d' % (len(acts), len(got)))
 missing = [a for a in acts if not any(('action=\"%s\"' % a) in g for g in got)]
 print('missing=%s' % missing)
@@ -124,6 +134,67 @@ print('sample=%s' % got[0])
     tm_assert_eq "tag=True" "$(grep '^tag=' <<<"$out")" "a record lacks the topic-manager-audit identifier"
 }
 tm_case "every-audit-action-reaches-syslog-exactly-once" linux a_every_action_emits_once
+
+a_full_queue_is_bounded() {
+    # A syslog daemon that stops reading: its receive queue fills (to
+    # net.unix.max_dgram_qlen, 10 in a container, 512 on a host) and a
+    # BLOCKING datagram send then waits forever — every gunicorn worker that
+    # writes an audit record hangs. The send must fail within its bound, the
+    # committed record stay in the database, and the failure be LOUD.
+    _setup
+    local out
+    out="$(TM_PROBE_TIMEOUT=30 _run "
+import sys, time
+from tm.config import load_config
+from tm.models import init_db
+from tm import audit
+cfg = load_config(); init_db(cfg)
+buf = io.StringIO(); h = logging.StreamHandler(buf)
+logging.getLogger('tm').addHandler(h); logging.getLogger('tm').setLevel(logging.INFO)
+# Fill the queue with a NON-blocking sender until the kernel refuses: the
+# host's own limit, whatever it is set to.
+tx = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM); tx.connect(SOCK); tx.setblocking(False)
+n = 0
+while n < 200000:
+    try:
+        tx.send(b'<86>filler'); n += 1
+    except BlockingIOError:
+        break
+print('filled=%s' % (0 < n < 200000))
+t0 = time.monotonic(); ok = audit.syslog_send('probe'); dt = time.monotonic() - t0
+print('send=%s bounded=%s' % (ok, dt < 2.0))
+t0 = time.monotonic(); rec = audit.log_action(cfg, 'alice', 'DELETE', 'orders', 'x', 'c1'); dt = time.monotonic() - t0
+print('log_action=%s bounded=%s' % (rec and rec['action'], dt < 2.0))
+d = db(); print('row=%d' % d.execute(\"SELECT COUNT(*) FROM audit_log WHERE action='DELETE' AND target='orders'\").fetchone()[0]); d.close()
+txt = buf.getvalue()
+print('loud=%s' % any(('AUDIT_SYSLOG_FAILED' in l and 'orders' in l) for l in txt.splitlines()))
+print('why=%s' % ('receive queue is full' in txt))
+# The diagnostic handler (logging.syslog_enabled) writes to the same kind of
+# socket; the CRITICAL above goes through it on a host that enables it.
+from tm.app import _BoundedSysLogHandler
+lg = logging.getLogger('probe.diag'); lg.propagate = False
+lg.addHandler(_BoundedSysLogHandler(address=SOCK))
+err, sys.stderr = sys.stderr, io.StringIO()
+t0 = time.monotonic(); lg.error('diagnostic line'); dt = time.monotonic() - t0
+sys.stderr = err
+print('diag_bounded=%s' % (dt < 2.0))
+drain()
+print('recovered=%s' % audit.syslog_send('after'))
+")"
+    tm_assert_eq "filled=True" "$(grep '^filled=' <<<"$out")" "the fixture could not fill the receive queue: ${out}"
+    tm_assert_eq "send=False bounded=True" "$(grep '^send=' <<<"$out")" \
+        "a send to a FULL syslog queue did not fail within 2 s (it blocks: every worker would hang): ${out}"
+    tm_assert_eq "log_action=DELETE bounded=True" "$(grep '^log_action=' <<<"$out")" \
+        "a committed audit record with syslog stalled did not return within 2 s: ${out}"
+    tm_assert_eq "row=1" "$(grep '^row=' <<<"$out")" "the committed record is not in the audit database"
+    tm_assert_eq "loud=True" "$(grep '^loud=' <<<"$out")" \
+        "a committed record that did not reach syslog was not logged CRITICAL with the record: ${out}"
+    tm_assert_eq "why=True" "$(grep '^why=' <<<"$out")" "the log does not say the syslog queue is full"
+    tm_assert_eq "diag_bounded=True" "$(grep '^diag_bounded=' <<<"$out")" \
+        "the diagnostic SysLogHandler blocked on a full queue: ${out}"
+    tm_assert_eq "recovered=True" "$(grep '^recovered=' <<<"$out")" "sending did not recover once the queue drained"
+}
+tm_case "a-full-syslog-queue-fails-the-send-within-its-bound" linux a_full_queue_is_bounded
 
 a_independent_of_syslog_enabled() {
     _setup

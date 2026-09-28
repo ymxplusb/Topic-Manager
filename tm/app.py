@@ -6,7 +6,7 @@ from flask.sessions import SecureCookieSessionInterface
 from werkzeug.middleware.proxy_fix import ProxyFix
 from .config import config_path, load_config, DEFAULT_SESSION_TIMEOUT_MINUTES
 from .models import init_db, get_db
-from . import settings_schema
+from . import audit, settings_schema
 
 # gunicorn binds 127.0.0.1:5001 and nginx is the only thing that talks to it,
 # so request.remote_addr is 127.0.0.1 for EVERY request. Nothing read nginx's
@@ -93,6 +93,20 @@ def create_app(config_path_arg=None):
     return app
 
 
+class _BoundedSysLogHandler(logging.handlers.SysLogHandler):
+    """SysLogHandler whose Unix socket never blocks for longer than
+    audit.SYSLOG_SEND_TIMEOUT. The stock handler's datagram send blocks while
+    the syslog daemon's receive queue is full, so a stalled journald/rsyslog
+    hung every worker at its next log line, and the CRITICAL that reports a
+    failed audit send would have hung the worker the audit fix just freed. A
+    send past the bound raises inside the handler, which logging reports on
+    stderr (handleError) and carries on."""
+
+    def _connect_unixsocket(self, address):
+        super()._connect_unixsocket(address)
+        self.socket.settimeout(audit.SYSLOG_SEND_TIMEOUT)
+
+
 def _setup_logging(cfg, app):
     log_cfg   = cfg.get('logging', {})
     level     = getattr(logging, log_cfg.get('log_level', 'INFO').upper(), logging.INFO)
@@ -104,7 +118,7 @@ def _setup_logging(cfg, app):
         # daemon, facility daemon. Forwarding it off the host is the host's
         # rsyslog configuration, not this application's.
         try:
-            handler = logging.handlers.SysLogHandler(
+            handler = _BoundedSysLogHandler(
                 address='/dev/log',
                 facility=logging.handlers.SysLogHandler.LOG_DAEMON,
             )
