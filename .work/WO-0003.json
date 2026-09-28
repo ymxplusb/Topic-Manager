@@ -927,10 +927,10 @@
       "at": "2026-09-28T20:48:57Z"
     },
     "ship": {
-      "code": 1,
-      "meaning": "a finding",
-      "verdict": "Tag v1.1.0 (b275d2d) pushed, annotated, peels to HEAD; pipeline 270 FAILED at scan: Sonar quality gate new_violations=6 (>0): S3776 tm/auth.py:59 and tm/migrate_clusters.py:212, S1871 tm/auth.py:48, S7632 tools/gen-requirements-lock.py:39, S6653 SettingsTab.js:567, S7776 TopBar.js:15. 0 bugs/vulns, hotspots 100% reviewed. publish/guides skipped; nothing published. Fix and cut v1.1.1.",
-      "at": "2026-09-28T20:04:54Z"
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "v1.1.1 (89f8c53) annotated tag on GitLab, peels to main; pipeline 273 success: version/prepare/build/test/scan/deps/audit/publish/guides green (report skipped). Sonar gate OK, new_violations 0. Release v1.1.1 + generic package topic-manager 1.1.1 published 2026-09-28T21:08Z. Deploy to prod .90 (upgrade-full.sh --offline) awaits James. v1.1.0 tag stands unpublished (pipeline 270 failed Sonar).",
+      "at": "2026-09-28T21:10:06Z"
     }
   }
 }
