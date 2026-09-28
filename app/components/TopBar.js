@@ -12,13 +12,13 @@
 //
 // The value shape is unchanged ('dark' | 'light' | 'cb' under 'tmTheme'), so
 // every preference saved by an earlier release still loads.
-const TM_THEMES = ['dark', 'light', 'cb'];
+const TM_THEMES = new Set(['dark', 'light', 'cb']);
 const TM_THEME_KEY = 'tmTheme';
 
 function tmReadTheme() {
     let saved = null;
     try { saved = localStorage.getItem(TM_THEME_KEY); } catch (e) { saved = null; }
-    return TM_THEMES.includes(saved) ? saved : 'dark';
+    return TM_THEMES.has(saved) ? saved : 'dark';
 }
 
 function tmSaveTheme(t) {
@@ -28,7 +28,7 @@ function tmSaveTheme(t) {
 // Colour-blind is its own palette and always dark; the three classes are
 // mutually exclusive, which is what the three-way menu has always meant.
 function tmApplyTheme(t) {
-    const theme = TM_THEMES.includes(t) ? t : 'dark';
+    const theme = TM_THEMES.has(t) ? t : 'dark';
     document.body.classList.remove('light-mode', 'cb-mode');
     if (theme === 'light') document.body.classList.add('light-mode');
     else if (theme === 'cb') document.body.classList.add('cb-mode');

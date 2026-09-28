@@ -39,14 +39,16 @@ def missing_ldap_keys(cfg):
     auth_cfg = (cfg or {}).get('auth') or {}
     if not isinstance(auth_cfg, dict):
         auth_cfg = {}
-    out = []
-    for k in REQUIRED_LDAP_KEYS:
-        v = str(auth_cfg.get(k) or '').strip()
-        if not v or ('<' in v and '>' in v):
-            out.append(k)
-        elif k == 'ldap_server' and not is_ldaps_url(v):
-            out.append(k)
-    return out
+    return [k for k in REQUIRED_LDAP_KEYS
+            if not _ldap_key_is_set(k, str(auth_cfg.get(k) or '').strip())]
+
+
+def _ldap_key_is_set(key, value):
+    """One required key's verdict: a value, not a <placeholder>, and for
+    ldap_server an ldaps:// URL."""
+    if not value or ('<' in value and '>' in value):
+        return False
+    return key != 'ldap_server' or is_ldaps_url(value)
 
 
 def _build_tls(cfg):
@@ -66,9 +68,7 @@ def validate_credentials(cfg, username, password):
       2. Re-bind with the user's UPN to verify the supplied password.
     Falls back to direct user-bind when service credentials are absent.
     """
-    auth_cfg = cfg.get('auth', {}) or {}
-    if not isinstance(auth_cfg, dict):
-        auth_cfg = {}
+    auth_cfg = _auth_section(cfg)
     # v1.1.0: NO built-in directory. These three used to default to one
     # particular site's domain controller, base DN and domain, so a config that
     # omitted them authenticated against a directory nobody configured. A
@@ -85,19 +85,19 @@ def validate_credentials(cfg, username, password):
     base_dn = auth_cfg['ldap_base_dn']
     required_group_dn = auth_cfg.get('required_group', '')
     domain = auth_cfg['ldap_domain']
-    bind_dn = auth_cfg.get('ldap_bind_dn', '')
-    bind_pw = auth_cfg.get('ldap_bind_password', '')
 
     sam = _normalise_sam(username)
     upn = f'{sam}@{domain}'
-    use_service_bind = bool(bind_dn and bind_pw and _BIND_PW_PLACEHOLDER not in bind_pw)
+    use_service_bind = _uses_service_bind(auth_cfg)
 
     tls = _build_tls(cfg)
     server = Server(ldap_url, get_info=ALL, tls=tls, use_ssl=True)
 
-    bind_user = bind_dn if use_service_bind else upn
-    bind_pass = bind_pw if use_service_bind else password
-    ok, err, conn = _ldap_bind(server, bind_user, bind_pass)
+    if use_service_bind:
+        ok, err, conn = _ldap_bind(server, auth_cfg['ldap_bind_dn'],
+                                   auth_cfg['ldap_bind_password'])
+    else:
+        ok, err, conn = _ldap_bind(server, upn, password)
     if not ok:
         return False, err
 
@@ -105,19 +105,48 @@ def validate_credentials(cfg, username, password):
     if entry is None:
         return False, err
 
-    user_dn = str(entry.distinguishedName) if entry.distinguishedName else ''
-    member_of = [str(g).lower() for g in (entry.memberOf.values if entry.memberOf else [])]
+    member_of = _member_of(entry)
 
     if use_service_bind:
-        ok, err, user_conn = _ldap_bind(server, upn, password)
+        # Phase 2: the service account found the user; only a bind AS the
+        # user proves the password.
+        ok, err = _verify_user_password(server, upn, password)
         if not ok:
             return False, err
-        user_conn.unbind()
 
     if required_group_dn and required_group_dn.lower() not in member_of:
         return False, f'Not a member of required group: {required_group_dn}'
 
-    return True, {
+    return True, _user_record(entry, sam, upn)
+
+
+def _auth_section(cfg):
+    auth_cfg = cfg.get('auth', {}) or {}
+    return auth_cfg if isinstance(auth_cfg, dict) else {}
+
+
+def _uses_service_bind(auth_cfg):
+    """A configured bind DN AND a bind password that is not the placeholder.
+    Anything less falls back to binding directly as the user."""
+    bind_dn = auth_cfg.get('ldap_bind_dn', '')
+    bind_pw = auth_cfg.get('ldap_bind_password', '')
+    return bool(bind_dn and bind_pw and _BIND_PW_PLACEHOLDER not in bind_pw)
+
+
+def _verify_user_password(server, upn, password):
+    ok, err, user_conn = _ldap_bind(server, upn, password)
+    if ok:
+        user_conn.unbind()
+    return ok, err
+
+
+def _member_of(entry):
+    """The entry's group DNs, lower-cased for a case-insensitive match."""
+    return [str(g).lower() for g in (entry.memberOf.values if entry.memberOf else [])]
+
+
+def _user_record(entry, sam, upn):
+    return {
         'username': sam,
         'display_name': str(entry.displayName) if entry.displayName else sam,
         'email': str(entry.mail) if entry.mail else '',

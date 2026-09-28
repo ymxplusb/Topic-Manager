@@ -36,7 +36,9 @@ import tempfile
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib'))
-import lockparse  # noqa: E402  (the ONE reader of requirements.lock, pip's rules)
+# The ONE reader of requirements.lock, pip's rules; importable only after the
+# sys.path insert above, hence the E402 waiver.
+import lockparse  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if '--root' in sys.argv:          # the tree to read (tools/check-requirements-lock.sh --root)
