@@ -241,6 +241,24 @@ Adversary and security-review findings, all fixed on this branch before release:
   exits 3 ("could not verify") unless `TM_LOCK_OFFLINE_OK=1` explicitly
   accepts a structure-only result. t25 covers the online branch against a fake PyPI.
 
+### Round 10 (gatekeeper, 2026-09-28)
+
+- **A trailing comment can no longer hide a lock entry from the hash check.** The structure
+  check stripped `# comments`; the hash check re-parsed the lock with a pattern that required
+  the line to end in hashes and silently skipped any other line. So
+  `blinker==1.9.0 --hash=sha256:<anything>  # pinned` passed as "PASS — 14 releases" on a
+  15-entry lock, while pip still honours that hash. The lock is now parsed once, by pip's rules
+  (continuations, comments), and the PyPI fetch and the hash check both use that entry list; the
+  hash check must judge every entry or the gate fails. t25 proves a commented bad hash goes red
+  (a one-line entry, and the last `--hash` line of a multi-hash entry) and a commented good one
+  stays green.
+- **Where the real lock meets live PyPI (corrected claim).** In v1.1.0, CI runs
+  `tests/run.sh --strict` only: t25 checks the real lock's structure offline and exercises the
+  online logic against a fake PyPI built from the lock's own hashes. CI does **not** verify the
+  real lock against live PyPI. That happens when `prepare-offline.sh` runs (it runs the gate
+  and stops on any failure) and when the gate is run by hand (2026-09-28: PASS, 15 releases).
+  v1.2.0 adds a `--require-online` CI step.
+
 ### Known limitations
 
 - **FIPS module boundary**: the `cryptography` and `confluent-kafka` wheels bundle their own

@@ -710,6 +710,54 @@
     "workstation suite": "200 passed / 0 failed / 77 skipped (modes/chown/symlink/apt/pty)"
    },
    "contract": "repo-tests note t00-t27 (28 files) + round-8 runner rules; version-surfaces 16-token rule enforced; audit list 16 (re-derived with the AST: SETTINGS_UPDATE is the 16th); sca/lock/env-neutral/sbom/config-example notes; no_ci_no_tests and principles now say t00-t27"
+  },
+  "round10": {
+   "date": "2026-09-28",
+   "trigger": "gatekeeper round-9 findings: B1 (blocking) trailing comment hides a lock entry from the hash check; B2 (James ruled: correct the claim, no .gitlab-ci.yml change on v1.1.0) CI never verifies the real lock against live PyPI",
+   "root_cause": {
+    "B1": "check-requirements-lock.sh parsed the lock TWICE with different rules. The structure check (PYCHK) stripped '# comments'; the hash check (PYHASH) and the curl fetch loop re-parsed the raw lock with patterns that required the line to END in hashes and silently `continue`d any other line, with only n_ok == 0 as a coverage floor. A bad hash followed by '  # pinned' passed structure, was never hash-checked, and the gate printed 'PASS - 14 releases' on a 15-entry lock while pip still honours that hash.",
+    "B2": "the contract and CHANGELOG implied the lock gate's live PyPI verification ran in CI; v1.1.0's CI runs tests/run.sh --strict only, where t25 checks the real lock structure-only and drives the online logic against a fake PyPI built from the lock's own hashes. The contract also still said live PyPI was 'blocked (exit 3)'; it passes live."
+   },
+   "files_changed": [
+    "tools/check-requirements-lock.sh: ONE parse of the lock by pip's req_file rules (backslash continuation unless a comment line; '#' at line start or after whitespace is a comment; a glued '#' is not). The structure check writes its accepted entries to the gate's temp dir (entries.json / entries.txt); the fetch loop and the hash check read that list, never the lock. The hash check must judge exactly len(entries) == nfetch entries or it FAILS (exit 1).",
+    "tests/t25-requirements-lock.sh: online-a-trailing-comment-cannot-hide-an-entry (bad hash + '# pinned' on blinker's one-line entry and on cffi's LAST --hash line -> RED and named; the same with good hashes -> GREEN with all 15 counted); online-the-lock-is-read-by-pips-rules (backslash on the last line keeps the last entry; column-0 comment ending a continuation is a comment; glued '#pinned' is a malformed hash -> RED). Added to close mutation survivors M09/M11/M17.",
+    ".claude/project.yml: requirements-lock note - round 10 parse/coverage, and where live PyPI verification actually happens in v1.1.0 (prepare-offline.sh:63 and by hand; CI = structure + fake-PyPI logic; v1.2.0 adds --require-online, REG-0007); stale 'blocked (exit 3)' replaced by the measured live PASS (15 releases); verified date 2026-09-28.",
+    "CHANGELOG.md: [1.1.0] Round 10 section - the B1 fix and the corrected live-PyPI claim."
+   ],
+   "amendments": [],
+   "consumers_addressed": "both re-parsers of the lock inside the gate (fetch loop sed, PYHASH regex) now consume the single parse. tools/gen-requirements-lock.py lock_set() has its own prefix regex (matches name==version at line start regardless of trailing text), so it is not blind to a commented line; left unchanged (out of scope, not affected).",
+   "self_check": "bash -n on both shell files; project.yml parses (PyYAML); git diff re-read.",
+   "live_pypi": "2026-09-28 by hand, python 3.12, macOS: real lock PASS - 15 releases. The gatekeeper's repro (blinker random hash + '# pinned'): round-9 gate 'PASS - 14 releases' exit 0; round-10 gate FAIL (missing target wheel hash + foreign hash) exit 1.",
+   "mutation_controls": {
+    "method": "scratch clone inside python:3.12-bookworm on the Linux host; one mutation at a time on a copy of the gate; anchor must match exactly once or the control aborts; PYTHONDONTWRITEBYTECODE=1; restore from cp verified by sha256 after every control; t25 via tests/run.sh --strict. tools/mutate.py does not exist in this repo and tests/mutate.sh targets only the installers, so the operators were applied mechanically over every changed line of the gate (comparison, boolean, guard, constant, dropped value).",
+    "results": [
+     "M01 whole fix reverted (round-9 gate) -> RED (trailing-comment case; pip-rules case)",
+     "M02 coverage compare == -> != -> RED (4 cases)",
+     "M03 coverage guard neutralised -> SURVIVED. Equivalent on every input: with one parse, every entry is fetched (or exit 3) and judged (or exit 3), so the guard is reachable only through a code defect. M19 shows such a defect is still caught without the guard (the '15 releases' count assertion). Kept as a defensive invariant; recorded, not hidden.",
+     "M04 n_judged += 0 -> RED (4)",
+     "M05 nfetch+0 -> RED (7)",
+     "M06 comment strip removed -> RED",
+     "M07 continuation test inverted -> RED",
+     "M08 continuation or -> and -> RED",
+     "M09 column-0 comment-line space guard neutralised -> SURVIVED in the first pass; closed by online-the-lock-is-read-by-pips-rules; re-run RED",
+     "M10 backslash not stripped on join -> RED",
+     "M11 final flush at EOF dropped -> SURVIVED in the first pass; closed by the same case; re-run RED",
+     "M12 parsed.append dropped -> RED",
+     "M13 hashes handed over empty -> RED",
+     "M14 fetch list short by one -> RED",
+     "M15 hash check short by one -> RED",
+     "M16 fetch loop reads nothing -> RED",
+     "M17 COMMENT without the whitespace rule -> SURVIVED in the first pass; closed by the same case; re-run RED",
+     "M18 COMMENT never matches -> RED",
+     "M19 M15 + M03 together -> RED (count assertion)"
+    ],
+    "tally": "19 run, 18 caught (3 of them after the new case), 1 SURVIVED (M03, documented equivalent)"
+   },
+   "test_runs": {
+    "linux_t25": "python:3.12-bookworm on 192.168.202.81, tree shipped as git bundle: t25 18 passed, 0 failed, 0 skipped",
+    "linux_full": "same container with the CI TEST_SETUP (sudo nodejs jq curl + pip -r requirements.txt): tests/run.sh --strict 286 passed, 0 failed, 0 skipped, exit 0. (Without the TEST_SETUP pip step, t20 fails 4 cases on 'No module named yaml' - environment, not this change.)"
+   },
+   "not_done": "No .gitlab-ci.yml change (James's ruling; v1.2.0 / REG-0007). Not pushed, not tagged."
   }
  },
  "decisions": [

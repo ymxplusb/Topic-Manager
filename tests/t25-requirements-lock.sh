@@ -239,6 +239,70 @@ h_altered_hash() {
 }
 tm_case "online-one-changed-hex-digit-is-caught" none h_altered_hash
 
+# ─── round 10 (gatekeeper B1): a trailing comment cannot hide an entry ───────
+# pip strips `  # comment` and still honours the hash in front of it; so does
+# the structure check. The hash check used a second parser that required the
+# line to END in hashes and `continue`d otherwise: a bad hash with a comment
+# after it passed as "PASS — 14 releases" on a 15-entry lock.
+# _comment_lock <which> <mode> — which: blinker (one line) | cffi (its LAST
+# --hash line); mode: bad (one hex digit changed) | good (hash unchanged).
+_comment_lock() {
+    tr -d '\r' < "${TM_REPO_ROOT}/requirements.lock" | awk -v which="$1" -v mode="$2" '
+        function alt(h) { return substr(h, 1, 63) (substr(h, 64, 1) == "0" ? "1" : "0") }
+        which == "blinker" && /^blinker==/ { getline nx; s = nx; sub(/.*sha256:/, "", s); sub(/[^0-9a-f].*$/, "", s)
+            print "blinker==1.9.0 --hash=sha256:" (mode == "bad" ? alt(s) : s) "  # pinned"; next }
+        which == "cffi" && /^cffi==/ { c = 1; print; next }
+        c && /--hash/ && !/\\$/ { s = $0; sub(/.*sha256:/, "", s); sub(/[^0-9a-f].*$/, "", s)
+            print "    --hash=sha256:" (mode == "bad" ? alt(s) : s) "  # pinned"; c = 0; next }
+        { print }' > "${TM_TMP}/c/requirements.lock"
+    grep -q '  # pinned$' "${TM_TMP}/c/requirements.lock" || tm_die "the ${1} comment fixture changed nothing"
+}
+h_trailing_comment() {
+    local which nv
+    for which in blinker cffi; do
+        case "$which" in blinker) nv="blinker==1.9.0" ;; cffi) nv="cffi==2.1.1" ;; esac
+        _copy; _fake_pypi; _comment_lock "$which" bad
+        _hash_gate
+        tm_assert_rc 1 "$RC" "a bad ${which} hash followed by '# pinned' stayed GREEN — gatekeeper B1: $(cat "${TM_TMP}/out")"
+        tm_assert_grep "FAIL: ${nv} — hash " "${TM_TMP}/out" "the commented bad ${which} hash was not named"
+        _copy; _fake_pypi; _comment_lock "$which" good
+        _hash_gate
+        tm_assert_rc 0 "$RC" "a GOOD ${which} hash followed by '# pinned' went red: $(cat "${TM_TMP}/out")"
+        tm_assert_grep "15 releases: every hash is one PyPI published" "${TM_TMP}/out" "a commented ${which} entry was not counted among the 15"
+    done
+}
+tm_case "online-a-trailing-comment-cannot-hide-an-entry" none h_trailing_comment
+
+# The same parse, on the other shapes pip reads (mutation survivors of round
+# 10): a backslash on the LAST line still ends the entry (pip flushes it);
+# a column-0 comment line ends a continuation and is itself a comment even
+# with no space before the backslash; a "#" glued to a hash is NOT a comment
+# to pip, so that hash is malformed and the gate must refuse it.
+h_pip_shapes() {
+    _copy; _fake_pypi
+    tr -d '\r' < "${TM_REPO_ROOT}/requirements.lock" | awk '{ l[NR] = $0 } END { for (i = 1; i < NR; i++) print l[i]; print l[NR] " \\" }' \
+        > "${TM_TMP}/c/requirements.lock"
+    _hash_gate
+    tm_assert_rc 0 "$RC" "a backslash on the lock's last line went red: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "15 releases: every hash is one PyPI published" "${TM_TMP}/out" "a backslash on the last line lost the last entry"
+    _copy; _fake_pypi
+    tr -d '\r' < "${TM_REPO_ROOT}/requirements.lock" | awk '
+        /^blinker==/ { print; getline; print $0 "\\"; print "# a note, column 0"; next } { print }' > "${TM_TMP}/c/requirements.lock"
+    grep -q '^# a note, column 0$' "${TM_TMP}/c/requirements.lock" || tm_die "the column-0 comment fixture changed nothing"
+    _hash_gate
+    tm_assert_rc 0 "$RC" "a column-0 comment ending blinker's continuation went red: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "15 releases: every hash is one PyPI published" "${TM_TMP}/out" "the column-0 comment lost an entry"
+    _copy
+    tr -d '\r' < "${TM_REPO_ROOT}/requirements.lock" | awk '
+        /^blinker==/ { print; getline; print $0 "#pinned"; next } { print }' > "${TM_TMP}/c/requirements.lock"
+    grep -q '#pinned$' "${TM_TMP}/c/requirements.lock" || tm_die "the glued-# fixture changed nothing"
+    PATH="${TM_TMP}/nobin:${PATH}" TM_LOCK_OFFLINE_OK=1 bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "a hash with a glued '#pinned' (not a comment to pip) passed"
+    tm_assert_grep "blinker has a malformed hash" "${TM_TMP}/out" "the glued '#' was not reported as a malformed hash"
+}
+_pip_shapes_wrap() { _offline; h_pip_shapes; }
+tm_case "online-the-lock-is-read-by-pips-rules" none _pip_shapes_wrap
+
 h_no_false_red() {
     # A NON-target hash dropped (pip never picks that file on the target), and
     # a new non-target wheel PyPI published: both GREEN.

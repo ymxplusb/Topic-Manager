@@ -314,7 +314,7 @@ gates:
       round 8 also on a REMOVED token and a non-numeric one.
   - name: requirements-lock
     cmd: "bash tools/check-requirements-lock.sh"
-    verified: 2026-09-27
+    verified: 2026-09-28
     note: >-
       ROUND 9 (gatekeeper B2): with PyPI reachable it (1) runs
       gen-requirements-lock.py --check-set (the resolved name==version set
@@ -334,8 +334,22 @@ gates:
       a dropped target hash and one changed hex digit go RED, a dropped
       non-target hash and a newly published non-target wheel stay GREEN. ROUND 8:
       offline it had printed "NOT verified" and exited 0.
-      Round 9 verification here: t25's fake-PyPI branch and offline cases pass;
-      live PyPI verification is blocked by sandbox DNS/network access (exit 3).
+      ROUND 10 (gatekeeper B1): ONE parse of the lock, pip's rules
+      (backslash continuations, a "#" at line start or after whitespace is a
+      comment). The structure check's accepted entries are the list the PyPI
+      fetch and the hash check use; the hash check must judge EXACTLY that
+      many entries or it FAILS. Round 9 had a second parser that skipped a line
+      ending in "# comment": a bad hash there passed as "PASS — 14 releases" on
+      a 15-entry lock while pip still honoured it. t25 covers a commented bad
+      hash (blinker one-line; cffi's last --hash line) RED, commented good GREEN.
+      WHERE THE REAL LOCK IS CHECKED AGAINST LIVE PyPI IN v1.1.0 (James,
+      round 10): only (a) prepare-offline.sh, which runs this gate and dies on
+      any non-zero exit (prepare-offline.sh:63), and (b) running this gate by
+      hand. CI does NOT: v1.1.0's .gitlab-ci.yml runs tests/run.sh --strict
+      only, where t25 checks the REAL lock structure-only (curl stubbed,
+      TM_LOCK_OFFLINE_OK=1) and drives the online logic against a FAKE PyPI
+      built from the lock's own hashes. v1.2.0 adds a --require-online CI step
+      (REG-0007). Measured 2026-09-28 by hand, live PyPI: PASS, 15 releases.
       requirements.lock (tools/gen-requirements-lock.py) pins every Python
       package incl. transitive ones with the sha256 of every published wheel;
       every installer uses it with --require-hashes --only-binary :all:. The

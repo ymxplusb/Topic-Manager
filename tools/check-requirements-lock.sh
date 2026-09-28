@@ -24,10 +24,38 @@ PY="${PYTHON:-python3}"
 command -v "$PY" >/dev/null 2>&1 || PY=python
 command -v "$PY" >/dev/null 2>&1 || { echo "check-requirements-lock: no python found" >&2; exit 3; }
 
-"$PY" - "$(cygpath -m "$ROOT" 2>/dev/null || printf '%s' "$ROOT")" <<'PYCHK'
-import os, re, sys
-root = sys.argv[1]
+# One parse of the lock, shared by every check below (round 10, gatekeeper
+# B1): the structure check writes the entries it accepted to ${JDIR}; the
+# PyPI fetch and the hash check read THAT list, never the lock again. A second
+# parser that disagreed with this one (it did not strip a trailing comment)
+# silently skipped entries while the verdict counted what was left.
+JDIR="$(mktemp -d "${TMPDIR:-/tmp}/tm-lockjson.XXXXXX")" || { echo "check-requirements-lock: mktemp failed" >&2; exit 3; }
+trap 'rm -rf -- "$JDIR"' EXIT
+JDIR_PY="$(cygpath -m "$JDIR" 2>/dev/null || printf '%s' "$JDIR")"
+
+"$PY" - "$(cygpath -m "$ROOT" 2>/dev/null || printf '%s' "$ROOT")" "$JDIR_PY" <<'PYCHK'
+import json, os, re, sys
+root, jdir = sys.argv[1], sys.argv[2]
 def norm(n): return re.sub(r"[-_.]+", "-", n).lower()
+# pip's own requirements-file rules (pip._internal.req.req_file): a line
+# ending in a backslash continues onto the next unless it is a comment line;
+# the joined line then loses everything from a "#" at its start or after
+# whitespace. A "#" glued to a token is NOT a comment to pip, nor here.
+COMMENT = re.compile(r"(^|\s+)#.*$")
+def logical_lines(text):
+    buf = []
+    for line in text.splitlines():
+        if not line.endswith("\\") or COMMENT.match(line):
+            if COMMENT.match(line):
+                line = " " + line
+            if buf:
+                buf.append(line); yield "".join(buf); buf = []
+            else:
+                yield line
+        else:
+            buf.append(line.strip("\\"))
+    if buf:
+        yield "".join(buf)
 req = os.path.join(root, "requirements.txt"); lock = os.path.join(root, "requirements.lock")
 if not os.path.isfile(lock):
     print("FAIL: requirements.lock is missing — the installers use it with --require-hashes"); sys.exit(1)
@@ -38,10 +66,10 @@ for line in open(req, encoding="utf-8"):
         n, v = line.split("==", 1); pins[norm(n)] = v.strip()
 if not pins:
     print("FAIL: no == pins in requirements.txt"); sys.exit(1)
-text = open(lock, encoding="utf-8").read().replace("\r\n", "\n").replace("\\\n", " ")
-entries, fail = {}, 0
-for line in text.splitlines():
-    line = line.split("#", 1)[0].strip() if not line.lstrip().startswith("--hash") else line.strip()
+text = open(lock, encoding="utf-8").read().replace("\r\n", "\n")
+entries, parsed, fail = {}, [], 0
+for line in logical_lines(text):
+    line = COMMENT.sub("", line).strip()
     if not line:
         continue
     m = re.match(r"^([A-Za-z0-9._-]+)==([^\s]+)((?:\s+--hash=sha256:\S+)*)\s*$", line)
@@ -56,6 +84,7 @@ for line in text.splitlines():
     if bad:
         print("FAIL: %s has a malformed hash: %s" % (name, bad[0][:20])); fail += 1
     entries[name] = ver
+    parsed.append({"name": m.group(1), "version": ver, "hashes": hs})
 for n, v in sorted(pins.items()):
     if n not in entries:
         print("FAIL: requirements.txt pins %s==%s but requirements.lock does not carry it" % (n, v)); fail += 1
@@ -64,6 +93,10 @@ for n, v in sorted(pins.items()):
               % (n, v, entries[n])); fail += 1
 if fail:
     print("check-requirements-lock: %d problem(s)." % fail); sys.exit(1)
+with open(os.path.join(jdir, "entries.json"), "w", encoding="utf-8") as f:
+    json.dump(parsed, f)
+with open(os.path.join(jdir, "entries.txt"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("".join("%s==%s\n" % (e["name"], e["version"]) for e in parsed))
 print("check-requirements-lock: %d packages locked (%d direct pins agree), every one hash-pinned."
       % (len(entries), len(pins)))
 PYCHK
@@ -111,8 +144,8 @@ esac
 #        adding those on PyPI cannot turn the gate red. A new target file does
 #        require regeneration (deliberately; rare for a fixed release).
 #    Fetched with curl (one file per release), judged by python.
-JDIR="$(mktemp -d "${TMPDIR:-/tmp}/tm-lockjson.XXXXXX")" || { echo "check-requirements-lock: mktemp failed" >&2; exit 3; }
-trap 'rm -rf -- "$JDIR"' EXIT
+#    The releases are the structure check's entries (entries.txt), so a line
+#    this loop could not parse cannot quietly go unfetched.
 nfetch=0
 while IFS= read -r nv; do
     n="${nv%%==*}"; v="${nv#*==}"
@@ -121,14 +154,14 @@ while IFS= read -r nv; do
         exit 3
     fi
     nfetch=$((nfetch+1))
-done < <(tr -d '\r' < "${ROOT}/requirements.lock" | sed -n 's/^\([A-Za-z0-9._-][A-Za-z0-9._-]*\)==\([^[:space:]\\]*\).*/\1==\2/p')
+done < "${JDIR}/entries.txt"
 [[ $nfetch -gt 0 ]] || { echo "check-requirements-lock: COULD NOT VERIFY — no release was fetched. Exit 3."; exit 3; }
 
-"$PY" - "$(cygpath -m "$ROOT" 2>/dev/null || printf '%s' "$ROOT")" "$(cygpath -m "$JDIR" 2>/dev/null || printf '%s' "$JDIR")" <<'PYHASH'
+"$PY" - "$JDIR_PY" "$nfetch" <<'PYHASH'
 import json, os, re, sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-root, jdir = sys.argv[1], sys.argv[2]
-text = open(os.path.join(root, "requirements.lock"), encoding="utf-8").read().replace("\r\n", "\n").replace("\\\n", " ")
+jdir, nfetch = sys.argv[1], int(sys.argv[2])
+entries = json.load(open(os.path.join(jdir, "entries.json"), encoding="utf-8"))
 
 def target(fn):
     """A wheel pip would choose on CPython 3.12 / x86_64 glibc."""
@@ -156,13 +189,9 @@ def target(fn):
     return ok and any(manylinux(p) for p in plats)
 
 fail = unver = 0
-n_ok = 0
-for line in text.splitlines():
-    m = re.match(r"^([A-Za-z0-9._-]+)==([^\s]+)((?:\s+--hash=sha256:\S+)*)\s*$", line.strip())
-    if not m:
-        continue
-    name, ver = m.group(1), m.group(2)
-    hs = re.findall(r"--hash=sha256:(\S+)", m.group(3))
+n_ok = n_judged = 0
+for ent in entries:
+    name, ver, hs = ent["name"], ent["version"], ent["hashes"]
     path = os.path.join(jdir, "%s==%s.json" % (name, ver))
     try:
         meta = json.load(open(path, encoding="utf-8"))
@@ -174,6 +203,7 @@ for line in text.splitlines():
         print("COULD NOT VERIFY: %s==%s — PyPI's answer could not be read (%s)" % (name, ver, e.__class__.__name__))
         unver += 1
         continue
+    n_judged += 1
     if not published:
         print("FAIL: %s==%s — PyPI publishes no files for this release" % (name, ver)); fail += 1; continue
     foreign = [h for h in hs if h not in published]
@@ -190,6 +220,11 @@ for line in text.splitlines():
         fail += 1
 if unver:
     print("check-requirements-lock: COULD NOT VERIFY — %d release(s) unreadable. Exit 3." % unver); sys.exit(3)
+# Coverage (round 10, gatekeeper B1): EVERY entry the structure check counted
+# was fetched and judged. A shortfall is a failure, never a skip.
+if not (n_judged == nfetch == len(entries)):
+    print("check-requirements-lock: FAIL — the lock has %d entries but %d were fetched and %d hash-checked."
+          % (len(entries), nfetch, n_judged)); sys.exit(1)
 if fail:
     print("check-requirements-lock: FAIL — %d hash problem(s)." % fail); sys.exit(1)
 if n_ok == 0:
