@@ -554,24 +554,50 @@ promote:
     name: TopicManager
     user: claude_admin
     key: ~/.ssh/claude_admin
-    running_version: "1.0.6 (measured 2026-09-26 — but tm/VERSION read 1.0.6 in every tag v1.0.6..v1.0.11, so this cannot say which of those six is installed)"
+    running_version: "1.1.1 (MEASURED 2026-09-28 after the upgrade: /api/health {\"status\":\"ok\",\"version\":\"1.1.1\"})"
     note: >-
-      MEASURED 2026-09-02: `curl -sk https://192.168.202.90/api/health` returns
-      {"status":"ok","version":"1.0.4"}, so the host has taken the v1.0.4
-      release since the last sweep and running_version above was moved 1.0.3 ->
-      1.0.4 to match the MEASUREMENT, not the repo. This field tracks the HOST,
-      never the repo: the v1.0.5 cascade did NOT move it to 1.0.5, because
-      1.0.5 is not deployed. Two earlier notes here asserted a remembered
-      number that contradicted the field they annotated. Run the curl.
-  qc_host: none
+      This field tracks the HOST, never the repo: move it only after running
+      `curl -sk https://192.168.202.90/api/health`. Upgraded 1.0.6 -> 1.1.1 on
+      2026-09-28 by the ONLINE path below (WO-0003). NEVER run
+      `tests/run.sh --remote` against this host: 8 leftover tm-tests-* trees
+      were found in /tmp from earlier remote runs and deleted 2026-09-28.
+    online_source: >-
+      The repo is INTERNAL, so an anonymous clone is refused. root on .90 has a
+      READ-ONLY GitLab deploy key (project 9, deploy key id 2,
+      /root/.ssh/tm_gitlab_deploy, ECDSA P-384) with a /root/.ssh/config Host
+      entry and GitLab's host keys pinned in /root/.ssh/known_hosts.gitlab
+      (checked against .81's /etc/ssh). Use
+      --repo-url git@git.int.crypticlight.com:james.rodman/topic-manager.git
+      --repo-branch vX.Y.Z --repo-commit <40-hex>. Never put a token in an
+      https --repo-url: upgrade-full.sh prints the URL to its log.
+  qc_host:
+    host: 192.168.202.92
+    name: tm-qc
+    declared: "2026-09-28 by James (WO-0004)"
+    user: claude_admin
+    key: "~/.ssh/tm_qc_ecdsa384 (ECDSA P-384 — the FIPS host REFUSES Ed25519)"
+    sudo: "password; Vault KV creds/data/infra-accounts/local/tm-qc-claude_admin field password (Vault LDAP login from the operator credential; never print it)"
+    platform: "Ubuntu 24.04.4 + Ubuntu Pro, FIPS on (fips_enabled=1), USG STIG (cis/disa profile as hardened), umask 0007, AIR-GAPPED (no internet)"
+    datastore: "Host_1_Localv2 (esxi-1 local)"
+    snapshots: "clean-ubuntu -> stig-fips -> v110-installed (v1.1.0 installed; STIG audit 209 pass / 8 fail)"
+    revert: >-
+      Claude reverts it with govc on James's instruction (vCenter creds from
+      Vault secret/hooks/vcenter). Every revert DROPS the Mac's key (the
+      snapshots predate it): re-add it by one password login.
+    offline_build_host: "runner claude_admin@192.168.202.81, `sudo -n docker run --rm ubuntu:24.04`, tree shipped as a git BUNDLE (git archive false-fails t21)"
+    may_leave_installed: "yes — the release under test stays installed for the render proof and a ZAP ACTIVE scan (this is the disposable target; prod never is)"
   note: >-
     cortex-2 (192.168.202.96) is RESERVED for CORTEX /qc and must not be used
-    for Topic Manager. There is no QC host for this project.
+    for Topic Manager. tm-qc above is this project's QC host.
   procedure:
-    - "install/upgrade-full.sh --audit-only   # must exit 0 before proceeding"
-    - "take a vCSA snapshot"
-    - "install/upgrade-full.sh --backup-only  # verified restore point"
-    - "install/upgrade-full.sh                # full upgrade, auto-rollback on failure"
+    - "install/upgrade-full.sh --audit-only   # exit 0 = clear; 1 = WARNINGS ONLY: proceed only when every warning is a change this release makes on purpose (e.g. tm.db 0644->0600, TLS1.0/1.1 removed); 2 = BLOCKERS: stop"
+    - "take a vCSA snapshot (govc snapshot.create; memory excluded, not quiesced)"
+    - "install/upgrade-full.sh --backup-only  # verified restore point (it prints 'Baseline recorded (N paths)')"
+    - "install/upgrade-full.sh                # full upgrade, auto-rollback on failure; run it detached (setsid nohup) and log to /root/tm-upgrade-<ver>-*.log"
+    - "then verify the HOST: /api/version + /api/health, TLS1.0/1.1 refused, headers, ?v= assets 200, services active, tm.db 0600; reboot if it says one is needed; remove the snapshot afterwards"
+  procedure_variants:
+    online: "every step takes --repo-url <deploy-key git@ URL> --repo-branch vX.Y.Z --repo-commit <40-hex> (see prod.online_source)"
+    offline: "stage the prepare-offline.sh --bundle output at /var/lib/topic-manager/offline-src, then run /var/lib/topic-manager/offline-src/install/upgrade-full.sh [--audit-only|--backup-only] --offline"
   no_agent_holds_a_deploy_verb: true
 
 # ── review engines ──────────────────────────────────────────────────────────
