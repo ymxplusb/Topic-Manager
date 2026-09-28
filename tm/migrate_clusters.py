@@ -223,41 +223,12 @@ def migrate(config_path, clusters_dir, owner=None):
     has_store = isinstance(existing, dict) and isinstance(existing.get('clusters'), list)
     already = existing.get('clusters') if has_store else None
 
-    with open(config_path, 'r', encoding='utf-8') as fh:
-        config_text = fh.read()
-    parsed = yaml.safe_load(config_text)
-    if not isinstance(parsed, dict):
-        raise SystemExit('migrate-clusters: %s did not parse to a mapping'
-                         % config_path)
-    legacy = parsed.get('clusters')
+    config_text, legacy = _read_config(config_path)
 
-    actions = []
-
-    if already:
-        if legacy:
-            actions.append('clusters.yaml already holds %d profile(s); the stale '
-                           'block in config.yaml is being removed' % len(already))
-        else:
-            print('migrate-clusters: already migrated (%d profile(s) in %s)'
-                  % (len(already), clusters_path))
-            return 0
-    elif legacy:
-        _atomic_write(clusters_path, _HEADER + yaml.safe_dump(
-            {'clusters': legacy}, sort_keys=False, default_flow_style=False,
-            allow_unicode=True), owner=owner, mode=CLUSTERS_MODE)
-        actions.append('moved %d cluster profile(s) out of config.yaml into %s'
-                       % (len(legacy), clusters_path))
-    elif has_store:
-        print('migrate-clusters: already migrated (0 profiles in %s; add them in '
-              'Settings > General > Cluster Profiles)' % clusters_path)
+    settled = _settle_store(clusters_path, already, has_store, legacy, owner)
+    if settled is None:
         return 0
-    else:
-        # A fresh host: an EMPTY store, created 0640 for the service account
-        # through _atomic_write so it never exists at the wrong mode.
-        _atomic_write(clusters_path, _HEADER_FRESH + 'clusters: []\n',
-                      owner=owner, mode=CLUSTERS_MODE)
-        actions.append('created an empty cluster store at %s — add clusters in '
-                       'Settings > General > Cluster Profiles' % clusters_path)
+    actions = [settled]
 
     if legacy is not None:
         new_text, removed = strip_clusters_block(config_text, clusters_path)
@@ -265,6 +236,55 @@ def migrate(config_path, clusters_dir, owner=None):
             _atomic_write(config_path, new_text, template=config_path)
             actions.append('removed the clusters: block from %s' % config_path)
 
+    _verify_migrated(config_path, clusters_path)
+
+    for action in actions:
+        print('migrate-clusters: %s' % action)
+    return 0
+
+
+def _read_config(config_path):
+    """(config.yaml text, its top-level clusters value or None). Refuses a file
+    that is not a mapping."""
+    with open(config_path, 'r', encoding='utf-8') as fh:
+        config_text = fh.read()
+    parsed = yaml.safe_load(config_text)
+    if not isinstance(parsed, dict):
+        raise SystemExit('migrate-clusters: %s did not parse to a mapping'
+                         % config_path)
+    return config_text, parsed.get('clusters')
+
+
+def _settle_store(clusters_path, already, has_store, legacy, owner):
+    """Bring clusters.yaml to its migrated state and return the action to
+    report — or None when the host was already migrated and there is nothing
+    else to do, which it has already said."""
+    if already:
+        if legacy:
+            return ('clusters.yaml already holds %d profile(s); the stale '
+                    'block in config.yaml is being removed' % len(already))
+        print('migrate-clusters: already migrated (%d profile(s) in %s)'
+              % (len(already), clusters_path))
+        return None
+    if legacy:
+        _atomic_write(clusters_path, _HEADER + yaml.safe_dump(
+            {'clusters': legacy}, sort_keys=False, default_flow_style=False,
+            allow_unicode=True), owner=owner, mode=CLUSTERS_MODE)
+        return ('moved %d cluster profile(s) out of config.yaml into %s'
+                % (len(legacy), clusters_path))
+    if has_store:
+        print('migrate-clusters: already migrated (0 profiles in %s; add them in '
+              'Settings > General > Cluster Profiles)' % clusters_path)
+        return None
+    # A fresh host: an EMPTY store, created 0640 for the service account
+    # through _atomic_write so it never exists at the wrong mode.
+    _atomic_write(clusters_path, _HEADER_FRESH + 'clusters: []\n',
+                  owner=owner, mode=CLUSTERS_MODE)
+    return ('created an empty cluster store at %s — add clusters in '
+            'Settings > General > Cluster Profiles' % clusters_path)
+
+
+def _verify_migrated(config_path, clusters_path):
     # Verify, do not assume. A migration that reported success while leaving
     # both files holding a cluster list is the shadowing failure this split
     # exists to prevent.
@@ -276,10 +296,6 @@ def migrate(config_path, clusters_dir, owner=None):
     if not isinstance(after_clu, dict) or not isinstance(after_clu.get('clusters'), list):
         raise SystemExit('migrate-clusters: %s does not hold a cluster list '
                          'after migration' % clusters_path)
-
-    for action in actions:
-        print('migrate-clusters: %s' % action)
-    return 0
 
 
 def main(argv=None):

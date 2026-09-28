@@ -169,6 +169,21 @@ c_rail_search_finds_the_card() {
 }
 tm_case "rail-search-matches-card-titles" node c_rail_search_finds_the_card
 
+c_entities_decode_only_own_names() {
+    # v1.1.1 (Sonar S6653): the lookup is Object.hasOwn(SETTINGS_ENTITIES, ref).
+    # An unknown name, or a name that exists only on Object.prototype, must
+    # come back exactly as written, never as undefined or a function's source.
+    _probe decode > "${TM_TMP}/out"
+    tm_assert_eq '"A & B"' "$(_field "${TM_TMP}/out" decode.named)" "a known entity was not decoded"
+    tm_assert_eq "\"it's\"" "$(_field "${TM_TMP}/out" decode.numeric)" "a decimal reference was not decoded"
+    tm_assert_eq '"AB"' "$(_field "${TM_TMP}/out" decode.hex)" "a hex reference was not decoded"
+    tm_assert_eq '"x &bogus; y"' "$(_field "${TM_TMP}/out" decode.unknown)" "an unknown entity was not left as written"
+    tm_assert_eq '"&constructor; &toString; &hasOwnProperty;"' "$(_field "${TM_TMP}/out" decode.prototype)" \
+        "a name inherited from Object.prototype was treated as an entity"
+    tm_assert_eq '"<b> — &nope;"' "$(_field "${TM_TMP}/out" decode.mixed)" "a mixed string decoded wrongly"
+}
+tm_case "entities-decode-only-their-own-names" node c_entities_decode_only_own_names
+
 c_saved_group_is_restored() {
     _probe group-saved-valid > "${TM_TMP}/out"
     tm_assert_eq "support" "$(_field "${TM_TMP}/out" activeGroup)" \

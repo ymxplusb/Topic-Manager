@@ -849,6 +849,48 @@
         "upgrade-full.sh lock grep not moved onto the parser (reason in consumers_addressed).",
         "gates not run as gatekeeper; no push/tag."
       ]
+    },
+    "round13": {
+      "date": "2026-09-28",
+      "branch": "release/v1.1.1 (from b275d2d = tag v1.1.0)",
+      "commits": {
+        "621207a": "characterisation tests recorded on v1.1.0",
+        "1e30bc2": "the six Sonar fixes",
+        "339ddc2": "tests closing mutation survivors",
+        "df57ac2": "v1.1.1 version cascade"
+      },
+      "root_cause": "v1.1.0's new code carried six Sonar code smells (S3776 x2, S1871, S7632, S6653, S7776) and the gate fails on new_violations > 0; nothing ran Sonar's rules before the tag, so pipeline 270 was the first check and published nothing.",
+      "files_changed": [
+        "tm/auth.py",
+        "tm/migrate_clusters.py",
+        "tools/gen-requirements-lock.py",
+        "app/components/SettingsTab.js",
+        "app/components/TopBar.js",
+        "tests/t07-config-reload.sh",
+        "tests/t08-settings-banner.sh",
+        "tests/t20-directory-config.sh",
+        "tests/lib/auth_probe.py",
+        "tests/lib/auth_probe.expected",
+        "tests/lib/migrate_probe.py",
+        "tests/lib/migrate_probe.expected",
+        "tests/lib/settings-probe.js",
+        "cascade: VERSION tm/VERSION SBOM.md PPSM.csv install.sh prepare-offline.sh app/styles/main.css README.md docs/INSTALL.md index.html app/components/modals/AboutModal.js CHANGELOG.md"
+      ],
+      "amendments": [
+        "tm/migrate_clusters.py, tools/gen-requirements-lock.py - not in scout.scope (scouted for v1.1.0 features); named by the coordinator's brief as Sonar issue sites",
+        "tests/lib/auth_probe.py, migrate_probe.py (+ .expected), settings-probe.js, t07/t08/t20 - characterisation and survivor-closing tests the brief required"
+      ],
+      "consumers_addressed": "TM_THEMES: 2/2 readers (tmReadTheme, tmApplyTheme) switched to .has(); no other reference in app/, tests/ or tools/. validate_credentials: sole caller tm/routes.py unchanged signature; t16 stubs it by name (unchanged). migrate(): signature unchanged (main, install.sh, upgrade-full.sh, t07).",
+      "behaviour_notes": "Removed the unused user_dn local in validate_credentials (read entry.distinguishedName, assigned, never used). Object.hasOwn raises the browser floor to Chrome/Edge 93, Firefox 92, Safari 15.4; the repo states no floor, already required ES2020; recorded in CHANGELOG 1.1.1.",
+      "gates": "Linux container python:3.12-bookworm on .202.81, git bundle of df57ac2, CI TEST_SETUP: python-syntax, shell-syntax, frontend-syntax (incl tests/lib/*.js), config-example, heredoc-python, sbom-consistency, sca (15/15 clean), ppsm-consistency (34 rows), env-neutral, version-surfaces (1.1.1, 16 tokens 1101), requirements-lock (PASS 15, live PyPI) all rc 0. tests/run.sh --strict 303 passed / 0 failed / 0 skipped.",
+      "before_after": "621207a (v1.1.0 code + new tests): t07 16/0, t20 17/0. 339ddc2: t07, t08, t15, t20 green; t08 + t15 also green against the v1.1.0 SettingsTab.js/TopBar.js. Transcripts recorded on b275d2d twice, byte-identical.",
+      "mutation_controls": {
+        "method": "mechanical AST mutator (scratch, stdlib; tools/mutate.py does not exist in this repo; tests/mutations.txt targets shell only), operators comparison/boolean/guard/constant/returns, exhaustive over the refactored functions, one at a time on a scratch copy, PYTHONDONTWRITEBYTECODE + __pycache__ cleared per mutant, restore hash-verified, baseline re-matched. JS: 7 hand controls, anchor must match exactly once.",
+        "tm/auth.py": "89 mutants, first pass 83 killed / 6 SURVIVED (log text x2, _auth_section guard, _member_of guard, _user_record mail guard, _ldap_key_is_set return False->None). Closed by log capture + absent-attribute entry: 87 killed / 2 survived, both equivalent: M014 return False->None read only through `not`; M067 _auth_section isinstance guard unreachable because missing_ldap_keys refuses a non-mapping auth first.",
+        "tm/migrate_clusters.py": "68 mutants, first pass 62 killed / 3 SURVIVED / 3 aborted. allow_unicode=True->False closed by a non-ASCII profile: 63 killed / 2 survived, both equivalent: M016 `if removed` -> True rewrites identical text then the verification refuses with the same message; M031 'utf-8~' normalises to utf_8. Aborted (correctly, not passes): M042/M044 `return None`->None no change; M066 implicit string concatenation.",
+        "js": "J1 read accepts any saved value RED; J2 apply accepts any RED; J3 Set drops 'cb' RED; J4 Array (no .has) RED; J5 hasOwn->true first SURVIVED, J7 hasOwn->`in` first SURVIVED - closed by t08 entities-decode-only-their-own-names, both now RED; J6 hasOwn->false RED."
+      },
+      "not_done": "No Sonar scan run (Community edition, one project key; not uploaded per brief) - the six are fixed at the code but not re-measured by Sonar; the tag pipeline is the first proof. .claude/project.yml not edited (no stale fact found; its t00-t27 count is unchanged). Not pushed, not tagged."
     }
   },
   "decisions": [
@@ -857,6 +899,12 @@
       "date": "2026-09-26",
       "id": "kafka-fips-risk-acceptance",
       "ruling": "RISK ACCEPTED for now: confluent-kafka 2.15.1 wheel bundles librdkafka + its own OpenSSL, so Kafka client TLS runs outside the host's FIPS 140-3 validated module (SC-13, SRG-APP-000014/000514). Revisit: switch to distro python3-confluent-kafka linked to system OpenSSL, or a site-built wheel."
+    },
+    {
+      "by": "James",
+      "date": "2026-09-28",
+      "id": "browser-floor-object-hasown",
+      "ruling": "ACCEPTED: Object.hasOwn (Sonar S6653 fix, SettingsTab.js:567) raises the Settings tab's minimum browser to Chrome/Edge 93, Firefox 92, Safari 15.4. Stated in CHANGELOG 1.1.1."
     }
   ],
   "stages": {
@@ -875,8 +923,14 @@
     "assure": {
       "code": 0,
       "meaning": "passed",
-      "verdict": "BACKFILLED 2026-09-28. Gatekeeper CONFIRMED round 12 @ 8ccbb10 (11 gates pass; lock/sca/sbom falsified red on every divergent lock; 28k-case pip differential fuzz, 0 divergences). Adversary = Codex falsification of round 8 (REG-0005..0013): the one HIGH, REG-0005, fixed on v1.1.0 by round 11; the Mediums/Lows fixed on v1.2.0. sec-review ran (hash-lock preferred option adopted). Render proof + ZAP 2.17.0 0 High on the real STIG+FIPS VM; REG-0001/0002 CSP Mediums open (deferred to precompile release); REG-0003 Kafka FIPS risk accepted by James. Caveats: Codex lane not re-run on rounds 11-12.",
-      "at": "2026-09-28T19:57:43Z"
+      "verdict": "v1.1.1 @ 3ee4e94: gatekeeper CONFIRMED (13 gates on Linux, each falsified red; strict 303/0/0; cascade 1.1.1/1101; Sonar read-only: the 6 new issues are exactly the 6 fixed, measured cognitive complexity auth 17->10, migrate 20->9, helpers <=5; tests/lib out of scan scope). Adversary (Codex daybreak-blue, EXIT 0): TM-AUTH-01 FALSE (real ldap3 + 30 auth / 21 migrate scenarios byte-identical old vs new); TM-UI-01 MED confirmed = Object.hasOwn browser floor, ACCEPTED by James 2026-09-28. v1.1.0 assure (rounds 1-12, BACKFILLED) stands for the rest.",
+      "at": "2026-09-28T20:48:57Z"
+    },
+    "ship": {
+      "code": 1,
+      "meaning": "a finding",
+      "verdict": "Tag v1.1.0 (b275d2d) pushed, annotated, peels to HEAD; pipeline 270 FAILED at scan: Sonar quality gate new_violations=6 (>0): S3776 tm/auth.py:59 and tm/migrate_clusters.py:212, S1871 tm/auth.py:48, S7632 tools/gen-requirements-lock.py:39, S6653 SettingsTab.js:567, S7776 TopBar.js:15. 0 bugs/vulns, hotspots 100% reviewed. publish/guides skipped; nothing published. Fix and cut v1.1.1.",
+      "at": "2026-09-28T20:04:54Z"
     }
   }
 }

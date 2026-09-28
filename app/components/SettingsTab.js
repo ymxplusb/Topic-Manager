@@ -1080,7 +1080,7 @@ function settingsDecodeEntities(text) {
             const cp = Number.parseInt(hex ? ref.slice(2) : ref.slice(1), hex ? 16 : 10);
             return Number.isFinite(cp) ? String.fromCodePoint(cp) : whole;
         }
-        return Object.prototype.hasOwnProperty.call(SETTINGS_ENTITIES, ref)
+        return Object.hasOwn(SETTINGS_ENTITIES, ref)
             ? SETTINGS_ENTITIES[ref] : whole;
     });
 }

@@ -112,6 +112,49 @@ Database SRG V4R5 applied to SQLite.)
 
 ---
 
+## [1.1.1] — 2026-09-28
+
+**v1.1.0 with the six code-quality findings that stopped its release fixed. Nothing else
+changed.**
+
+The v1.1.0 tag was pushed, but its release pipeline failed at the SonarQube quality gate: the
+scan found six new code smells in the release's new code (no bugs, no vulnerabilities, every
+security hotspot reviewed). The gate fails on any new violation, so the pipeline stopped there
+and **nothing was published** — no v1.1.0 package, checksum or release exists. 1.1.1 is 1.1.0
+plus the fixes below. There is no v1.1.0 to install or upgrade from; everything in the 1.1.0
+section still applies, including *Read this before upgrading*.
+
+### Fixed (the six new-code findings)
+
+- `tm/auth.py` — `validate_credentials()` was over the cognitive-complexity limit (17 > 15), and
+  `missing_ldap_keys()` had two branches with the same body. The sign-in path is split into
+  small helpers (the service-bind decision, the second bind as the user, the group list, the
+  user record) and the two branches are one check. The bind sequence is unchanged.
+- `tm/migrate_clusters.py` — `migrate()` was over the limit (20 > 15). Reading `config.yaml`,
+  choosing what to do with the cluster store and verifying the result are now separate helpers.
+  Every message it prints is unchanged, so TROUBLESHOOTING.md still matches.
+- `tools/gen-requirements-lock.py` — a `# noqa` comment carried trailing prose that made it
+  malformed; the explanation moved to its own line.
+- `app/components/SettingsTab.js` — the entity lookup uses `Object.hasOwn()`.
+- `app/components/TopBar.js` — the list of themes is a `Set`, checked with `.has()`.
+
+### Browser support
+
+`Object.hasOwn()` is ES2022: Chrome and Edge 93, Firefox 92, Safari 15.4 and later (all released
+by March 2022). The frontend already used ES2020 syntax (`?.`, `??`), so this raises the oldest
+browser that can load the Settings tab from those releases to these.
+
+### Tests
+
+- t20 now drives the whole sign-in sequence (service bind, second bind as the user, unbinds,
+  group check, returned user record, the administrator's log line) against a scripted
+  directory, and t07 drives `migrate()` through 21 starting states. Both are held to
+  transcripts recorded on the v1.1.0 code before the refactor, so the refactor is proven not to
+  change behaviour.
+- t08 checks entity decoding directly, including names that exist only on `Object.prototype`.
+
+---
+
 ## [1.1.0] — 2026-09-26
 
 **Aurora Glass theme, a Settings section rail, TLS 1.2/1.3 everywhere with a FIPS-approved

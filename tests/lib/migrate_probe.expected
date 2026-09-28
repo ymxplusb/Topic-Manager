@@ -1,0 +1,321 @@
+== no-clusters-dir
+   SystemExit migrate-clusters: <D>/clusters.d does not exist. The installer creates it with install(1) before calling this.
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   store| <absent>
+== config-not-a-mapping
+   SystemExit migrate-clusters: <D>/config.yaml did not parse to a mapping
+   config| - just
+   config| - a list
+   store| <absent>
+== config-empty
+   SystemExit migrate-clusters: <D>/config.yaml did not parse to a mapping
+   store| <absent>
+== fresh-host
+   return 0
+   out: migrate-clusters: created an empty cluster store at <D>/clusters.d/clusters.yaml — add clusters in Settings > General > Cluster Profiles
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| # Jarvis Topic Manager — cluster profiles
+   store| # Created empty by the installer. Add clusters in Settings > General >
+   store| # Cluster Profiles; edits made here by hand are picked up without a
+   store| # restart, because every worker re-reads on inode/size/mtime change.
+   store| clusters: []
+== legacy-only
+   return 0
+   out: migrate-clusters: moved 1 cluster profile(s) out of config.yaml into <D>/clusters.d/clusters.yaml
+   out: migrate-clusters: removed the clusters: block from <D>/config.yaml
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # clusters: moved to <D>/clusters.d/clusters.yaml in v1.0.4.
+   config| # The application owns that file and writes it through the Cluster
+   config| # Builder in Settings. This file stays root-owned and read-only to the
+   config| # service, so a cluster edit can never reach secret_key or
+   config| # ldap_bind_password. Do not add a clusters: block back here — it would
+   config| # be ignored, and two files claiming to hold the cluster list is exactly
+   config| # the shadowing the split exists to prevent.
+   config| 
+   config| # indented-free comment ends the block
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| # Jarvis Topic Manager — cluster profiles
+   store| # Moved out of config.yaml by the v1.0.4 migration.
+   store| # Written by the Cluster Builder; hand edits are picked up without a
+   store| # restart, because every worker re-reads on inode/size/mtime change.
+   store| clusters:
+   store| - id: legacy
+   store|   bootstrap_servers: b1.example.com:9092
+== legacy-non-ascii-name
+   return 0
+   out: migrate-clusters: moved 1 cluster profile(s) out of config.yaml into <D>/clusters.d/clusters.yaml
+   out: migrate-clusters: removed the clusters: block from <D>/config.yaml
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # clusters: moved to <D>/clusters.d/clusters.yaml in v1.0.4.
+   config| # The application owns that file and writes it through the Cluster
+   config| # Builder in Settings. This file stays root-owned and read-only to the
+   config| # service, so a cluster edit can never reach secret_key or
+   config| # ldap_bind_password. Do not add a clusters: block back here — it would
+   config| # be ignored, and two files claiming to hold the cluster list is exactly
+   config| # the shadowing the split exists to prevent.
+   config| 
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| # Jarvis Topic Manager — cluster profiles
+   store| # Moved out of config.yaml by the v1.0.4 migration.
+   store| # Written by the Cluster Builder; hand edits are picked up without a
+   store| # restart, because every worker re-reads on inode/size/mtime change.
+   store| clusters:
+   store| - id: eu
+   store|   name: Zürich — Nord
+   store|   bootstrap_servers: b2.example.com:9092
+== legacy-at-end-of-file
+   return 0
+   out: migrate-clusters: moved 1 cluster profile(s) out of config.yaml into <D>/clusters.d/clusters.yaml
+   out: migrate-clusters: removed the clusters: block from <D>/config.yaml
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # clusters: moved to <D>/clusters.d/clusters.yaml in v1.0.4.
+   config| # The application owns that file and writes it through the Cluster
+   config| # Builder in Settings. This file stays root-owned and read-only to the
+   config| # service, so a cluster edit can never reach secret_key or
+   config| # ldap_bind_password. Do not add a clusters: block back here — it would
+   config| # be ignored, and two files claiming to hold the cluster list is exactly
+   config| # the shadowing the split exists to prevent.
+   config| 
+   config| # indented-free comment ends the block
+   store| # Jarvis Topic Manager — cluster profiles
+   store| # Moved out of config.yaml by the v1.0.4 migration.
+   store| # Written by the Cluster Builder; hand edits are picked up without a
+   store| # restart, because every worker re-reads on inode/size/mtime change.
+   store| clusters:
+   store| - id: legacy
+   store|   bootstrap_servers: b1.example.com:9092
+== store-and-stale-legacy
+   return 0
+   out: migrate-clusters: clusters.yaml already holds 1 profile(s); the stale block in config.yaml is being removed
+   out: migrate-clusters: removed the clusters: block from <D>/config.yaml
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # clusters: moved to <D>/clusters.d/clusters.yaml in v1.0.4.
+   config| # The application owns that file and writes it through the Cluster
+   config| # Builder in Settings. This file stays root-owned and read-only to the
+   config| # service, so a cluster edit can never reach secret_key or
+   config| # ldap_bind_password. Do not add a clusters: block back here — it would
+   config| # be ignored, and two files claiming to hold the cluster list is exactly
+   config| # the shadowing the split exists to prevent.
+   config| 
+   config| # indented-free comment ends the block
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| clusters:
+   store|   - id: current
+   store|     bootstrap_servers: b9.example.com:9092
+== store-only
+   return 0
+   out: migrate-clusters: already migrated (1 profile(s) in <D>/clusters.d/clusters.yaml)
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| clusters:
+   store|   - id: current
+   store|     bootstrap_servers: b9.example.com:9092
+== empty-store-only
+   return 0
+   out: migrate-clusters: already migrated (0 profiles in <D>/clusters.d/clusters.yaml; add them in Settings > General > Cluster Profiles)
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| clusters: []
+== empty-store-and-legacy
+   return 0
+   out: migrate-clusters: moved 1 cluster profile(s) out of config.yaml into <D>/clusters.d/clusters.yaml
+   out: migrate-clusters: removed the clusters: block from <D>/config.yaml
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # clusters: moved to <D>/clusters.d/clusters.yaml in v1.0.4.
+   config| # The application owns that file and writes it through the Cluster
+   config| # Builder in Settings. This file stays root-owned and read-only to the
+   config| # service, so a cluster edit can never reach secret_key or
+   config| # ldap_bind_password. Do not add a clusters: block back here — it would
+   config| # be ignored, and two files claiming to hold the cluster list is exactly
+   config| # the shadowing the split exists to prevent.
+   config| 
+   config| # indented-free comment ends the block
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| # Jarvis Topic Manager — cluster profiles
+   store| # Moved out of config.yaml by the v1.0.4 migration.
+   store| # Written by the Cluster Builder; hand edits are picked up without a
+   store| # restart, because every worker re-reads on inode/size/mtime change.
+   store| clusters:
+   store| - id: legacy
+   store|   bootstrap_servers: b1.example.com:9092
+== store-not-a-list-and-legacy
+   return 0
+   out: migrate-clusters: moved 1 cluster profile(s) out of config.yaml into <D>/clusters.d/clusters.yaml
+   out: migrate-clusters: removed the clusters: block from <D>/config.yaml
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # clusters: moved to <D>/clusters.d/clusters.yaml in v1.0.4.
+   config| # The application owns that file and writes it through the Cluster
+   config| # Builder in Settings. This file stays root-owned and read-only to the
+   config| # service, so a cluster edit can never reach secret_key or
+   config| # ldap_bind_password. Do not add a clusters: block back here — it would
+   config| # be ignored, and two files claiming to hold the cluster list is exactly
+   config| # the shadowing the split exists to prevent.
+   config| 
+   config| # indented-free comment ends the block
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| # Jarvis Topic Manager — cluster profiles
+   store| # Moved out of config.yaml by the v1.0.4 migration.
+   store| # Written by the Cluster Builder; hand edits are picked up without a
+   store| # restart, because every worker re-reads on inode/size/mtime change.
+   store| clusters:
+   store| - id: legacy
+   store|   bootstrap_servers: b1.example.com:9092
+== store-is-a-scalar
+   return 0
+   out: migrate-clusters: created an empty cluster store at <D>/clusters.d/clusters.yaml — add clusters in Settings > General > Cluster Profiles
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| # Jarvis Topic Manager — cluster profiles
+   store| # Created empty by the installer. Add clusters in Settings > General >
+   store| # Cluster Profiles; edits made here by hand are picked up without a
+   store| # restart, because every worker re-reads on inode/size/mtime change.
+   store| clusters: []
+== legacy-empty-list
+   return 0
+   out: migrate-clusters: created an empty cluster store at <D>/clusters.d/clusters.yaml — add clusters in Settings > General > Cluster Profiles
+   out: migrate-clusters: removed the clusters: block from <D>/config.yaml
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # clusters: moved to <D>/clusters.d/clusters.yaml in v1.0.4.
+   config| # The application owns that file and writes it through the Cluster
+   config| # Builder in Settings. This file stays root-owned and read-only to the
+   config| # service, so a cluster edit can never reach secret_key or
+   config| # ldap_bind_password. Do not add a clusters: block back here — it would
+   config| # be ignored, and two files claiming to hold the cluster list is exactly
+   config| # the shadowing the split exists to prevent.
+   config| 
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| # Jarvis Topic Manager — cluster profiles
+   store| # Created empty by the installer. Add clusters in Settings > General >
+   store| # Cluster Profiles; edits made here by hand are picked up without a
+   store| # restart, because every worker re-reads on inode/size/mtime change.
+   store| clusters: []
+== legacy-null
+   SystemExit migrate-clusters: <D>/config.yaml STILL has a clusters: key after migration — refusing to report success
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| clusters:
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| # Jarvis Topic Manager — cluster profiles
+   store| # Created empty by the installer. Add clusters in Settings > General >
+   store| # Cluster Profiles; edits made here by hand are picked up without a
+   store| # restart, because every worker re-reads on inode/size/mtime change.
+   store| clusters: []
+== store-and-legacy-empty-list
+   return 0
+   out: migrate-clusters: already migrated (1 profile(s) in <D>/clusters.d/clusters.yaml)
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| clusters: []
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| clusters:
+   store|   - id: current
+   store|     bootstrap_servers: b9.example.com:9092
+== empty-store-and-legacy-null
+   return 0
+   out: migrate-clusters: already migrated (0 profiles in <D>/clusters.d/clusters.yaml; add them in Settings > General > Cluster Profiles)
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| clusters:
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| clusters: []
+== store-and-legacy-null
+   return 0
+   out: migrate-clusters: already migrated (1 profile(s) in <D>/clusters.d/clusters.yaml)
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| clusters:
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| clusters:
+   store|   - id: current
+   store|     bootstrap_servers: b9.example.com:9092
+== legacy-indented-key-not-stripped
+   return 0
+   out: migrate-clusters: created an empty cluster store at <D>/clusters.d/clusters.yaml — add clusters in Settings > General > Cluster Profiles
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config|   clusters: [1]
+   store| # Jarvis Topic Manager — cluster profiles
+   store| # Created empty by the installer. Add clusters in Settings > General >
+   store| # Cluster Profiles; edits made here by hand are picked up without a
+   store| # restart, because every worker re-reads on inode/size/mtime change.
+   store| clusters: []
+== verify-refuses-a-store-that-was-not-written
+   SystemExit migrate-clusters: <D>/clusters.d/clusters.yaml does not hold a cluster list after migration
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| <absent>
+== verify-refuses-a-legacy-move-that-was-not-written
+   SystemExit migrate-clusters: <D>/config.yaml STILL has a clusters: key after migration — refusing to report success
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| clusters:
+   config|   - id: "legacy"
+   config|     bootstrap_servers: "b1.example.com:9092"
+   config| # indented-free comment ends the block
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| <absent>
