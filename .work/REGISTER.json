@@ -1,0 +1,136 @@
+{
+  "entries": [
+    {
+      "id": "REG-0001",
+      "date": "2026-09-26",
+      "source": "dast ZAP 2.17.0 on tm-qc (v1.1.0 @ eddb2fe, STIG+FIPS)",
+      "severity": "Medium",
+      "finding": "CSP script-src 'unsafe-eval'",
+      "where": "nginx/tm-security-headers.conf (served on /, /robots.txt, /sitemap.xml)",
+      "why": "Vue 3 global build compiles string templates in the browser",
+      "disposition": "deferred: precompile templates in a later release (NGNX-APP-000850 decision 'Yes, document now, remove later')",
+      "status": "open"
+    },
+    {
+      "id": "REG-0002",
+      "date": "2026-09-26",
+      "source": "dast ZAP 2.17.0 on tm-qc (v1.1.0 @ eddb2fe, STIG+FIPS)",
+      "severity": "Medium",
+      "finding": "CSP style-src 'unsafe-inline'",
+      "where": "nginx/tm-security-headers.conf",
+      "why": "inline style attributes and :style bindings in component templates",
+      "disposition": "deferred: fold into the CSP/precompile release; move static inline styles to classes",
+      "status": "open"
+    },
+    {
+      "id": "REG-0003",
+      "date": "2026-09-26",
+      "source": "owner decision",
+      "severity": "Medium",
+      "finding": "Kafka client TLS outside the host FIPS module (confluent-kafka wheel bundles its own OpenSSL)",
+      "where": "requirements.txt / tm/kafka_client.py",
+      "disposition": "RISK ACCEPTED by James 2026-09-26; revisit via distro python3-confluent-kafka or a site-built wheel",
+      "status": "accepted"
+    },
+    {
+      "id": "REG-0004",
+      "date": "2026-09-26",
+      "source": "builder round 8 (v1.1.0)",
+      "severity": "Low",
+      "finding": "pipe-into-early-exit consumer under pipefail in PRODUCT scripts (SIGPIPE class)",
+      "where": "install.sh:673 (dpkg-query | grep -q), install/upgrade-full.sh:1133/:1143 (lsattr/getfacl | grep -q), several | head -1 under set -e",
+      "disposition": "deferred to v1.2.0 by Claude (low risk: short single outputs); gatekeeper asked to confirm non-blocking",
+      "status": "open"
+    },
+    {
+      "id": "REG-0005",
+      "date": "2026-09-27",
+      "source": "Codex gpt-6-astra high falsification of v1.1.0 round 8 (VM)",
+      "severity": "High",
+      "finding": "SCA skips indented/unterminated lock lines and a direct package's differing locked version (tools/sca-check.sh:175-178)",
+      "where": "tools/sca-check.sh:175-178",
+      "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. not live: lock is generator-produced, unindented; agreement gate catches direct drift",
+      "status": "open"
+    },
+    {
+      "id": "REG-0006",
+      "date": "2026-09-27",
+      "source": "Codex gpt-6-astra high falsification of v1.1.0 round 8 (VM)",
+      "severity": "Medium",
+      "finding": "requirements-lock online completeness false-red on a valid older compatible closure (gen-requirements-lock.py:113)",
+      "where": "gen-requirements-lock.py:113",
+      "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
+      "status": "open"
+    },
+    {
+      "id": "REG-0007",
+      "date": "2026-09-27",
+      "source": "Codex gpt-6-astra high falsification of v1.1.0 round 8 (VM)",
+      "severity": "Medium",
+      "finding": "requirements-lock offline completeness fail-open is green in tests; wildcard pin accepted (check-requirements-lock.sh:47,83)",
+      "where": "check-requirements-lock.sh:47,83",
+      "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
+      "status": "open"
+    },
+    {
+      "id": "REG-0008",
+      "date": "2026-09-27",
+      "source": "Codex gpt-6-astra high falsification of v1.1.0 round 8 (VM)",
+      "severity": "Medium",
+      "finding": "pipefail lint misses sed -n 1q, quoted alternation, line-continued pipe, `command grep`; false-red on quoted/commented text (check-pipefail-consumers.sh:43-45)",
+      "where": "check-pipefail-consumers.sh:43-45",
+      "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
+      "status": "open"
+    },
+    {
+      "id": "REG-0009",
+      "date": "2026-09-27",
+      "source": "Codex gpt-6-astra high falsification of v1.1.0 round 8 (VM)",
+      "severity": "Medium",
+      "finding": "env-neutral misses latin-1 boundary, UTF-16, fc00::/8; false-red on binary pixel data (check-env-neutral.sh:85,111,115)",
+      "where": "check-env-neutral.sh:85,111,115",
+      "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
+      "status": "open"
+    },
+    {
+      "id": "REG-0010",
+      "date": "2026-09-27",
+      "source": "Codex gpt-6-astra high falsification of v1.1.0 round 8 (VM)",
+      "severity": "Medium",
+      "finding": "version-surfaces: token in a comment counts; app/main.js not scanned; template literal false-red (check-version-surfaces.sh:88)",
+      "where": "check-version-surfaces.sh:88",
+      "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
+      "status": "open"
+    },
+    {
+      "id": "REG-0011",
+      "date": "2026-09-27",
+      "source": "Codex gpt-6-astra high falsification of v1.1.0 round 8 (VM)",
+      "severity": "Medium",
+      "finding": "sbom-consistency: indented lock lines dropped; duplicate rows overwrite (check-sbom-consistency.sh:164,180)",
+      "where": "check-sbom-consistency.sh:164,180",
+      "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
+      "status": "open"
+    },
+    {
+      "id": "REG-0012",
+      "date": "2026-09-27",
+      "source": "Codex gpt-6-astra high falsification of v1.1.0 round 8 (VM)",
+      "severity": "Medium",
+      "finding": "config-example: empty containers/null cluster bootstrap pass; documented empty required_group false-red (check-config-example.sh:81)",
+      "where": "check-config-example.sh:81",
+      "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
+      "status": "open"
+    },
+    {
+      "id": "REG-0013",
+      "date": "2026-09-27",
+      "source": "Codex gpt-6-astra high falsification of v1.1.0 round 8 (VM)",
+      "severity": "Low",
+      "finding": "runner: malformed extra record masked by other passes; multiline requirement bypass (tests/run.sh:140, harness.sh:275)",
+      "where": "tests/run.sh:140, harness.sh:275",
+      "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
+      "status": "open"
+    }
+  ]
+}

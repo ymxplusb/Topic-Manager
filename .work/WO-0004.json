@@ -1,0 +1,301 @@
+{
+  "id": "WO-0004",
+  "intent": "Topic Manager v1.2.0: seven owner-approved STIG settings (F5 NGINX STIG V1R1 + Database SRG V4R5 applied to SQLite), each a new Settings rail section, each set up by the from-scratch installer (install.sh, prepare-offline.sh, install/upgrade-full.sh) with safe defaults on a STIG'd FIPS Ubuntu 24.04, environment-neutral: (1) remote syslog host/port/UDP|TCP|TLS/app-id forwarding the app audit trail (log_action also emits to syslog) and nginx access/error logs [NGNX-APP-001400 CAT I, SRG-APP-000515, SRG-APP-000360]; (2) NTP via chrony or systemd-timesyncd with read-only status/offset [SRG-APP-000116/000920/000925]; (3) session.max_concurrent moved into Settings with defined precedence [NGNX-APP-000010, SRG-APP-000001]; (4) nginx limit_req/limit_conn for login and API, client timeouts, body size in a conf.d file [NGNX-APP-001030/001940]; (5) audit retention (days or rows), audited pruning job, 75% capacity warning banner + syslog [SRG-APP-000120/000357/000359]; (6) TLS cert + CA chain upload/replace with EC and RSA validation under FIPS, read-only cipher policy display [NGNX-APP-001900/001960]; (7) HTTP->HTTPS redirect on/off (the :80 listener), PPSM reflects the state [NGNX-APP-000510]. OS changes via staging file + polkit + root one-shot apply unit(s). PIV/CAC out of scope.",
+  "project": "Topic Manager",
+  "release": "minor",
+  "opened": "2026-09-26",
+  "status": "scoped",
+  "depends_on": "WO-0003 (v1.1.0) is the baseline. Its builder is mid-edit on release/v1.1.0: HEAD moved 36576f3 -> 7d05e56 during this scout, 19 files staged (tm/routes.py, tm/auth.py, install.sh, install/upgrade-full.sh, prepare-offline.sh, config examples, tests, tools). Every line number below is measured on that working tree and WILL move; re-anchor before building.",
+  "scout": {
+    "method": "Read-through of every file in scope; python ast over tm/*.py for every log_action call (16) and every audit_log SQL site (1 writer); grep across naming variants for max_concurrent/_max_sessions, listen 80/ufw 80, server.crt/server.key/ssl_certificate, PPSM rows, rsyslog/chrony/timesyncd, and test/gate bindings (tests/*.sh, tests/lib/*, tests/mutations.txt, tools/*.sh, .gitlab-ci.yml). Frontend and shell reachability established by reading guards, not by AST (no JS or bash language server): INCOMPLETE for sites reached through string-built names.",
+    "blast_radius": "product",
+    "second_sweep": "Codex (pipeline, VM) remote mode, claude_admin@192.168.202.75 run as james. EXIT 0, COMPLETE. Banner model gpt-6-sol, effort medium, sandbox read-only, approval never (structural). NOT Daybreak Blue and NOT xhigh: this is the VM pipeline lane, not the Daybreak Blue control, and does not credit it. Sandbox WORKS: transcript shows 25 exec events, all 'succeeded', no bwrap/userns error (pwd; rg --files = 87; rg -c routes = 24; log_action = 16; ANCHOR = 131). 75 quotes verified; 1 bogus citation (bare 'SettingsTab.js'), relied on nowhere. git status SKIPPED because the remote bundle ships no .git (tool design, not sandbox). tests/run.sh SKIPPED by its own read-only reading. Codex-only sites were verified here and are tagged CODEX-ONLY.",
+    "decisions_proposed": [
+      "ONE helper, four fixed units. Root-owned /usr/libexec/topic-manager/tm-apply (bash, or /usr/bin/python3 -I stdlib-only), started by topic-manager-apply-syslog.service, -apply-time.service, -apply-nginx.service, -apply-tls.service (Type=oneshot, ExecStart=/usr/libexec/topic-manager/tm-apply <domain>, per-unit ReadWritePaths, pattern of systemd/topic-manager-nginx-test.service). Session limit and audit retention need NO privilege.",
+      "Staging IN: /opt/topic-manager/data/apply/<domain>.json (+ .crt/.key/.chain for tls), written 0600 by the app. The helper opens with O_NOFOLLOW, requires owner topic-manager and a size cap, and re-validates every value against its OWN allowlist. Result OUT: /run/topic-manager-apply/<domain>.result (RuntimeDirectory of the apply unit, root 0755, file 0644). Root never writes into a directory the service account can write.",
+      "Per domain: validate -> render to temp -> test (rsyslogd -N1 -f, chronyd -p -f, nginx -t, openssl) -> back up live file -> install -> reload/restart -> verify -> on any failure restore the backup, reload, and write {ok:false, step, detail}. The app reads the result and audits SETTINGS_APPLY or SETTINGS_APPLY_FAILED.",
+      "max_concurrent precedence: tm.db wins once an operator has saved it. config.yaml session.max_concurrent SEEDS app_settings on first start if the key is absent and is then ignored, with a startup warning if the two disagree. Fresh-install default 3; 0 (unlimited) refused or explicitly confirmed. OWNER to confirm.",
+      "Syslog: the app emits every audit row through a dedicated SysLogHandler to /dev/log (facility authpriv or local4, tag = app identifier), independent of logging.syslog_enabled. nginx access/error use syslog:server=unix:/dev/log alongside the files. rsyslog forwards with omfwd. TLS uses rsyslog-openssl (ossl netstream driver on host OpenSSL, so the FIPS provider) in preference to rsyslog-gnutls. NEITHER is in the offline bundle today.",
+      "Audit prune: topic-manager-audit-prune.timer + .service running as User=topic-manager with the service sandbox and UMask=0077 (no polkit, because systemd starts it). It writes an AUDIT_PRUNE row (count, oldest kept ts, reason) in the same transaction, then emits syslog. Capacity = max(rows used / max rows, bytes used / (bytes used + free) from statvfs of the data dir).",
+      "Redirect off: the helper removes the listen 80 server block from the rendered site and removes ufw 80/tcp if ufw is active. downloadPpsm() reads the live setting for row 80. PPSM.csv documents the default (redirect ON)."
+    ],
+    "scope": [
+      "tm/routes.py: _ALL_KEYS :660 (ALIASED to _PUBLIC_KEYS, see consumers), _DEFAULTS :662-668, GET/PUT /api/settings :690-729 (PUT already audits SETTINGS_UPDATE at :726 by key name only; add per-key validators and the apply trigger), _max_sessions :63-64 read at :192. New routes, all @require_auth and none public: POST+GET /api/settings/apply/<domain>, GET /api/time/status, GET /api/audit/capacity, GET /api/tls/policy, PUT /api/tls/certificate",
+      "tm/audit.py: log_action :17-25 (add syslog emit and write-failure handling for SRG-APP-000360); new prune and capacity functions",
+      "tm/models.py: init_db :66-108 (retention keys; consider an index on audit_log(ts)); get_db :60-63",
+      "tm/app.py: _setup_logging :70-91. The existing SysLogHandler (facility daemon) is gated on logging.syslog_enabled; the audit handler must not depend on that flag",
+      "tm/config.py: max_concurrent seed and precedence helper",
+      "tm/service_control.py: ALLOWED_UNITS :62 plus the four apply units; a start_apply_unit(domain) that mirrors nginx_config_test :149-163",
+      "NEW tm/apply.py (staging writer, result reader), NEW tm/audit_retention.py (prune and capacity; the timer's entry point); syslog emitter in tm/audit.py or NEW tm/syslog_audit.py",
+      "NEW install/libexec/tm-apply (root helper; installed root:root 0755 to /usr/libexec/topic-manager/)",
+      "NEW systemd/topic-manager-apply-syslog.service, topic-manager-apply-time.service, topic-manager-apply-nginx.service, topic-manager-apply-tls.service",
+      "NEW systemd/topic-manager-audit-prune.service and topic-manager-audit-prune.timer",
+      "systemd/topic-manager.service: ReadWritePaths :49 already covers /opt/topic-manager/data/apply; confirm nothing new under /etc",
+      "install/polkit/50-topic-manager.rules: add a unit + 'start' pair per apply unit after :55; the header comment ('Three units') goes stale",
+      "NEW nginx/tm-limits.conf, installed as /etc/nginx/conf.d/topic-manager-limits.conf (http context): limit_req_zone, limit_conn_zone, limit_req_status 429, client_header_timeout, client_body_timeout, send_timeout, client_max_body_size",
+      "nginx/topic-manager.conf: :34-40 the :80 server block (toggle), :46-47 cert paths, :49 ssl_ciphers (display source), NEW location = /api/auth/login with limit_req (must repeat every proxy_set_header at :83-91 and include the security-header snippet), limit_req/limit_conn in location /api/ :81, logs :102-103 gain syslog targets, keepalive_timeout :58",
+      "NEW install/rsyslog/60-topic-manager.conf template; the rsyslog CA file must live outside /etc/topic-manager (see hazards)",
+      "NEW templates: chrony /etc/chrony/sources.d/topic-manager.sources and timesyncd /etc/systemd/timesyncd.conf.d/topic-manager.conf",
+      "app/components/SettingsTab.js: new panes at the marked insertion point :520-525 (the rail is DERIVED from the template by deriveSettingsRail :577-608, so there is no rail list to edit); data() :8-51, loadSettings :97-120, saveSettings :125-146; downloadPpsm :280-323, rows :291 (HTTP 80), :300 (NTP), :301-302 (syslog PLANNED), :314 (TLS key); version literal :283",
+      "app/components/LoginView.js :41-52: await r.json() on a non-JSON nginx 429 throws, and the catch reports 'Network error - is the server reachable?'",
+      "app/styles/main.css: pane and control styles if new classes are needed (v1.1.0 is re-theming this file now)",
+      "install.sh: REQUIRED_PKGS :332, systemd :610-622, polkit :624-638, nginx :640-650 (+ conf.d limits), TLS :652-690, ufw :699-704, logrotate :706-709, nginx -t :711-716; new flags (e.g. --syslog-host/--syslog-port/--syslog-protocol, --ntp-server, --no-http-redirect) with safe defaults; helper install to /usr/libexec",
+      "prepare-offline.sh: PKGS :126 (closure resolved per root at :128-138), no-git fallback allowlist :170-174 (CODEX-ONLY) must add install/libexec and install/rsyslog; the bundle is git archive HEAD (:167), so every new file must be tracked",
+      "install/upgrade-full.sh: BASELINE_PATHS :122-135, Phase 4 backup :1547-1557, restore_from_backup :698-715, Phase 9 deploy :1816-1856 (site file OVERWRITTEN at :1821), nginx.conf edit :2086 (CODEX-ONLY), TLS restore :1901-1915, Phase 3 blockers (TLS syslog module presence, chrony vs timesyncd)",
+      "config/config.yaml.example: :61-63 session.max_concurrent; :69-73 logging, including the 'planned for v1.2.0' line :72",
+      "tools/check-config-example.sh: REQUIRED :63-68 (decide whether session.max_concurrent is still a config key)",
+      "tools/check-ppsm-consistency.sh: required rows :101-107. The 514 and 6514 entries demand the word PLANNED (:106, CODEX-ONLY) and must change; the ('Web','80','Inbound','Redirect') entry changes if row 80 becomes state-dependent",
+      "tools/check-env-neutral.sh: no edit expected; every new template must pass it",
+      "tests: t16-settings-audit.sh, t14-idle-session.sh :276-280, t07-config-reload.sh :70, t08-settings-banner.sh + tests/lib/settings-probe.js, t13-proxy-headers.sh, t18-tls-fips.sh (:73 extracts tls_keypair_matches), t19-ppsm.sh (:27 fixture literal), t03/t10 (BASELINE_PATHS record format), t17-audit-db-modes.sh, tests/mutations.txt (131 ANCHOR lines), tests/run.sh; NEW t23-apply-helper, t24-syslog-audit, t25-audit-retention, t26-rate-limit-conf, t27-tls-upload, t28-http-redirect",
+      "PPSM.csv :9, :18, :19-20, :32 plus new rows (see ppsm_rows_changing)",
+      "Docs: README.md (audit-action list :848 '16 audited actions' grows; config table :746), docs/INSTALL.md, TROUBLESHOOTING.md (new apply failure strings), install/README.md (bundle contract), SBOM.md + app/components/modals/AboutModal.js (rsyslog, chrony as infrastructure rows), CHANGELOG.md",
+      "Every version surface in .claude/project.yml surfaces:, plus .claude/project.yml itself"
+    ],
+    "consumers": [
+      "SETTINGS ALLOWLIST ALIAS (claude only): tm/routes.py:660 `_ALL_KEYS    = _PUBLIC_KEYS` binds the SAME set object. `_ALL_KEYS.add(...)` or `|=` would silently publish the syslog host, NTP servers and the rest on the UNAUTHENTICATED /api/settings/public (:681-687). It must become `_ALL_KEYS = _PUBLIC_KEYS | {...}` (both frozensets), with a test that the public set is exactly the five display keys.",
+      "SETTINGS PUT VALIDATION: :709 accepts any str(v) for any allowlisted key. Every new key needs a typed validator before persistence (host = hostname/IP, port 1-65535, protocol enum, app id [A-Za-z0-9_]{1,32}, the only charset an nginx syslog tag accepts). The root helper re-validates independently.",
+      "AUDIT PRODUCERS (AST; 16, all in tm/routes.py; all REACHED under their guards; both sweeps): 123 SESSION_EXPIRED, 181 LOGIN_FAILED, 198 LOGIN_REFUSED, 219 LOGIN, 256 LOGOUT, 334 CLUSTER_CREATE, 373 CLUSTER_UPDATE, 402 CLUSTER_DELETE, 453 SERVICE_RESTART_THROTTLED, 469 SERVICE_RESTART_REFUSED, 476 SERVICE_RESTART, 483 SERVICE_RESTART_STEP (REACHED conditionally: callback from the detached thread, service_control.py:178-208; the worker may be killed first), 563 CREATE, 600 UPDATE_CONFIG, 615 DELETE, 726 SETTINGS_UPDATE. Emitting inside log_action reaches all 16 without a call-site edit. :181 and :123 are reachable UNAUTHENTICATED, so every failed login becomes a syslog message (a flood lever; item 4 is the mitigation).",
+      "AUDIT WRITE FAILURE: log_action :17-25 has no try/except. A sqlite error propagates as a 500 AFTER the Kafka action has happened (DELETE :610 then :615). SRG-APP-000360: catch, emit syslog CRIT, then re-raise or continue per the owner's decision.",
+      "AUDIT TABLE WRITERS: exactly one (audit.py:20). Readers audit.py:31-36 (paged) and :53 (export, unbounded; export time grows with retention). Pruning adds the first DELETE on audit_log.",
+      "SESSION LIMIT: one reader, routes.py:64 (default 0 = unlimited when absent), used at :192-204. Seeds: config.yaml.example:63 (5), tests t07:70, t14:276 and :280, README:746. t14's fixtures assert config-driven behaviour and will need rewriting.",
+      "NGINX 429: LoginView.js:46 parses every response as JSON. limit_req returns nginx HTML, so the operator sees 'Network error' (hazards[misleading-failure-message]). Needs a JSON error_page for 429 under /api/ or a LoginView change. routes.py:204 already returns a 429 JSON for the session cap, so the two 429s must be distinguishable.",
+      "NEW LOCATION BLOCKS: a `location = /api/auth/login` for a tighter limit_req must repeat every proxy_set_header at topic-manager.conf:83-91 (X-Forwarded-Host is TRUSTED by ProxyFix x_host=1 in tm/app.py) and include snippets/tm-security-headers.conf (hazards[nginx-add-header-inheritance]). t13 pins the proxy headers.",
+      "UPGRADE CLOBBERS OPERATOR STATE: install/upgrade-full.sh:1821 copies the stock site file over /etc/nginx/sites-available/topic-manager and restores only server_name (:1822-1825). Every upgrade would revert redirect-off, the rate-limit includes and any cert-path change unless the upgrade re-runs the apply helper from tm.db after Phase 10.",
+      "UFW 80: install.sh:699-703 opens 80/tcp when ufw is active. Redirect-off must close it and a re-install must not reopen it. upgrade-full.sh has no ufw handling at all.",
+      "TLS PATH READERS: nginx/topic-manager.conf:46-47; install.sh:661-690 (tls_keypair_matches :191); upgrade-full.sh BASELINE_PATHS :129, backup verify :1596-1597, restore :1901-1915 (tls_keypair_matches :492). EXCLUDED: tm/kafka_client.py cluster SSL files, reached only under `if 'SSL' in sp` and a separate store. A CA chain upload needs a new path (nginx ssl_certificate takes leaf + chain in one file, so render a fullchain) and that path must be added to BASELINE_PATHS, backup and restore.",
+      "PRIVATE KEY IN TRANSIT: an uploaded key passes through Flask/gunicorn and the staging dir. It must never reach app_settings, the audit detail (SETTINGS_UPDATE records names only; keep it that way), the gunicorn access log, or /tmp (PrivateTmp is not set on topic-manager.service). Staging file 0600, deleted by the helper after install.",
+      "PPSM: PPSM.csv and downloadPpsm() are one document, held by tools/check-ppsm-consistency.sh. Rows 80/NTP/514/6514 change. The gate's required list demands PLANNED on 514 and 6514 (:106, CODEX-ONLY), and t19-ppsm.sh:27 seds the literal 'Redirect to HTTPS only (301)'. Both break when the text changes.",
+      "OFFLINE BUNDLE: prepare-offline.sh:126 PKGS has no rsyslog, rsyslog-openssl, rsyslog-gnutls or chrony, and the closure is resolved per root (:128-138). install.sh:332 REQUIRED_PKGS is the twin list. Stock Ubuntu 24.04 has rsyslog and systemd-timesyncd, not chrony. Installing chrony removes systemd-timesyncd (Conflicts).",
+      "POLKIT: 50-topic-manager.rules matches exact unit names only (:41, :48, :55), and service_control.ALLOWED_UNITS :62 mirrors it. Both must list every apply unit. The prune timer needs no polkit.",
+      "TIME STATUS READ: chronyc tracking uses cmdport 323 on 127.0.0.1 or /run/chrony/chronyd.sock (root/_chrony only). A STIG profile that sets cmdport 0 removes the unprivileged path, so status may need a read-only 'status' mode of the helper. timedatectl timesync-status works unprivileged over D-Bus.",
+      "PRUNE vs tm.db MODES: t17-audit-db-modes asserts 0600. The prune unit must set UMask=0077 itself; it does not inherit topic-manager.service's.",
+      "README AST RECIPE: the recipe in .claude/project.yml (README surface note) parses tm/routes.py ONLY. A prune job calling log_action('AUDIT_PRUNE') from a new module would be invisible to it. Widen it to tm/*.py in the same commit.",
+      "CI: .gitlab-ci.yml TEST_SETUP installs sudo, nodejs, jq, curl and the requirements only; there is no nginx, rsyslog or chrony. New tests must stub rsyslogd/chronyd/nginx on PATH (the t18 pattern), or they SKIP and --strict fails the lane."
+    ],
+    "ppsm_rows_changing": [
+      "Web HTTP 80 Inbound (PPSM.csv:9, SettingsTab.js:291): 'Redirect to HTTPS (301) when enabled; no listener when disabled'. downloadPpsm reads the live setting.",
+      "Logging Syslog 514 UDP/TCP Outbound (:19, :301): PLANNED -> operator-defined host/port; carries the app audit trail and nginx logs.",
+      "Logging Syslog over TLS 6514 TCP Outbound (:20, :302): PLANNED -> active when protocol = TLS; rsyslog ossl driver, CA-validated.",
+      "Infra NTP 123 UDP Outbound (:18, :300): operator-defined servers; names chrony or timesyncd.",
+      "Storage TLS private key (:32, :314) plus a NEW row for the CA chain file; a NEW Loopback row for chronyd 323/UDP if chronyc is used for status; a NEW Storage row for the apply staging dir if it holds key material transiently.",
+      "Version row (:2, :283): cascade."
+    ],
+    "gates_and_tests_needed": [
+      "The eight declared gates stay green: python-syntax, shell-syntax (extend the glob to install/libexec/*), frontend-syntax, config-example, heredoc-python, sbom-consistency, sca, repo-tests (+ --remote Linux --strict).",
+      "t23 apply helper: the allowlist rejects newline, semicolon or brace injection in host, port 0 or 65536, an unknown protocol, and an app id with a space. A failed test step rolls back to a byte-identical file. The result file lands in /run, not the staging dir. A symlinked or non-topic-manager-owned staging file is refused.",
+      "t24 syslog: log_action emits one record per call for all 16 actions; a sqlite failure emits CRIT and never passes silently; the handler exists with logging.syslog_enabled=false.",
+      "t25 retention: prune deletes only rows beyond max days/rows, writes AUDIT_PRUNE, and leaves tm.db at 0600. The 75% threshold raises the banner flag and a syslog message once per crossing.",
+      "t26 nginx: the rendered conf.d file passes a stubbed nginx -t; every location still includes the header snippet; the login location carries X-Forwarded-Host (extend t13).",
+      "t27 TLS: EC P-256/P-384 and RSA 2048/3072/4096 accepted. Refused: RSA-1024, secp256k1, Ed25519 (no matching TLS 1.2 suite), SHA-1-signed cert, expired cert, mismatched pair, unverifiable chain, encrypted key. Validation uses the openssl CLI (host FIPS provider), never python cryptography (its wheel bundles its own OpenSSL).",
+      "t28 redirect: off removes the listen 80 block, the PPSM row follows it, and the ufw rule is removed only when ufw is active. An upgrade re-applies the operator's choice.",
+      "Extend t16 to every new key. Add a public-settings test asserting /api/settings/public returns exactly the five display keys. Add a mutation control for each in tests/mutations.txt.",
+      "Update tools/check-ppsm-consistency.sh required rows and the t19 fixture. Widen the README AST recipe. Run shellcheck on tm-apply on a Linux host."
+    ],
+    "surfaces": [
+      "VERSION and tm/VERSION: both read 1.1.0 in the working tree (uncommitted v1.1.0 cascade at scout close; they read 1.0.11 and 1.0.6 at scout start). Both -> 1.2.0. The builder's new tools/check-version-surfaces.sh (untracked) will gate this.",
+      "tm/VERSION, app/components/SettingsTab.js:283, PPSM.csv:2, app/components/modals/AboutModal.js (version sentinel + dependency table + ?v=), index.html ?v= (16 tokens including TopBar.js and AboutModal.js), app/styles/main.css header, install.sh header, prepare-offline.sh header, docs/INSTALL.md, SBOM.md, README.md, CHANGELOG.md, TROUBLESHOOTING.md, install/README.md, NOTICES.md (only if a Python dependency is added), app/main.js (confirm the sentinel only), .claude/project.yml",
+      "No CODEMAP.md (code_map: null). Four new modules and about eight new systemd/template files; recommend creating one."
+    ],
+    "hazards_in_path": [
+      "nginx-add-header-inheritance: new login and rate-limit location blocks",
+      "csv-single-quoted-literals: downloadPpsm rows and any new single-quoted Settings strings",
+      "version-surface-drift: the v1.1.0 cascade is in flight in the working tree right now; v1.2.0 must start from its committed result, not from a half-cascaded tree",
+      "stig-umask-403: rendered rsyslog/chrony/nginx files and the rsyslog CA must be readable by syslog, _chrony and www-data. /etc/topic-manager is 0750 root:topic-manager (install.sh:390), so rsyslog (runs as user syslog) cannot read a CA placed there",
+      "misleading-failure-message: the nginx 429 surfacing as 'Network error'. Apply results must name the failed step and never assert 'unchanged' unless the rollback verified it",
+      "sqlite3-cli-absent: prune and capacity use python sqlite3 only",
+      "windows-clone-crlf: new templates and tm-apply must be LF (.gitattributes is being edited by v1.1.0)",
+      "any-request-renews-the-session: a capacity or time-status poll from Settings must send X-TM-Background: 1",
+      "no-ci-no-tests: STALE (CI exists), but its lesson stands. The gate set cannot see a root helper's privilege boundary, so review it by hand",
+      "NEW, not in the contract: the root helper must not execute code from /opt/topic-manager or its venv. Both are owned by topic-manager (install.sh:380, :452), so running them as root is a service-account-to-root escalation"
+    ],
+    "unknowns": [
+      "rsyslog-openssl vs rsyslog-gnutls on Ubuntu 24.04 FIPS (Ubuntu Pro FIPS ships FIPS OpenSSL and FIPS GnuTLS): not measured on a FIPS host. Neither package is in the bundle.",
+      "Whether the Ubuntu 24.04 STIG profile in use sets chrony cmdport 0 or removes timesyncd; whether the installed chrony has -p (4.x does). Not measured: there is no STIG'd host (prod is stig:false).",
+      "Whether the rsyslog AppArmor profile (usr.sbin.rsyslogd) allows the chosen CA path, and imfile if that is chosen over nginx syslog:server=unix:/dev/log.",
+      "Audit write failure policy, fail-closed vs continue + alert: owner decision.",
+      "Whether pruning may delete rows not yet confirmed forwarded (SRG-APP-000515). UDP gives no confirmation.",
+      "Safe defaults for max_concurrent (proposed 3) and rate limits (proposed login 5r/m burst 5, API 120r/m): owner.",
+      "Whether the capacity warning is Settings-only (as asked) or app-wide.",
+      "Line numbers: the v1.1.0 builder is actively committing (HEAD moved during this scout). Every citation must be re-anchored.",
+      "CONTRACT STALE (carried from WO-0003, still true): stack names the site DC; promote.running_version 1.0.4; ci says none but .gitlab-ci.yml exists; release.tag none; the README AST recipe reads routes.py only.",
+      "Frontend and shell reachability is read, not AST. A site reached through a string-built unit name or computed template would be missed.",
+      "tests/t22-version-surfaces.sh and tools/check-version-surfaces.sh appeared untracked from the v1.1.0 builder during this scout, and it has started the version cascade (VERSION, tm/VERSION, SettingsTab.js, index.html, etc. modified). New v1.2.0 tests are therefore numbered from t23, and the new version-surfaces gate is one more v1.2.0 consumer.",
+      "OpenProject reported UPDATED work package #106 rather than created. A ticket keyed WO-0004 already existed; confirm it is not another repository's WO-0004."
+    ]
+  },
+  "escalations": [
+    {
+      "from": "scout",
+      "question": "max_concurrent: tm.db wins after the first save and config.yaml only seeds it. Agree? Fresh-install default 3?"
+    },
+    {
+      "from": "scout",
+      "question": "Audit write failure: fail the user action (fail-closed), or continue and alert?"
+    },
+    {
+      "from": "scout",
+      "question": "Syslog TLS module: rsyslog-openssl (recommended) or rsyslog-gnutls? Add it and chrony to the offline bundle roots?"
+    },
+    {
+      "from": "scout",
+      "question": "Time source on a timesyncd-only host: configure timesyncd, or install chrony (which removes timesyncd)?"
+    },
+    {
+      "from": "scout",
+      "question": "Redirect off: also close ufw 80/tcp?"
+    }
+  ],
+  "openproject": {
+    "project": 5,
+    "ticket": 109,
+    "url": "https://openproject.int.crypticlight.com/work_packages/109"
+  },
+  "decisions": [
+    {
+      "by": "James",
+      "date": "2026-09-26",
+      "id": "audit-write-failure",
+      "ruling": "BLOCK the action: verify the audit write can succeed before the Kafka change; refuse if not; CRIT syslog + UI banner."
+    },
+    {
+      "by": "James",
+      "date": "2026-09-26",
+      "id": "prune-unforwarded",
+      "ruling": "Prune by age/capacity only, write AUDIT_PRUNE; docs recommend TCP/TLS syslog for guaranteed off-load."
+    },
+    {
+      "by": "James",
+      "date": "2026-09-26",
+      "id": "rate-limit-defaults",
+      "ruling": "Login 10 r/m per IP burst 5; API 300 r/m per IP burst 100; limit_conn 20 per IP. Editable in Settings."
+    },
+    {
+      "by": "James",
+      "date": "2026-09-26",
+      "id": "session-limit-precedence",
+      "ruling": "Settings value wins; config.yaml seeds on first start only; mismatch logs a warning; fresh default 3."
+    },
+    {
+      "by": "James",
+      "date": "2026-09-26",
+      "id": "redirect-ufw",
+      "ruling": "Turning the HTTP redirect off also removes the ufw 80 rule; PPSM follows the live state."
+    }
+  ],
+  "builder_backend": {
+    "by": "builder (backend/privileged/installer half)",
+    "date": "2026-09-26",
+    "worktree": "C:/Users/James/Scripts/topic-manager-v120, branch release/v1.2.0 (base 1246b3a)",
+    "commits": [
+      "2f25bdb backend: admin settings, audit to syslog + fail-closed, retention, apply/TLS routes",
+      "017b58b privileged: root apply helper, apply units, polkit, managed nginx/rsyslog files",
+      "bfd7f78 ui: the sign-in page reads a 429 as a rate limit, not a network error",
+      "0450112 install/upgrade/bundle: host settings from first install, kept and re-applied on upgrade",
+      "d3b5bf4 tests: 107 mutation controls M174-M280, and the test gaps they found",
+      "4a25a52 docs: host settings, privileges, troubleshooting keyed to the real strings",
+      "f3c62bb fix: findings from the real STIG+FIPS end-to-end run",
+      "8944a3d tests: no early-exit consumer under pipefail; shellcheck-clean new cases"
+    ],
+    "root_cause": "v1.1.0 had no path from a Settings value to a host change: the service account runs under NoNewPrivileges and owns /opt/topic-manager, so every STIG host setting needed a privilege boundary that re-validates and never runs service-owned code. Separately: _ALL_KEYS WAS _PUBLIC_KEYS (one object), log_action had no failure handling and wrote nothing off-host, the session limit lived only in config.yaml, and the upgrade overwrote the site file.",
+    "files_changed": [
+      "tm/settings_schema.py (NEW, stdlib-only; also installed root-owned as the helper lib)",
+      "tm/tls_check.py (NEW, stdlib-only; openssl CLI via memfd; also a helper lib)",
+      "tm/apply.py (NEW: staging, status, applied/CC-1, once-only result audit, CLI)",
+      "tm/audit_retention.py (NEW: prune + capacity; timer entry point)",
+      "tm/hoststatus.py (NEW: time and TLS status, read-only)",
+      "tm/audit.py, tm/routes.py, tm/models.py, tm/app.py, tm/service_control.py",
+      "install/libexec/tm-apply (NEW root helper, 100755)",
+      "systemd/topic-manager-apply-{syslog,time,nginx,tls}.service, topic-manager-audit-prune.{service,timer} (NEW)",
+      "install/polkit/50-topic-manager.rules",
+      "nginx/topic-manager.conf; NEW nginx/topic-manager-http.conf, tm-limits.conf, tm-limits-{server,login,api}.conf, tm-syslog.conf",
+      "install/rsyslog/30-topic-manager.conf (NEW)",
+      "app/components/LoginView.js (429 handling only)",
+      "install.sh, install/upgrade-full.sh, prepare-offline.sh, config/config.yaml.example, tools/check-config-example.sh",
+      "tests: NEW t31-t39, tests/lib/apply_fixture.sh; tests/lib/harness.sh, tests/mutate.sh, tests/mutations.txt, t18, t27",
+      "README.md, TROUBLESHOOTING.md, CHANGELOG.md, docs/INSTALL.md, install/README.md, SBOM.md, .claude/project.yml"
+    ],
+    "amendments": [
+      "tm/settings_schema.py, tm/tls_check.py, tm/hoststatus.py — new modules beyond scout.scope: one validator set shared (root-owned copy) by the app and the helper, so the helper does not import service-owned code and the rules cannot drift",
+      "nginx/topic-manager-http.conf + tm-limits-{server,login,api}.conf + tm-syslog.conf — the :80 block and every operator value moved OUT of the site file into files the helper renders and the upgrade keeps (the scout named the upgrade clobber; this removes it structurally)",
+      "tests/lib/harness.sh, tests/mutate.sh — mutate.sh could only mutate the three shell scripts; it now mutates a copy of any tm/*.py module, the helper, the site and LoginView (needed for mutation proof)",
+      "tests/t27-firewall.sh — open_firewall_ports changed (80 follows the redirect setting)",
+      "tests/lib/apply_fixture.sh — new shared fixture for t34/t36/t37"
+    ],
+    "consumers_addressed": "all 20 scout consumers: alias (frozen + new set, t31), PUT validation (t31), 16 producers reach syslog inside log_action (t32 by AST, now 21), audit failure (fail-closed, t32), writers (prune is the second, t33), session limit (t31), nginx 429 (JSON + LoginView, t36), login location headers (t36), upgrade clobber (managed files kept + re-apply, t38), ufw 80 (helper + installer, t34/t27), TLS paths (chain.pem in BASELINE_PATHS), key in transit (memfd, in-memory parser, t37), PPSM (frontend; applied values served), bundle (t38), polkit (t35 under node), time status, prune UMask (t33), README recipe (t39), CI stubs (fixtures stub what the host lacks, real tools where present)",
+    "self_check": "py_compile tm/*.py + tm-apply; bash -n all shell; node --check frontend; shellcheck -S warning clean on install.sh, prepare-offline.sh and every new test (upgrade-full.sh: one pre-existing SC2034 at line 341)",
+    "gates": {
+      "python-syntax": "PASS (gate widened to install/libexec/tm-apply)",
+      "shell-syntax": "PASS",
+      "frontend-syntax": "PASS",
+      "config-example": "PASS (+ seed must be 3; proven red on 5)",
+      "heredoc-python": "PASS (9)",
+      "sbom-consistency": "PASS",
+      "sca": "PASS (16 clean)",
+      "ppsm-consistency": "PASS (34 rows; frontend owns it)",
+      "env-neutral": "PASS (125 files)",
+      "version-surfaces": "PASS (1.1.0; cascade not run, as instructed)",
+      "requirements-lock": "PASS",
+      "repo-tests": "tests/run.sh --remote claude_admin@192.168.202.90 (HEAD 8944a3d, git archive): 321 passed, 0 failed, 22 skipped — every skip \"needs node\"; those 5 files run on the workstation: t08 14/14, t15 10/10, t19 3/3, t35 polkit case, t36 LoginView case — 0 failed. --strict exits 1 on the node skips alone, as in every previous round"
+    },
+    "mutation_controls": {
+      "new": "M174-M280 (107): 105 killed, 2 documented equivalents (M183, M254), 0 survivors",
+      "survivors_found_and_closed": [
+        "VACUOUS: python -c/- put the repo root (cwd) ahead of PYTHONPATH, so the unmutated tm/ was imported (M178 et al.); PYTHONSAFEPATH=1 on every tm import in the new tests",
+        "M190 sign-in refused for a broken audit still swept expired sessions: t32 pins an untouched session table",
+        "M199 oversized upload got Werkzeug HTML 413 not the contract JSON: t37 pins the body",
+        "M206 my own mutant was ill-formed (invalid SQL refused for the wrong reason): rewritten",
+        "M231 root re-validation doubled by check_domain but normalised values unpinned: t34 pins what is rendered",
+        "M253 no mixed TLS staging set was ever tested: t37 adds one"
+      ],
+      "equivalents": [
+        "M183 bool stored via str(): the bool branch lower-cases afterwards",
+        "M254 fchown(0,0) dropped: the helper runs as root, mkstemp already creates root-owned files"
+      ],
+      "regression": "all 280 anchors match exactly once; the 82 pre-existing controls over touched code (t18/t23/t26/t27) re-run: all killed, M103/M141/M142 still equivalent",
+      "where": "Linux test host (M263/M264: workstation, node)"
+    },
+    "real_host_e2e": {
+      "host": "tm-qc 192.168.202.92 (STIG + FIPS, fips_enabled=1, umask 0077, AppArmor enforcing rsyslogd/chronyd, ufw active, TM v1.1.0)",
+      "what_was_run": "installed ONLY the v1.2.0 privileged pieces beside the running v1.1.0 app (helper + root-owned lib, 4 apply units, polkit rule, new site + :80 site + managed nginx/rsyslog files, staging dir), then every apply staged by the topic-manager account with tm/apply.py and started AS topic-manager through polkit: nginx rate limits (real 429 JSON on a sign-in flood), redirect off/on (link, real ufw 80/tcp, nothing on :80, then 301), time (chrony under AppArmor, sources added then removed), syslog (TLS refused: rsyslog-openssl absent; TCP applied with the real confined rsyslogd -N1, then off = shipped default), TLS (new EC P-384 pair validated under FIPS, served cert checked by s_client, then the original pair re-applied), a group-writable lib module refused, the FIPS validation matrix, the prune module on the real tm.db (0600 kept). polkit: stop on an apply unit and start on ssh.service both denied",
+      "result": "E2E FAILS=0. Log: /var/tmp/tmv120e2e/e2e.log on tm-qc",
+      "findings": [
+        "doubled full stop in refusal messages (fixed f3c62bb)",
+        "FIPS openssl refuses to MAKE RSA-1024/secp256k1/Ed25519/SHA-1 certs (t37 made FIPS-aware)"
+      ],
+      "host_state_after": "MODIFIED: v1.2.0 site, :80 site, polkit rule, helper, units, managed files, /var/backups/topic-manager/apply/*, /opt/topic-manager/data/apply, idx_audit_ts index and two retention keys in tm.db; app healthy on v1.1.0, original certificate back. Revert to snapshot v110-installed before the real upgrade test.",
+      "not_run_there": "install.sh on a fresh host and install/upgrade-full.sh (needs a bundle or a pushed commit); syslog over TLS for real (rsyslog-openssl absent on both hosts)"
+    },
+    "stubs_vs_real": ".90: REAL openssl, nginx -t (against a fixture tree), rsyslogd -N1 (unconfined copy: AppArmor cannot read a /tmp fixture); STUBS for systemctl, ufw, chronyd, chronyc, timedatectl. tm-qc: everything real",
+    "contract_changes_for_frontend": [
+      "NONE to the contract file. Additions the frontend must handle:",
+      "POST /api/system/apply/<d> needs Content-Type: application/json (415 otherwise); 400 {error:\"invalid\",field,reason} for cross-field (syslog on without host); 404 unknown_domain (tls is not applicable there); 409 apply_in_progress; 429 apply_throttled + Retry-After (5 s per domain); 502 apply_unit_failed (status then shows failed)",
+      "every mutating route: 503 {\"error\":\"audit_unavailable\",\"message\"} (nothing changed) and 500 {\"error\":\"audit_write_failed\",\"message\"} (change WAS made) — incl. sign-in, where LoginView shows data.error verbatim",
+      "status also carries job; tls \"applied\" is the certificate summary {subject, issuer, not_after, key_type, chain_count}, not settings keys",
+      "POST /api/system/tls/cert: 411 without Content-Length, 413 above 200 KiB, 415 not multipart, 400 invalid_cert with fixed reasons, 409/429 as apply",
+      "PUT /api/settings normalises (UDP->udp, JSON true->\"true\", trimmed); GET /api/settings has 21 keys",
+      "no syslog CA upload in the contract: CA = system trust store or install.sh --syslog-ca",
+      "AboutModal.js dependency/infrastructure table not updated (frontend file): SBOM gained rsyslog 8.2312.0, rsyslog-openssl, chrony 4.5"
+    ],
+    "ambiguities_resolved": [
+      "AUDIT_PRUNE written for every prune THAT DELETES (no row for a no-op; last_prune is always recorded)",
+      "capacity pct = max(rows/max_rows, db bytes/(db bytes + free bytes))",
+      "empty ntp_servers removes the TM-managed file (host config otherwise untouched)",
+      "host validator also refuses a leading - or .; values are trimmed",
+      "admin settings audited with old -> new values (none is secret)",
+      "nginx logs to syslog only while forwarding is on (tm-syslog.conf)",
+      "rsyslog file is 30-topic-manager.conf (its stop rule must precede 50-default)",
+      "syslog CA under /etc/rsyslog.d/topic-manager (MEASURED: AppArmor)",
+      "chrony installed only where no daemon runs or --install-chrony; only systemd-timesyncd may be removed",
+      "a LOGIN record failure after the session row exists deletes it and answers 503",
+      "CHANGELOG section unbracketed (\"Unreleased — 1.2.0\") until the cascade"
+    ],
+    "not_done": [
+      "VERSION cascade (instructed: at merge)",
+      "AboutModal.js infrastructure rows (frontend file)",
+      "fresh install.sh and upgrade-full.sh not executed on a real host this round",
+      "syslog over TLS not exercised for real (rsyslog-openssl absent)",
+      ".work files not committed (the coordinator and the frontend worker share them)"
+    ],
+    "status": "ready for assure (backend half); top-level status left to the coordinator: the frontend half is in progress"
+  }
+}
