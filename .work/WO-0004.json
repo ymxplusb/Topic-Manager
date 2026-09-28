@@ -297,5 +297,46 @@
       ".work files not committed (the coordinator and the frontend worker share them)"
     ],
     "status": "ready for assure (backend half); top-level status left to the coordinator: the frontend half is in progress"
-  }
+  },
+  "builder_rounds": [
+    {
+      "by": "builder (merge v1.1.0 + audit syslog hang)",
+      "date": "2026-09-28",
+      "worktree": "/Users/jamesrodman/Scripts/topic-manager-v120, branch release/v1.2.0 (base 29434d6)",
+      "commits": [
+        "78a9252 merge v1.1.0 (b275d2d, lock-gate rounds 10-12) into release/v1.2.0",
+        "f4c25c4 audit: a full syslog queue fails the send within 0.5 s instead of hanging"
+      ],
+      "root_cause": "(1) Two independent parsers of requirements.lock (v1.1.0 round 11/12, v1.2.0 60ad85d) and two incompatible --check-set semantics (v1.1.0: compare with a fresh resolution; v1.2.0 REG-0006: closure check, because a fresh NEWEST resolution false-reds an older valid lock). (2) tm/audit.py syslog_send used a blocking AF_UNIX SOCK_DGRAM send with no timeout; a full receiver queue (max_dgram_qlen 10 in a container, 512 on a host) blocks send() forever. t32 sent 20+ records before draining, so the 11th hung the CI job; in production a stalled journald/rsyslog hangs every worker writing an audit record. The diagnostic SysLogHandler (tm/app.py, logging.syslog_enabled) had the same blocking send.",
+      "files_changed": [
+        "tools/lib/lockparse.py: v1.1.0's parser + REG-0007 PEP 440 VERSION shape in parse()",
+        "tools/check-requirements-lock.sh: v1.1.0 single parse; v1.2.0 --require-online kept; requirements.txt held to lockparse.VERSION",
+        "tools/sca-check.sh: v1.1.0 parser output + count guard, moved before the network so --list-pins works offline",
+        "tools/check-sbom-consistency.sh: v1.1.0 side",
+        "tools/gen-requirements-lock.py: --check-set = lock-CONSTRAINED pip resolution (v1.1.0 MISSING/NOT-in-set + verdict line + timeout) + v1.2.0 closure check fed by the resolution's requires_dist; ResolutionImpossible = exit 1 INCONSISTENT",
+        "tests/t41-gate-hardening.sh: SBOM fixtures copy tools/lib; reg0007 +==latest/==v1.9.0; NEW reg0006-the-resolution-is-held-to-the-locks-own-pins",
+        ".work/REGISTER.json: REG-0005 fixed; REG-0006..0013 fixed-unreleased",
+        "tm/audit.py: SYSLOG_SEND_TIMEOUT 0.5 s on the socket; full queue -> False + ERROR; emit() logs AUDIT_SYSLOG_FAILED at CRITICAL with the record",
+        "tm/app.py: _BoundedSysLogHandler (same bound on the diagnostic handler)",
+        "tests/t32-audit-syslog.sh: every probe bounded (faulthandler + timeout(1)); drain per send; NEW a-full-syslog-queue-fails-the-send-within-its-bound",
+        "tests/mutations.txt: M281-M286"
+      ],
+      "amendments": [
+        "tools/*, tools/lib/lockparse.py, tests/t25/t41, .work/REGISTER.json: the v1.1.0 merge (coordinator-directed task, outside scout.scope)",
+        "tm/app.py _setup_logging: IN scout.scope; named because it was not in the brief - the CRITICAL that reports a failed audit send goes through this handler, so leaving it blocking would re-hang the worker when logging.syslog_enabled"
+      ],
+      "audit_failure_ruling": "Unchanged: an audit DB write failure still BLOCKS (require_writable, AuditUnavailable, 503). Every emit() caller (log_action, routes settings, apply x2, audit_retention x2) emits AFTER its commit and ignores the return; the record is in the database, so a syslog failure there neither blocks nor passes silently - it is CRITICAL AUDIT_SYSLOG_FAILED with the whole record, bounded to 0.5 s (1.0 s through the diagnostic handler's one retry).",
+      "t41_assertions_changed": "None loosened. Fixtures only (SBOM tree copies tools/lib); reg0007 gained two inputs; one new case.",
+      "self_check": "py_compile tm/audit.py tm/app.py tools/gen-requirements-lock.py tools/lib/lockparse.py; bash -n every edited shell file; git diff re-read",
+      "mutation_controls": "11 run, 11 caught, 0 SURVIVED. tests/mutate.sh (Linux container, bundle clone): M281 blocking send restored RED; M282 bound 5.0 s RED; M283 timeout returns True RED; M284 timeout reason lost RED; M285 emit failure silent RED; M286 diagnostic handler unbounded RED (all by a-full-syslog-queue-fails-the-send-within-its-bound). Manual cp+sha256-restored controls on t41: C1 lockparse VERSION check removed RED (reg0007); C2 --check-set unconstrained RED; C3 ResolutionImpossible branch off RED; C4 closure over report metadata off RED (all reg0006-the-resolution-...); C5 requirements.txt accepts >=/<= RED (reg0007).",
+      "suite": "Linux python:3.12-bookworm on 192.168.202.81, git-bundle clone of f4c25c4, CI TEST_SETUP, timeout 3600: check-requirements-lock --require-online PASS (constrained resolution against real PyPI: covers the resolved set, 15 packages; 15 releases hash-verified); tests/run.sh --strict 401 passed, 1 failed, 0 skipped. The FAIL is t36 the-shipped-site-passes-the-real-nginx-t 'no real nginx here': TEST_SETUP installs no nginx and the case requires only linux,chown - pre-existing, not touched by this round, and it will fail the CI test job.",
+      "not_done": [
+        "t36 real-nginx case vs CI TEST_SETUP (no nginx): not fixed, outside this brief - needs a decision (install nginx in TEST_SETUP, or a requirement that SKIPs)",
+        "TROUBLESHOOTING.md/README: the new AUDIT_SYSLOG_FAILED / 'receive queue is full' strings are not documented",
+        "a durable DB marker for a record that missed syslog (e.g. an AUDIT_SYSLOG_FAILED row) - not built; the CRITICAL app-log line is the only trace",
+        "lockparse now refuses non-PEP-440 versions pip would accept or reject on its own: the round-12 28k pip differential fuzz was not re-run against the merged parser",
+        "top-level status left to the coordinator (frontend half)"
+      ]
+    }
+  ]
 }
