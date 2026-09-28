@@ -224,11 +224,17 @@ gates:
       gatekeeper confirmed the sca gate's own script was unreachable by the gate
       that checks shell syntax.
   - name: frontend-syntax
-    cmd: "for f in app/main.js app/components/*.js app/components/modals/*.js; do node --check \"$f\" || exit 1; done"
-    verified: 2026-08-30
+    cmd: "bash tools/check-frontend-syntax.sh"
+    verified: 2026-09-28
     note: >-
       the ONLY automated guard on the frontend. There is no build step, so a
       syntax error ships straight to the browser as a blank page.
+      REG-0017 (v1.2.0): was a fixed glob (app/main.js app/components/*.js
+      app/components/modals/*.js), which stayed green when a file index.html
+      loads was deleted. The list is now derived from index.html (every
+      <script src> and stylesheet, comments excluded), a missing one fails,
+      and the old glob is still parsed for unloaded components. t41
+      reg0017 holds it (needs node).
   - name: config-example
     cmd: "bash tools/check-config-example.sh"
     verified: 2026-09-26

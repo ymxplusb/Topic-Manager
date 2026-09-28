@@ -242,6 +242,16 @@ record_baseline() {
     fi
 }
 
+# baseline_count <file> — how many records the baseline holds. It is
+# NUL-delimited quadruples (path, owner, group, mode), so a record is four
+# NULs; `wc -l` counted newlines, which the format never writes, and the
+# upgrade reported "Baseline recorded (0 paths)" on every run (REG-0018).
+baseline_count() {
+    local nul
+    nul="$(tr -cd '\000' < "$1" | wc -c)"
+    echo $(( nul / 4 ))
+}
+
 # baseline_stream <file> — emit the baseline as NUL-delimited quadruples,
 # whichever format the file on disk is in.
 #
@@ -1760,7 +1770,7 @@ PERM_BASELINE="${BACKUP_DIR}/manifest/permissions.baseline"
 
 info "Recording permission baseline ..."
 record_baseline "$PERM_BASELINE"
-success "Baseline recorded ($(wc -l < "$PERM_BASELINE") paths)"
+success "Baseline recorded ($(baseline_count "$PERM_BASELINE") paths)"
 cp -a "$AUDIT_REPORT" "${BACKUP_DIR}/manifest/permission-audit.txt" 2>/dev/null || true
 
 info "Backing up to ${BACKUP_DIR} ..."

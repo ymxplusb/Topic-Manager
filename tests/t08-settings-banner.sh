@@ -31,7 +31,25 @@ tm_header "settings load failure must not overwrite the operator banner"
 PROBE="${TM_TESTS_DIR}/lib/settings-probe.js"
 [ -f "$PROBE" ] || tm_die "tests/lib/settings-probe.js is missing"
 
-_probe() { node "$PROBE" "$TM_REPO_ROOT" "$1" 2>&1 | tr -d '\r'; }
+# REG-0016 (v1.2.0): the probe's EXIT is asserted before a field is read. A
+# probe that printed the fields a case reads and then threw (exit 2/3) used to
+# pass that case: only the output was ever looked at.
+_probe() {
+    local rc=0
+    node "$PROBE" "$TM_REPO_ROOT" "$1" > "${TM_TMP}/probe.raw" 2>&1 || rc=$?
+    tr -d '\r' < "${TM_TMP}/probe.raw"
+    [ "$rc" -eq 0 ] || _tm_afail "the node probe ($(basename "$PROBE") $1) exited ${rc}: $(tr -d '\r' < "${TM_TMP}/probe.raw" | tail -3)"
+}
+
+# The assertion above is load-bearing, so it has a case of its own: a probe
+# that prints a plausible field and then fails must fail the case reading it.
+c_probe_exit_is_asserted() {
+    local fake="${TM_TMP}/failing-probe.js" rc=0
+    printf '%s\n' 'console.log("settingsLoaded=false");' 'console.log("currentTheme=dark");' 'process.exit(2);' > "$fake"
+    ( PROBE="$fake"; _probe any > "${TM_TMP}/o" ) 2>/dev/null || rc=$?
+    [ "$rc" -ne 0 ] || _tm_afail "a probe that exited 2 after printing its fields was read as a result"
+    grep -q '^settingsLoaded=false$' "${TM_TMP}/o" || _tm_afail "the probe output was not passed through: $(cat "${TM_TMP}/o")"
+}
 
 _field() { grep -m1 "^${2}=" "$1" | cut -d= -f2- ; }
 
@@ -43,6 +61,7 @@ c_probe_parses() {
         || _tm_afail "tests/lib/settings-probe.js does not parse: $(cat "${TM_TMP}/out")"
 }
 tm_case "the-probe-itself-parses" node c_probe_parses
+tm_case "a-probe-that-fails-after-printing-fails-the-case" node c_probe_exit_is_asserted
 
 # ─── the data-loss path ──────────────────────────────────────────────────────
 c_expired_session_does_not_overwrite() {

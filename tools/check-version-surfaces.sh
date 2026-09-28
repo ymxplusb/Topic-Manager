@@ -145,6 +145,19 @@ def strip_html_comments(src):
     return re.sub(r'<!--.*?-->', ' ', src, flags=re.S)
 
 
+# REG-0014 (v1.2.0): a token counts only where a browser would request it —
+# the value of a src= or href= attribute (a Vue-bound :src/:href included),
+# in index.html or in the HTML a component carries in its strings. Comment
+# stripping alone (REG-0010) still counted a ?v= in HTML text, in a plain JS
+# string, or in a comment inside an inline <script>, and one of those beside a
+# REMOVED real token kept the count at EXPECTED_TOKENS.
+ATTR_RE = re.compile(r"""(?<![\w-])(?:v-bind)?:?(?:src|href)\s*=\s*\\?(["'])(.*?)\\?\1""", re.S)
+
+
+def attribute_values(src):
+    return [m.group(2) for m in ATTR_RE.finditer(src)]
+
+
 # REG-0010: EVERY shipped frontend file — index.html and all JS under app/,
 # app/main.js included — with comments stripped before a token is counted.
 tokens = {}
@@ -155,10 +168,17 @@ for dirpath, _dirs, files in sorted(os.walk(os.path.join(root, "app"))):
             frontend.append(os.path.relpath(os.path.join(dirpath, f), root).replace(os.sep, "/"))
 for rel in frontend:
     src = read(rel) or ""
-    src = strip_html_comments(src) if rel.endswith(".html") else strip_js_comments(src)
-    # A backtick ends a token too (a token at the end of a template literal).
-    for t in re.findall(r"\?v=([^\"'`\s&#)>]*)", src):
-        tokens.setdefault(t, []).append(rel)
+    # index.html: HTML comments and the BODY of every inline <script> (its
+    # comments and strings are not attributes). A component: JS comments,
+    # then the HTML comments its template strings may carry.
+    if rel.endswith(".html"):
+        src = re.sub(r"(<script\b[^>]*>).*?(</script>)", r"\1\2", strip_html_comments(src), flags=re.S | re.I)
+    else:
+        src = strip_html_comments(strip_js_comments(src))
+    for value in attribute_values(src):
+        # A backtick ends a token too (a token at the end of a template literal).
+        for t in re.findall(r"\?v=([^\"'`\s&#)>\\]*)", value):
+            tokens.setdefault(t, []).append(rel)
 count = sum(len(v) for v in tokens.values())
 nonnum = sorted(t for t in tokens if not re.fullmatch(r"\d+", t))
 if count == 0:

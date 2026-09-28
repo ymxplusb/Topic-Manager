@@ -223,7 +223,9 @@ g_version_tokens() {
     printf '\n// legacy: /old.png%s9999\n/* /x.css%s0 */\n' '?v=' '?v=' >> "$FX/app/main.js"
     _run bash "$G" --root "$FX"
     tm_assert_rc 0 "$RC" "a ?v= inside a JS COMMENT was counted: ${OUT}"
-    printf "\nconst u = '/live.png%s9999';\n" '?v=' >> "$FX/app/main.js"
+    # REG-0014: a live token is an ATTRIBUTE value (here a src= in HTML a
+    # component builds), so that is the shape a live one takes.
+    printf "\nconst u = '<img src=\"/live.png%s9999\">';\n" '?v=' >> "$FX/app/main.js"
     _run bash "$G" --root "$FX"
     [ "$RC" -ne 0 ] || _tm_afail "a live token in app/main.js was not scanned: ${OUT}"
     rm -rf "${TM_TMP}/tree"; _tree VERSION tm/VERSION app index.html PPSM.csv install.sh prepare-offline.sh SBOM.md docs/INSTALL.md README.md CHANGELOG.md
@@ -233,6 +235,46 @@ g_version_tokens() {
     tm_assert_rc 0 "$RC" "a token closing a TEMPLATE LITERAL was read as non-numeric: ${OUT}"
 }
 tm_case "reg0010-version-tokens-live-only-every-js-template-literals" none g_version_tokens
+
+# ── REG-0014: only src=/href= attribute values are cache tokens
+_VS_TREE="VERSION tm/VERSION app index.html PPSM.csv install.sh prepare-offline.sh SBOM.md docs/INSTALL.md README.md CHANGELOG.md"
+_vs_drop_main_token() {   # a real asset loses its token: 15 live ones
+    sed -i 's#^<script src="/app/main.js?v=[0-9]*"></script>$#<script src="/app/main.js"></script>#' "$FX/index.html"
+    grep -qx '<script src="/app/main.js"></script>' "$FX/index.html" || tm_die "fixture did not drop the main.js token"
+}
+g_version_tokens_attributes_only() {
+    local G="$R/tools/check-version-surfaces.sh" v shape
+    # shellcheck disable=SC2086
+    _tree $_VS_TREE
+    v="$(sed -n 's#^<script src="/app/main.js?v=\([0-9]*\)"></script>$#\1#p' "$FX/index.html")"
+    [ -n "$v" ] || tm_die "index.html has no main.js token to read"
+    _run bash "$G" --root "$FX"; tm_assert_rc 0 "$RC" "the copy is not green to start with: ${OUT}"
+    # Each shape below is NOT a request a browser makes. Beside a dropped real
+    # token it used to make the count 16 again, and the gate passed.
+    for shape in html-text inline-script-comment js-string; do
+        rm -rf "${TM_TMP}/tree"
+        # shellcheck disable=SC2086
+        _tree $_VS_TREE
+        _vs_drop_main_token
+        case "$shape" in
+            html-text)             sed -i "s#</body>#<p>cache token ?v=${v}</p></body>#" "$FX/index.html" ;;
+            inline-script-comment) sed -i "s#</body>#<script>/* <script src=\"/app/main.js?v=${v}\"> */</script></body>#" "$FX/index.html" ;;
+            js-string)             printf "\nconst note = '/app/main.js?v=%s';\n" "$v" >> "$FX/app/main.js" ;;
+        esac
+        grep -q "?v=${v}" "$FX/index.html" "$FX/app/main.js" || tm_die "fixture ${shape} was not written"
+        _run bash "$G" --root "$FX"
+        [ "$RC" -ne 0 ] || _tm_afail "a ?v= that is not a src/href attribute (${shape}) was counted as a cache token: ${OUT}"
+        grep -q "15 ?v= cache tokens" <<<"$OUT" || _tm_afail "${shape}: the gate failed, but not on the token count: ${OUT}"
+    done
+    # A Vue-bound :src with a template literal is an attribute: still green.
+    rm -rf "${TM_TMP}/tree"
+    # shellcheck disable=SC2086
+    _tree $_VS_TREE
+    sed -i 's#<img src="/jarvis-mark.png\(?v=[0-9]*\)"#<img :src="`/jarvis-mark.png\1`"#' "$FX/app/components/TopBar.js"
+    _run bash "$G" --root "$FX"
+    tm_assert_rc 0 "$RC" "a :src binding was not read as an attribute: ${OUT}"
+}
+tm_case "reg0014-only-src-and-href-attribute-values-are-cache-tokens" none g_version_tokens_attributes_only
 
 # ── REG-0011: SBOM gate reads indented lock lines, refuses duplicate rows
 g_sbom() {
@@ -302,6 +344,69 @@ g_runner() {
     tm_assert_rc 2 "$RC" "a requirement list with an embedded NEWLINE ran (its second line was never checked): ${OUT}"
 }
 tm_case "reg0013-runner-recognised-records-and-plain-requirements" none g_runner
+
+# ── REG-0015: a file that stops early is a failure, not a smaller pass
+g_runner_case_count() {
+    local t="${TM_TMP}/tcount" f
+    mkdir -p "$t"
+    f="$t/t97-count.sh"
+    _fake() { printf '%s\n' '#!/usr/bin/env bash' ". \"${TM_TESTS_DIR}/lib/harness.sh\"" 'ok() { true; }' "$@" 'tm_finish' > "$f"; }
+    _fake 'tm_case "first" none ok' 'exit 0' 'tm_case "second" none ok'
+    _run env TM_NO_COLOUR=1 bash "${TM_TESTS_DIR}/run.sh" "$f"
+    tm_assert_rc 1 "$RC" "a file that exited 0 after its first of two cases passed: ${OUT}"
+    grep -q 'declares 2 case(s) and reported 1' <<<"$OUT" || _tm_afail "the shortfall was not named: ${OUT}"
+    grep -q 'case-count-shortfall' <<<"$OUT" || _tm_afail "the shortfall is not in the failed-case list: ${OUT}"
+    _fake 'tm_case "first" none ok' 'tm_case "second" none ok'
+    _run env TM_NO_COLOUR=1 bash "${TM_TESTS_DIR}/run.sh" "$f"
+    tm_assert_rc 0 "$RC" "a complete file was refused: ${OUT}"
+    _fake 'for i in 1 2 3; do' '    tm_case "loop-$i" none ok' 'done'
+    _run env TM_NO_COLOUR=1 bash "${TM_TESTS_DIR}/run.sh" "$f"
+    tm_assert_rc 2 "$RC" "a tm_case in a loop with no declared total was counted by guesswork: ${OUT}"
+    _fake '# tm-expect-cases: 3' 'for i in 1 2 3; do' '    tm_case "loop-$i" none ok' 'done'
+    _run env TM_NO_COLOUR=1 bash "${TM_TESTS_DIR}/run.sh" "$f"
+    tm_assert_rc 0 "$RC" "a loop file with its declared total was refused: ${OUT}"
+    _fake '# tm-expect-cases: 3' 'for i in 1 2; do' '    tm_case "loop-$i" none ok' 'done'
+    _run env TM_NO_COLOUR=1 bash "${TM_TESTS_DIR}/run.sh" "$f"
+    tm_assert_rc 1 "$RC" "a loop file that ran 2 of its declared 3 passed: ${OUT}"
+}
+tm_case "reg0015-runner-holds-each-file-to-its-declared-case-count" none g_runner_case_count
+
+# ── REG-0017: the frontend gate reads its list from index.html
+g_frontend_syntax() {
+    local G="$R/tools/check-frontend-syntax.sh"
+    _tree index.html app
+    _run bash "$G" --root "$FX"; tm_assert_rc 0 "$RC" "the copy is not green to start with: ${OUT}"
+    # A file index.html loads goes missing. The old fixed glob stayed green on
+    # exactly this tree (it can only check what is there).
+    rm "$FX/app/components/AuditTab.js"
+    _run bash -c 'cd "$1" && for f in app/main.js app/components/*.js app/components/modals/*.js; do node --check "$f" || exit 1; done' _ "$FX"
+    tm_assert_rc 0 "$RC" "fixture: the old glob gate was expected to MISS the deleted file: ${OUT}"
+    _run bash "$G" --root "$FX"
+    tm_assert_rc 1 "$RC" "a script index.html loads was deleted and the gate passed: ${OUT}"
+    grep -q 'loads /app/components/AuditTab.js, and app/components/AuditTab.js does not exist' <<<"$OUT" \
+        || _tm_afail "the missing file was not named: ${OUT}"
+    rm -rf "${TM_TMP}/tree"; _tree index.html app
+    rm "$FX/app/styles/main.css"
+    _run bash "$G" --root "$FX"
+    tm_assert_rc 1 "$RC" "the stylesheet index.html loads was deleted and the gate passed: ${OUT}"
+    # A syntax error in a loaded component, and one in a component index.html
+    # no longer loads: both fail.
+    rm -rf "${TM_TMP}/tree"; _tree index.html app
+    printf '\nconst broken = {;\n' >> "$FX/app/components/TopBar.js"
+    _run bash "$G" --root "$FX"
+    tm_assert_rc 1 "$RC" "a loaded component that does not parse passed: ${OUT}"
+    rm -rf "${TM_TMP}/tree"; _tree index.html app
+    printf 'const orphan = {;\n' > "$FX/app/components/Orphan.js"
+    _run bash "$G" --root "$FX"
+    tm_assert_rc 1 "$RC" "an unloaded component that does not parse passed: ${OUT}"
+    # A COMMENTED-OUT load of a file that does not exist is not a load.
+    rm -rf "${TM_TMP}/tree"; _tree index.html app
+    sed -i 's#</body>#<!-- <script src="/app/components/Gone.js?v=1"></script> --></body>#' "$FX/index.html"
+    _run bash "$G" --root "$FX"
+    tm_assert_rc 0 "$RC" "a commented-out <script> was read as a load: ${OUT}"
+    _run bash "$G"; tm_assert_rc 0 "$RC" "frontend-syntax on the real tree: ${OUT}"
+}
+tm_case "reg0017-frontend-gate-derives-its-list-from-index-html" node g_frontend_syntax
 
 g_real_tree_green() {
     _run bash "$R/tools/check-pipefail-consumers.sh"; tm_assert_rc 0 "$RC" "pipefail lint: ${OUT}"

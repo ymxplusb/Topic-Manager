@@ -1176,6 +1176,29 @@ The database failed between the pre-check and the record. The change happened; i
 is in syslog as `AUDIT_WRITE_FAILED` with every field. Fix the database before anything
 else.
 
+### `AUDIT_SYSLOG_FAILED: a committed audit record did NOT reach syslog, so it was not forwarded off the host; it is in the audit database: ...`
+
+The application log (`journalctl -u topic-manager`), at CRITICAL. The action happened and
+its record **is** in `tm.db` — every caller sends to syslog only after the database commit —
+but the copy for the host syslog (and so for the remote collector) was not accepted. The
+line carries the whole record, so the gap in the off-host copy can be reconciled from the
+Audit tab or `GET /api/audit/export`. Nothing is retried. The line before it says why:
+
+- `audit syslog: /dev/log did not accept the record within 0.5 s (its receive
+  queue is full: the syslog daemon is stalled or not reading)` — the send is bounded so a stalled
+  journald/rsyslog cannot hang a worker. Check the daemon: `systemctl status
+  systemd-journald rsyslog`, `journalctl -u systemd-journald -n 50`. A burst larger than
+  the socket's queue (`sysctl net.unix.max_dgram_qlen`) while the daemon is slow also
+  produces this.
+- `audit syslog: could not send to /dev/log: ...` — the socket is absent or refused
+  (`ls -l /dev/log`; `systemctl status systemd-journald.socket`).
+- `audit syslog: this platform has no Unix sockets; record not sent` — not a Linux host.
+
+The same bound applies to the diagnostic log handler (`logging.syslog_enabled: true`): a
+send that times out is reported by Python on the service's stderr as `--- Logging error ---`
+with a `TimeoutError`, and the request carries on. A record the audit **database** refuses
+is different — see `AUDIT_WRITE_FAILED` above.
+
 ### The Settings banner says the audit storage is above its warning level
 
 `GET /api/audit/capacity` is the larger of rows/limit and database/(database + free disk).

@@ -109,6 +109,29 @@ Database SRG V4R5 applied to SQLite.)
   comments no longer count; duplicate SBOM rows and empty-container config values fail; the
   About dialog's infrastructure rows are held to SBOM.md; the test runner rejects unrecognised
   result records. Each is proven by its reproduction in t41.
+- REG-0014 … REG-0019: a `?v=` cache token counts only as a `src=`/`href=` attribute value
+  (not in HTML text, a plain JS string, or an inline script's comment); `tests/run.sh` holds
+  every file to the number of cases it declares, so a file that stops early fails
+  (`case-count-shortfall`) instead of passing with fewer; the settings and theme probes'
+  exit code is asserted before their output is read; the frontend syntax gate
+  (`tools/check-frontend-syntax.sh`) takes its list from `index.html` and fails on a file it
+  loads going missing; the upgrade's "Baseline recorded (N paths)" counts records (it always
+  said 0); `AUDIT_SYSLOG_FAILED` and the syslog send failures are in TROUBLESHOOTING.md.
+
+### Carried from 1.1.1, and held to its code-quality gate
+
+- 1.1.1's fixes are merged: the sign-in and cluster-migration refactors, `Object.hasOwn`, the
+  theme list as a `Set`, and its characterisation tests (t07, t08, t20), which pass unchanged
+  against this release.
+- The new code in this release was measured the way the release gate measures it (cognitive
+  complexity limit 15, duplicated literals, nested ternaries, ignored exceptions, `Set`
+  membership, `Object.hasOwn`) before tagging. Refactored with behaviour held by tests: the
+  apply status, the settings validator, the certificate validator, the sign-in session limit,
+  topic creation's config assembly, the lock-closure check, and the Settings tab's
+  host-error text, input checks and apply monitor. A reason that names an
+  `Object.prototype` member is not a known certificate refusal (t30); sign-in at the
+  session limit and topic config assembly are held to transcripts recorded before the
+  refactor (t42).
 
 ---
 

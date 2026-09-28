@@ -85,8 +85,14 @@ _build() {
         echo
         tm_extract_func "$UP" apply_baseline
         echo
+        tm_extract_func "$UP" baseline_count
+        echo
         echo 'case "$ACTION" in'
         echo '  record)  PERM_BASELINE="$1"; record_baseline "$PERM_BASELINE" ;;'
+        # The real Phase 4 report line, extracted, not re-typed.
+        echo '  report)  PERM_BASELINE="$1"'
+        tm_extract_line "$UP" '^success "Baseline recorded ' | sed 's/^/    /'
+        echo '    ;;'
         echo '  apply)   PERM_BASELINE="$1"; apply_baseline "$2" "${3:-}" "${4:-}" "${5:-}" ;;'
         echo '  has)     PERM_BASELINE="$1"; baseline_has "$PERM_BASELINE" "$2" ;;'
         echo '  reapply) PERM_BASELINE="$1"'
@@ -141,6 +147,22 @@ b_format_is_nul_delimited() {
     tm_assert_recorded "$BL" "${FE}/index.html" "" "" "" "a served file is not in the baseline"
 }
 tm_case "baseline-is-written-nul-delimited" none b_format_is_nul_delimited
+
+# REG-0018 (v1.2.0): Phase 4 reported "Baseline recorded (0 paths)" on every
+# upgrade — `wc -l` over a format that never writes a newline. The real report
+# line runs here against a real baseline, and the number is held to a count
+# taken independently of the script (NULs / 4, in Python).
+b_report_counts_records() {
+    _mkhost; _paths
+    _do record "$BL"; tm_assert_rc 0 "$RC" "record_baseline failed: $(cat "$TM_TMP/out")"
+    local want
+    want="$("$(tm_python)" -c 'import sys; d = open(sys.argv[1], "rb").read(); print(d.count(b"\0") // 4 if d.count(b"\0") % 4 == 0 else "BAD")' "$BL")"
+    [ "$want" -ge 5 ] 2>/dev/null || _tm_afail "the fixture baseline is not a whole number of records, or too small to prove anything: ${want}"
+    _do report "$BL"; tm_assert_rc 0 "$RC" "the report line failed: $(cat "$TM_TMP/out")"
+    tm_assert_eq "[OK] Baseline recorded (${want} paths)" "$(cat "$TM_TMP/out")" \
+        "the Phase 4 report does not count the baseline's records"
+}
+tm_case "phase-4-reports-the-number-of-recorded-paths" none b_report_counts_records
 
 # ─── THE ONE THIS FILE EXISTS FOR ────────────────────────────────────────────
 # A filename carrying a newline AND a pipe, shaped exactly like a second record

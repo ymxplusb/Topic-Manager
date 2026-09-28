@@ -140,6 +140,72 @@
       "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
       "status": "fixed-unreleased",
       "fixed": "release/v1.2.0 60ad85d (t41 reproduction), not yet released"
+    },
+    {
+      "id": "REG-0014",
+      "date": "2026-09-28",
+      "source": "WO-0004 builder round 3 (coordinator follow-ups after the v1.1.1 merge)",
+      "severity": "Low",
+      "finding": "version-surfaces: a ?v= token is counted wherever it appears once comments are stripped - HTML text, a plain JS string, or a comment inside an inline <script> in index.html - so one of those beside a REMOVED real token keeps the count at 16 and the gate passes",
+      "where": "tools/check-version-surfaces.sh (token scan)",
+      "disposition": "fixed in v1.2.0 (release/v1.2.0)",
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 (commit recorded in WO-0004 builder round 3): only src=/href= attribute values (Vue :src/:href included) are cache tokens; inline <script> bodies in index.html are dropped before the scan; test: t41 reg0014-only-src-and-href-attribute-values-are-cache-tokens"
+    },
+    {
+      "id": "REG-0015",
+      "date": "2026-09-28",
+      "source": "WO-0004 builder round 3 (coordinator follow-ups after the v1.1.1 merge)",
+      "severity": "Medium",
+      "finding": "tests/run.sh cannot tell when a test file stops early: an exit 0 after its first case passed as a file with fewer cases",
+      "where": "tests/run.sh (per-file tally)",
+      "disposition": "fixed in v1.2.0 (release/v1.2.0)",
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 (commit recorded in WO-0004 builder round 3): every file is held to the case count it declares (top-level tm_case lines; a file with a tm_case in a block states '# tm-expect-cases: N'); a shortfall or excess is recorded as a FAILED case (case-count-shortfall/-excess), an underivable count is a harness error; test: t41 reg0015-runner-holds-each-file-to-its-declared-case-count"
+    },
+    {
+      "id": "REG-0016",
+      "date": "2026-09-28",
+      "source": "WO-0004 builder round 3 (coordinator follow-ups after the v1.1.1 merge)",
+      "severity": "Low",
+      "finding": "t08 and t15 read the node probe's output without checking its exit code: a probe that printed the fields and then threw passed",
+      "where": "tests/t08-settings-banner.sh, tests/t15-theme.sh (_probe)",
+      "disposition": "fixed in v1.2.0 (release/v1.2.0)",
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 (commit recorded in WO-0004 builder round 3): _probe asserts exit 0 before a field is read; test: t08/t15 a-probe-that-fails-after-printing-fails-the-case"
+    },
+    {
+      "id": "REG-0017",
+      "date": "2026-09-28",
+      "source": "WO-0004 builder round 3 (coordinator follow-ups after the v1.1.1 merge)",
+      "severity": "Medium",
+      "finding": "the frontend-syntax gate is a fixed glob, so a file index.html loads going missing leaves it one file shorter and green",
+      "where": "project.yml gates[frontend-syntax]",
+      "disposition": "fixed in v1.2.0 (release/v1.2.0)",
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 (commit recorded in WO-0004 builder round 3): tools/check-frontend-syntax.sh derives the list from index.html (<script src>, stylesheet), fails on a missing file, still parses unloaded components; the gate cmd now calls it; test: t41 reg0017-frontend-gate-derives-its-list-from-index-html"
+    },
+    {
+      "id": "REG-0018",
+      "date": "2026-09-28",
+      "source": "WO-0004 builder round 3 (coordinator follow-ups after the v1.1.1 merge)",
+      "severity": "Low",
+      "finding": "upgrade-full.sh Phase 4 'Baseline recorded (N paths)' used wc -l on a NUL-delimited file, so it always said 0",
+      "where": "install/upgrade-full.sh Phase 4",
+      "disposition": "fixed in v1.2.0 (release/v1.2.0)",
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 (commit recorded in WO-0004 builder round 3): baseline_count(): NUL bytes / 4; test: t10 phase-4-reports-the-number-of-recorded-paths"
+    },
+    {
+      "id": "REG-0019",
+      "date": "2026-09-28",
+      "source": "WO-0004 builder round 3 (coordinator follow-ups after the v1.1.1 merge)",
+      "severity": "Low",
+      "finding": "AUDIT_SYSLOG_FAILED and the bounded syslog send's messages (receive queue full, could not send, no Unix sockets) were not documented",
+      "where": "TROUBLESHOOTING.md",
+      "disposition": "fixed in v1.2.0 (release/v1.2.0)",
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 (commit recorded in WO-0004 builder round 3): Audit trail section documents each, keyed to the real strings; test: t39 troubleshooting-is-keyed-to-the-real-strings (5 new pairs)"
     }
   ]
 }

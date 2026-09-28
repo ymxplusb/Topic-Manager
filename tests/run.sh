@@ -130,6 +130,24 @@ echo "${C_BLD}Topic Manager test suite${C_OFF}"
 echo "  script under test: $(basename "${TM_UPGRADE_SH:-${TM_REPO_ROOT}/install/upgrade-full.sh}")"
 echo "  files:             ${#FILES[@]}"
 
+# REG-0015 (v1.2.0): how many cases a file DECLARES. A file that stopped early
+# (an `exit 0` or a stray tm_finish after its first case) exited 0 with fewer
+# records, and "reported at least one case" was all that was ever asked. The
+# count is derived from the file itself: one per top-level `tm_case` line. A
+# tm_case inside a block (a loop, a function) cannot be counted by reading,
+# so such a file states its total in ONE `# tm-expect-cases: N` line, and a
+# file with an indented tm_case and no such line is a harness error.
+_expected_cases() {   # _expected_cases <file> -> N on stdout; 1 = cannot say
+    local f="$1" d n
+    d="$(grep -E '^# tm-expect-cases: [0-9]+$' "$f" || true)"
+    n="$(grep -cE '^# tm-expect-cases:' "$f" || true)"
+    if [ "${n:-0}" -gt 1 ]; then return 1; fi
+    if [ -n "$d" ]; then printf '%s\n' "${d##* }"; return 0; fi
+    if grep -qE '^[[:space:]]+tm_case[[:space:]]' "$f"; then return 1; fi
+    n="$(grep -cE '^tm_case[[:space:]]' "$f" || true)"
+    printf '%s\n' "${n:-0}"
+}
+
 ANY_FAIL=0; ANY_ERROR=0; RAN=0
 for f in "${FILES[@]}"; do
     before="$(wc -l < "$TM_RESULTS" | tr -d ' ')"
@@ -155,6 +173,28 @@ for f in "${FILES[@]}"; do
             ANY_ERROR=1
             printf '  %sHARNESS ERROR%s in %s — %d unrecognised result record(s), %d recognised\n' \
                 "$C_RED" "$C_OFF" "$(basename "$f")" "$bad_recs" "$good_recs"
+        fi
+    fi
+    # REG-0015: the file reported exactly the cases it declares. A shortfall is
+    # recorded as a FAILED case of its own, so every consumer of the results
+    # (the tally, tests/mutate.sh) sees it; an unrecoverable file (exit 2) has
+    # already said why.
+    if [ "$rc" -ne 2 ]; then
+        if ! expected="$(_expected_cases "$f")"; then
+            ANY_ERROR=1
+            printf '  %sHARNESS ERROR%s in %s — its case count cannot be derived: a tm_case inside a block needs ONE "# tm-expect-cases: N" line\n' \
+                "$C_RED" "$C_OFF" "$(basename "$f")"
+        else
+            got="$(sed -n "$((before + 1)),\$p" "$TM_RESULTS" | awk -F'\t' -v me="$(basename "$f")" \
+                'NF == 5 && ($1 == "PASS" || $1 == "FAIL" || $1 == "SKIP") && $2 == me { n++ } END { print n + 0 }')"
+            if [ "$got" -ne "$expected" ]; then
+                ANY_FAIL=1
+                if [ "$got" -lt "$expected" ]; then cid="case-count-shortfall"; else cid="case-count-excess"; fi
+                printf '%s\t%s\t%s\t%s\t%s\n' FAIL "$(basename "$f")" "$cid" "" \
+                    "declares ${expected} case(s), reported ${got}" >> "$TM_RESULTS"
+                printf '  %sFAIL%s  %s — declares %d case(s) and reported %d; it stopped early (or counted wrong)\n' \
+                    "$C_RED" "$C_OFF" "$(basename "$f")" "$expected" "$got"
+            fi
         fi
     fi
     case "$rc" in
