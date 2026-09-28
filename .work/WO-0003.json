@@ -1,0 +1,723 @@
+{
+ "id": "WO-0003",
+ "intent": "Topic Manager next release, proposed release/v1.1.0, one branch, ten items: (1) Aurora Glass theme for Dark/Light/Color Blind without changing content, flow or element placement; (2) SettingsTab left-side section navigation following the CORTEX Settings pattern; (3) new operator-set STIG configuration settings (remote syslog, NTP, concurrent-session limit, audit retention/capacity warning, nginx rate limiting, TLS cipher/protocol policy); (4) remove TLSv1/1.1 from /etc/nginx/nginx.conf, FIPS-approved cipher list, work on a FIPS-mode STIG'd Ubuntu 24.04; (5) tm.db 0600 / data dir 0700 owned by the service account, enforced in install.sh, install/upgrade-full.sh and tests; (6) every third-party component to latest stable; (7) PPSM.csv and downloadPpsm() list every port/protocol/service inbound and outbound; (8) remove every CrypticLight environment tie; (9) SBOM/NOTICES/AboutModal/README/INSTALL/TROUBLESHOOTING/CHANGELOG updated; (10) PIV/CAC explicitly OUT of scope.",
+ "project": "Topic Manager",
+ "release": "minor",
+ "opened": "2026-09-26",
+ "status": "assuring",
+ "scout": {
+  "method": "grep across naming variants (colour literals via a Python regex scanner over main.css with token blocks :11-55 excluded; env ties via case-insensitive multi-pattern grep over the tree minus .git/.work/.claude/SonarQube reports); python ast for the README audit-action set; read-through of SettingsTab.js, TopBar.js, main.js theme sites, tm/routes.py settings + restart, tm/service_control.py, tm/config.py, tm/models.py, tm/app.py, tm/auth.py, tm/kafka_client.py, polkit rule, both systemd units, nginx site + snippet, upgrade-full.sh baseline/backup/restore blocks, cortex-prod SettingsTab rail + main.css. Latest versions measured live from pypi JSON and registry.npmjs.org 2026-09-26; OSV queried for the two moving pins. No JS language server: the inline-style colour sweep is grep-only (INCOMPLETE for colours composed at runtime).",
+  "blast_radius": "product",
+  "second_sweep": "codex daybreak-blue COMPLETE (exit 0; banner gpt-daybreak-blue-latest/xhigh; 59 quotes verified; 13 bogus citations were fragment tokens, none relied on here). Landed after first hand-off; reconciled below. Coverage gaps it reported: did not run tests, no FIPS host, external ci-templates not inspected.",
+  "scope": [
+   "app/styles/main.css  token blocks :11-55 remapped; 45 literal lines outside them (see consumers); new rail classes mirroring CORTEX; version header :3",
+   "app/components/TopBar.js  setTheme :27-34, mounted :45-46, theme menu :95-100, ?v= token :55",
+   "app/main.js  theme apply in onMounted :195-198; banner colorMap/fgMap :172-179 (classification colours, not theme)",
+   "app/components/SettingsTab.js  template :271-437 re-laid into rail+panes; new sections; downloadPpsm :244-268 incl version literal :247",
+   "app/components/TopicsTab.js  inline colour literals :189, :218, :231",
+   "app/components/modals/AboutModal.js  dependency table :18-37, ?v= token",
+   "index.html  16 ?v= tokens (all v=1006) :10-36; <title> :7 (branding question)",
+   "tm/routes.py  settings endpoints :650-706 (PUT has NO audit call), _max_sessions :63-64 used :186, /version product string :647",
+   "tm/config.py  new config keys/defaults",
+   "tm/models.py  get_db :7-10 (tm.db created under process umask -> 0644); retention/capacity",
+   "tm/audit.py  log_action :17-25 writes SQLite only; audit off-load needs a syslog emit here",
+   "tm/app.py  _setup_logging :70-91; Graylog comment :78",
+   "tm/auth.py  env defaults :28-31; Tls() :14",
+   "tm/service_control.py  ALLOWED_UNITS :62 + new apply units",
+   "tm/clusters.py, tm/kafka_client.py  FIPS review only",
+   "tm/VERSION",
+   "install/polkit/50-topic-manager.rules  new unit+verb pairs",
+   "systemd/topic-manager.service  UMask=0077; ReadWritePaths for any staging dir",
+   "systemd/NEW topic-manager-apply-*.service root oneshot units + root-owned helper (new files, pattern = topic-manager-nginx-test.service)",
+   "nginx/topic-manager.conf  ssl_protocols :33, ssl_ciphers :34, limit_req, placeholder server_name :6-7,:23,:29",
+   "nginx/NEW http-context conf.d file for limit_req_zone; managed nginx.conf edit/template",
+   "nginx/tm-security-headers.conf  any new location must include it",
+   "install.sh  :4, data dir :166-167 (chown only), :320, :323, nginx.conf management",
+   "install/upgrade-full.sh  REPO_URL :43, VUE pin :104-105, BASELINE_PATHS :110-123, data-dir modes :1777-1779, restore cp -a :547-549 and :1655-1660, backup :1296-1302, access audit :872-876, nginx.conf backup/restore (absent), comment :1599",
+   "prepare-offline.sh  :4",
+   "requirements.txt  confluent-kafka 2.15.0 -> 2.15.1",
+   "config/config.yaml.example  :12-25, :59-61, new keys",
+   "config/clusters.yaml.example  :26, :32",
+   "tools/check-config-example.sh  every new config key",
+   "tools/check-sbom-consistency.sh  (reads the moved pins)",
+   "tests/t03-permission-baseline.sh, t09, t10, t11  extraction anchors + new 0600/0700 cases",
+   "tests/lib/settings-probe.js + tests/t08-settings-banner.sh  bind SettingsTab.data/methods/computed directly",
+   "tests/mutations.txt  new mutation controls",
+   "tests/t02-dropin-backup.sh:157, tests/run.sh, tests/mutate.sh (env mentions)",
+   "PPSM.csv, SBOM.md, NOTICES.md, README.md, docs/INSTALL.md, TROUBLESHOOTING.md, CHANGELOG.md, install/README.md, VERSION",
+   ".claude/project.yml  stale lines (see unknowns), new hazards",
+   "install.sh:122 safe_install_dir 750 DATA_DIR (CODEX-ONLY) - the fresh-install data-dir mode site",
+   "install/upgrade-full.sh:1702-1715 baseline replay loop chmod \"$fm\" (CODEX-ONLY) - re-applies the recorded tm.db mode",
+   "prepare-offline.sh:134-137 tar of the whole working directory (CODEX-ONLY) - ships .claude/, .work/, SonarQube reports and any untracked file"
+  ],
+  "consumers": [
+   "THEME class writers (3, all REACHED): app/main.js:195-198 onMounted (only path before login); TopBar.js:27-34 setTheme; TopBar.js:45-46 mounted. localStorage 'tmTheme' read at main.js:195, TopBar.js:11, :45 - changing key or value shape orphans saved prefs unless migrated.",
+   "THEME undefined tokens: main.css:435 var(--bg-panel,#111827) and var(--border,#1f2937) are never defined, so the fallback literal ALWAYS renders; a token remap does not reach .idle-warn-card.",
+   "THEME CSS literals outside token blocks: 87-88 (banner default, classification), 164, 175, 177, 221, 223, 229, 295, 297, 299, 303-304, 314, 319, 321, 365-366, 378, 386, 393, 403-405, 410-411, 418, 425-426, 434-435, 437-439, 441, 443-444, 460, 463; transparent-only 97, 181, 193, 203, 231, 329.",
+   "THEME JS literals: TopicsTab.js:189, :218, :231; SettingsTab.js:25-30, :49, :57 and main.js:172-179 are banner classification colours (EXCLUDED by intent, owner to confirm).",
+   "THEME conflict: Aurora CB forces dark and restores the prior light/dark via two switches; TM has an exclusive 3-way menu. Aurora also prescribes 16px body, 20px radii, 35-60px headings, which change metrics. Owner question.",
+   "SETTINGS sections today (SettingsTab.js): Cluster Profiles :274-313; Service Control :315-340; loading placeholder :346-355; DoW Consent Banner :357-369; Branding & Classification Banner :371-405; Support & Compliance Downloads/PPSM :407-414; About :416-426; ClusterModal :428-435. There is NO Session section.",
+   "SETTINGS CORTEX pattern (cortex-prod SettingsTab.js): .settings-shell > nav.settings-rail[aria-label] > input.settings-rail-search + button.settings-rail-item {active, dimmed} (:511-516); .settings-content > div.settings-pane v-show=activeGroup==='id' headed by div.settings-group-label (:521-522). selectGroup(id) sets activeGroup, persists localStorage cortexSettingsGroup (:2061-2064); railMatch (:2065); rail DERIVED from the template by deriveSettingsRail() (:364-433). CSS main.css:790-835 (grid 232px|1fr, sticky rail, active = rgba(6,182,212,.1) + inset 2px var(--fill-cyan) - TM has no --fill-cyan; wraps to a row under 860px).",
+   "SETTINGS backend: GET/PUT /api/settings (routes.py:684-706) flat whitelist over app_settings; PUT writes NO audit record; /api/settings/public (:675) is unauthenticated - new keys must go in _ALL_KEYS only.",
+   "OS-APPLY: topic-manager.service runs NoNewPrivileges + ProtectSystem=strict (RW: data, logs, tmp, clusters.d), so the app cannot write /etc/chrony, /etc/rsyslog.d or /etc/nginx. Precedent: polkit grants topic-manager.service restart, nginx.service reload|restart, topic-manager-nginx-test.service start; nginx -t runs as root in a oneshot with fixed ExecStart. Safe extension: app writes validated values to a staging file, then starts a root oneshot apply unit whose fixed helper re-validates (allowlist), renders, tests (rsyslogd -N1 / chronyd -p / nginx -t), installs, reloads and rolls back on failure.",
+   "NEW PRIVILEGED HELPERS: remote syslog (rsyslog drop-in + restart; TLS needs rsyslog-gnutls or rsyslog-openssl, not default); NTP (chrony or timesyncd drop-in + restart; status readout chronyc tracking / timedatectl show is read-only); nginx rate limit + TLS policy (limit_req_zone is http-context -> conf.d; ssl_protocols in http context lives in nginx.conf and cannot be repeated from conf.d). NO helper: session limit (routes.py:186 already enforces session.max_concurrent), audit retention/capacity (app-side; audit.py has no retention today).",
+   "AUDIT OFF-LOAD: tm/audit.py:17 writes SQLite only; tm/app.py:76 syslog handler carries app log lines, not audit rows.",
+   "FIPS touchpoints: tm/app.py:41 Flask cookie signing (itsdangerous HMAC, Flask default SHA-1); tm/models.py:58 uuid4; tm/clusters.py:358 os.urandom; tm/clusters.py:328,:341 cryptography (pypi wheel bundles its own OpenSSL, not the host FIPS provider); tm/kafka_client.py:24-33 confluent-kafka wheel bundles librdkafka+OpenSSL (same); tm/auth.py:14,:40,:83 ldap3 SIMPLE over stdlib ssl (host OpenSSL; no NTLM/MD4 on the reached path); nginx/topic-manager.conf:33-34; install.sh:320 rsa:2048; install/upgrade-full.sh:1161 s_client, :1674-1675 openssl rsa -modulus (fails on EC keys). No hashlib md5/sha1 call in tm/. gunicorn has no TLS (loopback).",
+   "tm.db MODE: tm/models.py:10 sqlite3.connect under default umask (unit has no UMask=) -> 0644, and -wal/-journal siblings. upgrade-full.sh BASELINE_PATHS :112 records tm.db and REPLAYS its old mode after upgrade; data dir 755 then 750 at :1777-1779; restores cp -a :547-549, :1655-1660 keep the backup's 0644; install.sh:167 chown only. No test asserts the tm.db mode.",
+   "DEPENDENCIES measured 2026-09-26: Flask 3.1.3, Werkzeug 3.1.8, gunicorn 26.2.0, ldap3 2.9.1 (last release 2021), PyYAML 6.0.3, cryptography 50.0.1 - all already latest; confluent-kafka 2.15.0 -> 2.15.1 (OSV clean); Vue 3.5.42 -> 3.5.43 (OSV clean; one jsDelivr fetch hashed sha256 b72394052eef1eeda1752db3758ce1be6f88016903f22e5241cc732ea307478e - re-verify against the npm tarball). Transitive Python deps unpinned and absent from SBOM. No lib/ in repo.",
+   "PPSM: PPSM.csv and SettingsTab.js:244-268 ALREADY disagree (generator has LDAP 389 and 'Kafka K8s 9094 MetalLB', lacks DNS/NTP/install rows; static lacks 389). Neither lists syslog out (514 udp/tcp, 6514 TLS) or states that OCSP/CRL is not used. PPSM.csv:4 cites 192.168.202.90; :27 says GitHub clone.",
+   "ENV TIES in code: tm/auth.py:28, :29, :31 (defaults - removal is an auth outage for any config that omits the keys; needs an upgrade blocker), tm/app.py:78, install/upgrade-full.sh:43, SettingsTab.js:260-261, install.sh:323.",
+   "ENV TIES in config/docs/tests: config.yaml.example:12-14, :22, :25, :59-61; clusters.yaml.example:26, :32; docs/INSTALL.md ~94 lines (:11-23 substitution table, :54-135, :202-226, :348-367, :379-477, :517-539, :579-593, :634-668, :758-760 incl claude_admin, jrodman, int-CL-CA, /c/Users/jrodm); SBOM.md:86-87; PPSM.csv:4, :16; CHANGELOG.md:323, :357 (history); tests/t02:157; tests/run.sh, mutate.sh, t03, t09, t11 (claude_admin in usage text); docs/SonarQube-Report-*.html (192.168).",
+   "BRANDING (owner question, not a tie): Jarvis in 30 files incl index.html:7, TopBar wordmark, routes.py:647, jarvis-*.png/ico, unit Description=, PPSM title, SettingsTab.js:419.",
+   "ORPHANED: install/upgrade-full.sh:43 online upgrade clones the GitHub remote the owner calls stale, while .github/workflows/main.yml says GitHub is authoritative and mirrors to GitLab.",
+   "ORPHANED: tm/VERSION reads 1.0.6 in every tag v1.0.6..v1.0.11; CI checks only VERSION. /api/health answered 1.0.6 on prod today, which cannot tell those six releases apart.",
+   "CODEX-ONLY verified: prepare-offline.sh:134-137 bundles the entire working dir excluding only pyc/__pycache__/.git/.gitignore, so .claude/project.yml, .work/*.json (prod IPs, DNs, Vault notes), docs/SonarQube-Report-*.html and untracked files ship in the offline bundle. Env-neutrality is incomplete unless the bundle becomes allowlisted or git archive.",
+   "CODEX-ONLY verified: install.sh:265-270 and install/upgrade-full.sh:1795-1798 run tm.migrate_clusters --example config/clusters.yaml.example, so the crypticlight broker hostnames and 192.168.202.131-133 can be SEEDED onto a new host - the example is a runtime input, not just docs.",
+   "CODEX-ONLY verified: install.sh:122 creates the data dir 0750 (my sweep cited only :166-167).",
+   "CODEX-ONLY: .cb-mode (main.css:52-55) remaps only --accent-green and --accent-red; every other token is inherited from dark.",
+   "CODEX-ONLY: install/upgrade-full.sh:1045,1069,1071 embedded PYLDAP bind probe (SIMPLE + CERT_REQUIRED) is another LDAP/FIPS touchpoint; install.sh:253 secrets.token_hex.",
+   "CODEX-ONLY: stale 3.5.35 Vue claims also at CHANGELOG.md:246,294 (history) and .claude/project.yml:475.",
+   "CORRECTION: transitive Python deps ARE listed in NOTICES.md:107-114 (Jinja2 3.1.6, MarkupSafe 3.0.3, itsdangerous 2.2.0, click 8.5.0, blinker 1.9.0, cffi 2.1.1, pycparser 3.0, pyasn1 0.6.4) as an install snapshot; they are unpinned in requirements.txt and not gated.",
+   "Off-repo consumers (codex residual): live config.yaml, systemd drop-ins, monitoring targets and runbooks that reference moved values - not inspectable from the repo."
+  ],
+  "surfaces": [
+   "VERSION 1.0.11 -> 1.1.0",
+   "tm/VERSION 1.0.6 -> 1.1.0 (five releases stale)",
+   "app/components/SettingsTab.js:247",
+   "app/components/modals/AboutModal.js table + ?v=",
+   "app/main.js (confirm the 'unknown' sentinel only)",
+   "app/components/TopBar.js:55 ?v=",
+   "index.html 16 x ?v=1006 -> one new value",
+   "docs/INSTALL.md :3, :496, :500, :626, :633, :644, :799",
+   "SBOM.md :3, :7, :20, :22-25 (divergence text now false), :86-87",
+   "NOTICES.md :11-12 (false divergence), :18, confluent-kafka row",
+   "README.md :1, :42, :85, :198, :775-788, Compliance :918+ (audit-action list, TLS line :921)",
+   "CHANGELOG.md new [1.1.0]",
+   "TROUBLESHOOTING.md new failure modes",
+   "install/README.md",
+   "app/styles/main.css:3",
+   "install.sh:4",
+   "prepare-offline.sh:4",
+   "PPSM.csv:2 + rewrite",
+   ".claude/project.yml"
+  ],
+  "gate_coverage": [
+   "theme: frontend-syntax only; render_proof manual; nothing checks contrast, CB cues or placement",
+   "settings rail: frontend-syntax; t08 via settings-probe.js (load/save barrier only)",
+   "new settings backend: python-syntax; config-example (only for config.yaml keys); nothing for new routes, apply helpers or polkit logic",
+   "nginx/TLS/FIPS: no repo gate reads .conf; nginx -t only on a host; upgrade-full.sh Phase 12 curl -skI at runtime",
+   "tm.db mode: t03/t10 generic baseline round-trip; no 0600/0700 assertion; mode cases skip on Windows, CI --strict runs them",
+   "dependencies: sca, sbom-consistency",
+   "PPSM: frontend-syntax catches an apostrophe; nothing checks PPSM.csv == generator",
+   "env neutrality: nothing",
+   "CI (ci-templates v1.5.3 on a tag): VERSION==tag, shellcheck, CR check, data-file parse, tests --strict, Sonar"
+  ],
+  "unknowns": [
+   "SECOND SWEEP: COMPLETE - reconciled; 6 codex-only sites verified and added (tagged CODEX-ONLY in consumers).",
+   "Whether prod runs 1.0.6 or any of 1.0.7-1.0.11 (tm/VERSION never moved).",
+   "Whether prod config.yaml sets ldap_server/ldap_base_dn/ldap_domain explicitly. Not read: the file holds secrets.",
+   "No FIPS-enabled host tested; the wheel-bundled OpenSSL claims come from how the packages are built, not from a run. ldap3 import on a FIPS kernel not measured.",
+   "Colour literals composed at runtime or via :class cannot be found by grep.",
+   "nginx.conf: fully managed file or idempotent in-place edit - undecided; upgrade-full.sh backs up neither today.",
+   "CONTRACT STALE: repo (:3); stack (:7-8); code_map note '75 files' (85 tracked); gates header (:181-183) 'NO CI'; accepted_test_failures (:275); repo-tests '120 cases' (CI 128); release.tag none (:334-338) but tags v1.0.6..v1.0.11 exist; ci (:341-346) says no .github workflow and no .gitlab-ci.yml, both exist; promote.pipeline none; unavailable_gates.sonarqube (CI Sonar job since 2026-09-09); unit-tests-on-windows 'no designated host' (CI runs --strict); promote.prod.running_version 1.0.4 (1.0.6 measured today, unreliable); infra_remeasure dated 2026-09-02; SettingsTab surface 'line ~103' (now :247); straggler_sweep :173 hardcodes 1.0.4; hazards vulnerable-pin-in-requirements (resolved, 50.0.1); vue-fetched-without-integrity (resolved, install.sh:184-191); no-ci-no-tests; principles 'no CI'; gitlab remote absent; no hazard for tm/VERSION drift under CI-only tags.",
+   "OpenProject tool reported UPDATED work package #90, not created - a ticket for WO-0003 already existed; confirm it is not another repository WO-0003.",
+   "WORKING TREE: app/styles/main.css was modified at 10:28 (+191/-91, Aurora palette, keeps 3-way menu, rejects Aurora metrics) by another agent or the owner while scout was running; scout did not touch it. Theme work has started before the escalations were answered and before status left scoping."
+  ]
+ },
+ "escalations": [
+  {
+   "from": "scout",
+   "question": "Keep the 'Jarvis' product branding?"
+  },
+  {
+   "from": "scout",
+   "question": "Aurora CB model (forces dark, two switches) vs the existing 3-way menu; Aurora metrics vs 'no placement change'."
+  },
+  {
+   "from": "scout",
+   "question": "Classification banner colours stay exempt from the theme?"
+  },
+  {
+   "from": "scout",
+   "question": "Online upgrade clone source: GitHub (upgrade-full.sh:43, and the workflow says GitHub is authoritative) or GitLab? Make REPO_URL operator-configurable?"
+  },
+  {
+   "from": "scout",
+   "question": "Concurrent-session limit: config.yaml session.max_concurrent exists; UI-editable or read-only, and which source wins?"
+  },
+  {
+   "from": "scout",
+   "question": "TLS policy: read-only FIPS list or selectable?"
+  },
+  {
+   "from": "scout",
+   "question": "Items 3+4 add root-side apply helpers (rsyslog, chrony/timesyncd, nginx.conf). Confirm they ship in the same release as a theme and a dependency bump."
+  }
+ ],
+ "openproject": {
+  "project": 5,
+  "ticket": 110,
+  "url": "https://openproject.int.crypticlight.com/work_packages/110"
+ },
+ "builder": {
+  "date": "2026-09-26",
+  "branch": "release/v1.1.0 (from gitlab/main d808219); committed locally, NOT pushed, NOT tagged, NOT deployed",
+  "commits": [
+   "39fffe5 deps: confluent-kafka 2.15.1, Vue 3.5.43; sbom gate now holds the Vue pin",
+   "f171ea3 ui: Aurora Glass theme for Dark / Light / Color Blind",
+   "3d7bf88 settings: left-side section rail (General / System / Support)",
+   "44f9135 audit: PUT /api/settings writes SETTINGS_UPDATE",
+   "f14ea64 audit db: tm.db 0600 and data/ 0700, from creation through upgrade and restore",
+   "b0ab6aa tls/fips: TLS 1.2/1.3 in nginx.conf, FIPS cipher list, raw key-pair check, SHA-256 cookies",
+   "8b2483a tests: remote runs ship what the new cases read; neutral usage; two fixes from the first Linux run",
+   "f4faeff tests: t17 drives the real Phase 10 block on a v1.0.x baseline",
+   "99ef31c ppsm: one document, inbound and outbound, held by a gate",
+   "7d05e56 docs: environment-neutral, from-scratch INSTALL; FIPS, nginx.conf, tm.db and LDAP-key failure modes",
+   "adf3764 env: no built-in directory or source, fresh install to a finished state, leak-free bundle",
+   "ad1a99f release: v1.1.0 version cascade; tm/VERSION held to VERSION by a gate",
+   "9a794ff tests: --remote ships HEAD via git archive and re-inits it as a work tree"
+  ],
+  "files_changed": [
+   "M\t.claude/project.yml",
+   "M\t.gitattributes",
+   "D\t.github/workflows/main.yml",
+   "M\tCHANGELOG.md",
+   "M\tNOTICES.md",
+   "M\tPPSM.csv",
+   "M\tREADME.md",
+   "M\tSBOM.md",
+   "M\tTROUBLESHOOTING.md",
+   "M\tVERSION",
+   "M\tapp/components/SettingsTab.js",
+   "M\tapp/components/TopBar.js",
+   "M\tapp/components/TopicsTab.js",
+   "M\tapp/components/modals/AboutModal.js",
+   "M\tapp/components/modals/ClusterModal.js",
+   "M\tapp/main.js",
+   "M\tapp/styles/main.css",
+   "M\tconfig/clusters.yaml.example",
+   "M\tconfig/config.yaml.example",
+   "M\tdocs/INSTALL.md",
+   "D\tdocs/SonarQube-Report-2026-05-07.html",
+   "D\tdocs/SonarQube-Report-2026-05-29.html",
+   "M\tindex.html",
+   "M\tinstall.sh",
+   "M\tinstall/README.md",
+   "M\tinstall/upgrade-full.sh",
+   "M\tnginx/topic-manager.conf",
+   "M\tprepare-offline.sh",
+   "M\trequirements.txt",
+   "M\tsystemd/topic-manager.service",
+   "M\ttests/lib/settings-probe.js",
+   "A\ttests/lib/theme-probe.js",
+   "A\ttests/lib/theme_css_check.py",
+   "M\ttests/mutate.sh",
+   "M\ttests/mutations.txt",
+   "M\ttests/run.sh",
+   "M\ttests/t02-dropin-backup.sh",
+   "M\ttests/t03-permission-baseline.sh",
+   "M\ttests/t07-config-reload.sh",
+   "M\ttests/t08-settings-banner.sh",
+   "M\ttests/t09-clusters-permission-model.sh",
+   "M\ttests/t11-safe-install-dir.sh",
+   "M\ttests/t14-idle-session.sh",
+   "A\ttests/t15-theme.sh",
+   "A\ttests/t16-settings-audit.sh",
+   "A\ttests/t17-audit-db-modes.sh",
+   "A\ttests/t18-tls-fips.sh",
+   "A\ttests/t19-ppsm.sh",
+   "A\ttests/t20-directory-config.sh",
+   "A\ttests/t21-env-neutral.sh",
+   "A\ttests/t22-version-surfaces.sh",
+   "M\ttm/VERSION",
+   "M\ttm/app.py",
+   "M\ttm/auth.py",
+   "M\ttm/migrate_clusters.py",
+   "M\ttm/models.py",
+   "M\ttm/routes.py",
+   "A\ttools/check-env-neutral.sh",
+   "M\ttools/check-heredocs.sh",
+   "A\ttools/check-ppsm-consistency.sh",
+   "M\ttools/check-sbom-consistency.sh",
+   "A\ttools/check-version-surfaces.sh"
+  ],
+  "root_cause": [
+   "THEME: every colour was a literal or a cyan-accent token set; --bg-panel/--border were referenced and never defined; CB overrode two colours; dark --text-muted was ~2.9:1. Derived tokens could not live on :root because the theme class is on body.",
+   "SETTINGS: one flat column; no section model the v1.2.0 groups could join.",
+   "AUDIT: PUT /api/settings changed global display state and wrote no audit record.",
+   "TM.DB: sqlite created the file under the process umask (0644); the upgrade's permission baseline replayed that 0644 and cp -a restores copied it back.",
+   "TLS: nginx.conf's http-level ssl_protocols (stock Ubuntu: TLSv1 TLSv1.1 TLSv1.2 TLSv1.3) was never managed; site cipher list HIGH:!aNULL:!MD5 admitted CBC/ChaCha; the key-pair check used `openssl rsa -modulus` (RSA-only); Flask signed cookies with SHA-1.",
+   "ENV TIES: tm/auth.py defaulted the directory to one site's DC/base DN/domain; the upgrade cloned a fixed GitHub URL; the example cluster profiles were installed as a fresh host's live clusters; the offline bundle was a tarball of the working directory (it shipped .claude/ and .work/); docs/tests/config examples named site hosts, addresses, accounts and paths.",
+   "PPSM: two hand-maintained copies with no check between them.",
+   "VERSION DRIFT: CI compares only VERSION with the tag, so tm/VERSION (what /api/health serves) stayed 1.0.6 through v1.0.11.",
+   "FRESH INSTALL: install.sh assumed a prepared host (config edited by hand, cert placed by hand, services started by hand), pulled a compiler toolchain, and failed offline on `pip install --upgrade pip`."
+  ],
+  "amendments": [
+   {
+    "file": "app/components/modals/ClusterModal.js",
+    "reason": "one accent-color token (--accent-cyan -> --accent) so the active-state accent is consistent; no other change"
+   },
+   {
+    "file": "tm/migrate_clusters.py",
+    "reason": "coordinator item 2: a fresh install must get an EMPTY cluster store, never the example profiles; --example removed; empty store = migrated"
+   },
+   {
+    "file": "tests/t07-config-reload.sh",
+    "reason": "the empty-store contract reverses the old 'refuse an empty list' case; plus a new case closing mutation MC5"
+   },
+   {
+    "file": "tests/t14-idle-session.sh",
+    "reason": "printf|grep -q under pipefail took SIGPIPE on the Linux host once tm/routes.py grew — a false failure; here-strings instead"
+   },
+   {
+    "file": "tools/check-heredocs.sh",
+    "reason": "classify the new PYKEYS/PYCFG Python heredocs, or the gate fails as unclassified"
+   },
+   {
+    "file": ".gitattributes",
+    "reason": "export-ignore .claude/, .work/, .github/ so git archive (bundle and CI tarball) cannot ship them (coordinator item 1)"
+   },
+   {
+    "file": ".github/workflows/main.yml",
+    "reason": "deleted on the owner's instruction (GitHub mirror that declared GitHub authoritative)"
+   },
+   {
+    "file": "docs/SonarQube-Report-2026-05-07.html, docs/SonarQube-Report-2026-05-29.html",
+    "reason": "DECISION: removed from the repo (dated artefacts carrying internal addresses; remain in history) rather than annotated"
+   },
+   {
+    "file": "tools/check-env-neutral.sh, tools/check-version-surfaces.sh, tests/t15-t22, tests/lib/theme-probe.js, tests/lib/theme_css_check.py",
+    "reason": "new gates/tests the owner asked for (PPSM gate) or that the items needed to be provable (env neutrality, version surfaces, theme, audit, modes, TLS, directory config)"
+   }
+  ],
+  "consumers_addressed": "THEME class writers 3/3 (main.js onMounted, TopBar setTheme, TopBar mounted) through one validated reader; SettingsTab probe bindings kept (loadSettings/saveSettings/saveBanner/applyBanner unchanged); tm.db restore sites 3/3 (Phase 10 replay, Phase 10 cp -a, restore_from_backup); migrate_clusters callers 2/2; LDAP-key rule copies 3/3 (auth.py, install.sh, upgrade-full.sh, held equal by t20).",
+  "gates": {
+   "python-syntax": "PASS (11 files)",
+   "shell-syntax": "PASS",
+   "frontend-syntax": "PASS",
+   "config-example": "PASS",
+   "heredoc-python": "PASS (7 heredocs)",
+   "sbom-consistency": "PASS (now also holds the Vue pin); RED before the copies were updated",
+   "sca": "PASS 8 clean, 0 vulnerable (OSV, 2026-09-26)",
+   "ppsm-consistency (new)": "PASS; RED on 7 one-sided drifts and 5 consistent edits",
+   "env-neutral (new)": "PASS repo mode; RED in dir/bundle fixtures; RED on the pre-cleanup tree (104 ties)",
+   "version-surfaces (new)": "PASS; RED on the pre-cascade tree (13 stale surfaces) and in t22 fixtures",
+   "tests local": "see builder.test_runs",
+   "tests remote --strict (Linux host, temp dir only)": "180 passed, 0 failed, 19 skipped (all 'needs node' — node is not on the host; the workstation run covers them); exit 1 only because --strict counts those skips",
+   "shellcheck -S warning (on the Linux host)": "all changed scripts clean except two PRE-EXISTING SC2034 warnings (tests/run.sh C_GRN, upgrade-full.sh BASELINE_REAL_PATH)"
+  },
+  "not_verified": [
+   "FIPS behaviour: no FIPS-enabled host; argued from build/config, not measured.",
+   "install.sh and prepare-offline.sh --bundle were not run end-to-end on a clean host (pieces are driven by tests against scratch trees).",
+   "Render proof of the theme and rail in a browser (no dev server; the contract says prove against a running host) — not done by builder.",
+   "t12 route case fails on the workstation only (MSYS path conversion); passes on Linux.",
+   "The ci-templates VERSION==tag check lives in another repo and was not changed; tm/VERSION is enforced through the test lane (t22) instead."
+  ],
+  "test_runs": {
+   "local_workstation (Git Bash + venv of requirements.txt)": "149 passed, 1 failed (t12 route case: MSYS path-conversion artefact, workstation-only), 49 skipped (POSIX mode/chown/symlink cases, run on Linux)",
+   "remote_linux --strict (git archive HEAD in /tmp, sudo, PYTHONDONTWRITEBYTECODE=1)": "180 passed, 0 failed, 19 skipped (node absent on host; covered by the workstation run)",
+   "mutation_controls_remote (tests/mutate.sh, M01-M87)": "87 run, 84 killed, 0 SURVIVED, 0 aborted, 3 documented-equivalent (M87 new; two pre-existing)",
+   "hand_run_controls": "theme 11/11 red, settings rail 7/7, settings audit 5/5, cookie digest 2/2, PPSM gate 12/12, version gate 3/3, migrate 4/4 (MC5 first SURVIVED, closed by a new t07 case), auth 4/4, bundle 2/2 (B1 first harness-errored on its own anchor, re-anchored, then red)"
+  },
+  "round2": {
+   "date": "2026-09-26",
+   "commits": [
+    "bbac195 audit (round 2): settings and SETTINGS_UPDATE in one transaction; display values old->new; no log injection; locked session count",
+    "7ef447c ui (round 2): colour-blind glyphs are placement-neutral",
+    "cdb3dd8 gates (round 2): env-neutral covers RFC 1918/internal DNS/secret paths; PPSM pins protocols; no version literal in main.js",
+    "6ff7606 installers (round 2): offline bundle as an apt repository, hash-locked pip, pinned online clone, rollback restores the cluster store",
+    "6a47701 docs (round 2): --repo-commit, out-of-band bundle checksum, hash lock, offline apt, CHANGELOG round-2 section",
+    "696cc7c fix (round 2): re-mode the restored cluster store after cp -a; t17 extracts the new frontend step",
+    "79559ec tests (round 2): t07 checks the migrated config.yaml keeps its owner and mode",
+    "29652e9 tests (round 2): t17 checks get_db alone creates tm.db 0600",
+    "95eb5ff contract (round 2): requirements-lock gate; offline-bundle and pinned-clone hazards; test counts"
+   ],
+   "apt_fix_commit": "6ff7606 (bundle-as-repository; the whole installer set the owner should rebuild from is HEAD 95eb5ff or later)",
+   "items": {
+    "F1 settings+audit one transaction; audit failure blocks": "done",
+    "F2 nginx.conf directive-scoped rewrite + never widen": "done",
+    "F3 install.sh LDAP-key check before any mutation": "done",
+    "F4 bundle only from git archive (fallback removed)": "done",
+    "F5 restore_from_backup restores clusters.d + cluster-certs": "done",
+    "F6 env-neutral: 10/8, 172.16/12, internal DNS, secret paths, namespace; CHANGELOG:203 redacted": "done",
+    "F7 PPSM core rows pinned incl. protocol": "done",
+    "F8 no version literal in main.js": "done",
+    "F9 CB glyphs placement-neutral": "done",
+    "SEC HIGH --repo-commit + clone hardening + verify before read": "done",
+    "SEC HIGH --verify-tag (signed tags)": "NOT DONE - follow-up (documented in CHANGELOG Known limitations)",
+    "SEC HIGH offline sha256 out-of-band verification documented": "done",
+    "SEC MED ldaps:// parsed (app + both installers)": "done",
+    "SEC MED pip: --only-binary everywhere, no self-upgrade, no fallback, requirements.lock with --require-hashes": "done",
+    "SEC LOW log injection (username, ignored keys %r)": "done",
+    "SEC LOW Vue backup fallback hash-checked": "done",
+    "SEC LOW TOCTOU: O_NOFOLLOW fds (enforce), fchmod/fchown (migrate), stop service before enforcing on reinstall": "done",
+    "SEC LOW generic sign-in refusal, detail in log": "done",
+    "SEC LOW SETTINGS_UPDATE old->new for display allowlist": "done",
+    "SEC LOW session race BEGIN IMMEDIATE": "done",
+    "SEC LOW failed SQLite snapshot blocks upgrade": "done",
+    "SEC INFO kept TLS key 0600 root:root; TROUBLESHOOTING --restore pre-edit nginx.conf": "done",
+    "SEC MED frontend root-owned (install root:root 0755/0644; upgrade root + go-w, group-scoped tree keeps group)": "done - JUDGEMENT CALL: the upgrade does not force 0755/0644 on a group-scoped (STIG 0750 root:www-data) tree, because that would WIDEN it; stock trees end root:root 0755/0644",
+    "REAL-HOST offline apt defect (STIG+FIPS)": "done - proven by simulation on a stock host and by t23; NOT yet re-run on the STIG+FIPS VM",
+    "TROUBLESHOOTING pam_pkcs11 Error 2308 note": "done"
+   },
+   "amendments": [
+    {
+     "file": ".gitlab-ci.yml (export-ignore only, content unchanged)",
+     "reason": "F6: it names the site CI namespace; excluded from repo scan and never shipped"
+    },
+    {
+     "file": "requirements.lock, tools/gen-requirements-lock.py, tools/check-requirements-lock.sh",
+     "reason": "sec-review MED preferred option (hash lock)"
+    },
+    {
+     "file": "tests/t12, tests/t13",
+     "reason": "fixtures moved from 10.x to RFC 5737 documentation ranges for F6"
+    },
+    {
+     "file": "tests/t23, t24, t25 (new)",
+     "reason": "coverage for the offline apt fix, rollback/frontend/snapshot/Vue, the lock"
+    }
+   ],
+   "mutation_controls": {
+    "tests/mutate.sh --remote (Linux), M01-M107": "107 run: 103 killed, 0 survived, 0 aborted, 4 documented equivalents (M14, M45 pre-existing; M87; M103 EXIT-trap belt-and-braces)",
+    "hand-run S1-S7 (settings/audit)": "all red; S7 first SURVIVED -> new t16 case",
+    "hand-run C1-C2 (CB placement)": "red (C2 first aborted on an escaped anchor, re-run red)",
+    "hand-run L1-L3 (ldaps/generic message)": "L1, L2 red; L3 (drop .lower()) SURVIVED = documented equivalent: urlsplit already lower-cases the scheme",
+    "hand-run G2-G4, D1-D2 (fd modes, Linux)": "all red; G2 and D1 first SURVIVED -> new t07 and t17 cases",
+    "M105 first ABORTED (test anchored on the mutated line), M106 first SURVIVED (t25 read the repo copy, not the mutated one)": "both fixed, both red"
+   },
+   "gates": {
+    "python-syntax / shell-syntax / frontend-syntax / config-example / heredoc-python (9 heredocs)": "pass",
+    "sbom-consistency": "pass",
+    "sca": "16 clean (7 direct + 8 transitive + Vue)",
+    "ppsm-consistency / env-neutral / version-surfaces / requirements-lock": "pass, each proven red",
+    "tests --remote --strict (Linux, git archive HEAD, /tmp only)": "212 passed, 0 failed, 20 skipped (all needs node)",
+    "tests local (Git Bash + venv)": "174 passed, 1 failed (t12 route case, Git Bash path-conversion artefact only), 57 skipped (mode/chown/symlink)",
+    "shellcheck -S warning (Linux)": "clean except 2 pre-existing SC2034",
+    "real hash-locked pip install from PyPI on Ubuntu 24.04 (/tmp venv)": "ok, confluent-kafka 2.15.1"
+   },
+   "deferred_follow_ups": [
+    "login rate limit (v1.2.0)",
+    "Kafka FIPS module (owner decision)",
+    "SSRF destination allowlist",
+    "cluster-update concurrency",
+    "untracking .claude/.work (owner decision)",
+    "signed-tag verification (--verify-tag with an operator keyring)"
+   ],
+   "not_verified": [
+    "The round-2 bundle has not been installed on the STIG+FIPS VM (owner to rebuild and re-run).",
+    "No FIPS host available to the builder; FIPS behaviour argued, not measured.",
+    "install.sh / upgrade-full.sh not run end-to-end on a clean host by the builder."
+   ]
+  },
+  "round3": {
+   "date": "2026-09-26",
+   "trigger": "REAL-HOST DEFECT: 95eb5ff offline bundle on STIG (USG stig-v1r1) + FIPS (fips_enabled=1, 6.8.0-142-fips) Ubuntu 24.04.4, air-gapped: python3.12-venv Depends python3.12 (= 3.12.3-1ubuntu0.17) but 3.12.3-1ubuntu0.13 is to be installed; apt exit 100",
+   "root_cause": "Round 2 pinned the bundle at priority 1, below every installed package, so apt could never upgrade an installed package from the bundle. An air-gapped host lags on patches, so any new package whose dependency needs a newer build of an installed library cannot resolve. The pin conflated 'never replace a FIPS package' with 'never upgrade anything'.",
+   "commits": [
+    "7e7ab04 fix (round 3): offline apt upgrades what a dependency needs; never downgrades, never replaces FIPS",
+    "486c0f0 docs (round 3): offline apt policy - upgrade allowed, no downgrade, FIPS held; plan line; new messages",
+    "f6f9965 tests (round 3): a failing dpkg-query that printed part of the database still stops the offline install",
+    "b3de193 contract (round 3): offline-bundle hazard carries the upgrade/no-downgrade/FIPS policy; test and mutation counts"
+   ],
+   "files_changed": [
+    "install.sh",
+    "tests/t23-offline-apt.sh",
+    "tests/lib/harness.sh",
+    "tests/mutations.txt",
+    "docs/INSTALL.md",
+    "TROUBLESHOOTING.md",
+    "CHANGELOG.md",
+    "install/README.md",
+    "README.md",
+    "prepare-offline.sh",
+    ".claude/project.yml"
+   ],
+   "design": {
+    "bundle_priority": "500 via Pin: origin \"\" (never >= 1000)",
+    "fips_pins": "apt_fips_packages(): installed (Status '* installed') packages whose dpkg-query version matches /fips/i, plus those whose INSTALLED (***) version's origin in the host's apt-cache policy is esm.ubuntu.com/fips*; each gets Package/Pin: origin \"\"/Pin-Priority: -1. Fails closed if dpkg-query or apt-cache fails or the set is empty.",
+    "isolation": "sources AND preferences private under mktemp -d; Dir::Etc::PreferencesParts now private too (round 2 created prefparts but never passed it, so the host preferences.d was still read)",
+    "plan": "apt-get -s install with the same options; one INFO line 'Offline package plan - NEW (n): pkg=ver ...; UPGRADE (n): pkg=ver (from old) ...'; refused if any line is a downgrade (dpkg --compare-versions), a FIPS package (either arch), or Remv; TTY prompt [y/N] unless --non-interactive or no terminal",
+    "flags": "--no-install-recommends --no-download --no-remove (--no-upgrade dropped: it only ever applied to the named, missing packages)",
+    "messages": "resolution failure: 'nothing was installed or changed' + 'never downgrades a package and never replaces a FIPS package'; dpkg failure: 'may have applied PART of that plan: check dpkg --audit' (does not claim nothing changed)"
+   },
+   "upgrade_full_sh": "NOT CHANGED - its offline path installs no .deb (Phase 6 warns 'Offline: OS packages NOT patched this run'); verified by reading Phase 5/6.",
+   "amendments": [
+    {
+     "file": "tests/lib/harness.sh",
+     "reason": "new 'apt' and 'pty' requirements so the real-resolver and prompt cases SKIP loudly on the workstation instead of failing or passing vacuously"
+    },
+    {
+     "file": "install/README.md, README.md, prepare-offline.sh (comment only)",
+     "reason": "each stated installed packages are never upgraded by the bundle, now false; left alone they would misdescribe the shipped behaviour"
+    },
+    {
+     "file": ".claude/project.yml",
+     "reason": "hazards[offline-bundle-is-a-repository] said 'pinned (priority 1)'; gates[repo-tests] counts"
+    }
+   ],
+   "tests": {
+    "t23": "22 cases (was 5). Stub cases: names only; --no-download/--no-remove; private source+preferences+preferences.d; Package:* at 500 and nothing >= 1000; -1 pin for +Fips1 / lower-case fips versions, not for non-FIPS or config-files-only; -1 pin by FIPS-archive installed origin, not for a merely available FIPS build above or below the installed one, arch-qualified header stripped; fail closed on failing dpkg-query (with partial output), empty set, failing apt-cache; plan line names NEW and UPGRADE before install; downgrade / FIPS upgrade / foreign-arch FIPS new / Remv refused; sources+preferences removed after failure at update, resolution and install; TTY decline; --non-interactive no prompt. REAL apt (fixture dpkg status + file: repo, install forced to -s): (a) app needing libfoo 1.0->1.1 RESOLVES; (b) app needing libssl-t newer than installed 3.0-1+Fips1 refused BY APT ('but 3.0-1+Fips1 is to be installed'), not by the later plan check; older bundled libbar 1.0 vs installed 2.0 never a downgrade."
+   },
+   "mutation_controls": {
+    "run": "tests/mutate.sh --remote claude_admin@<linux test host>, full set M01-M142",
+    "result": "142 run: 136 killed, 0 survived, 0 aborted, 0 unproven, 6 documented equivalents (M14, M45, M87 pre-existing; M103, M141, M142 = explicit cleanups / EXIT trap, belt and braces)",
+    "required": {
+     "M108 drop the FIPS pin": "RED (3 cases incl. real-apt b)",
+     "M102 bundle priority 1001": "RED (2 cases incl. real-apt never-downgrade)",
+     "M110 bundle priority 1 (the round-3 defect)": "RED (2 cases incl. real-apt a)",
+     "M109 FIPS pin 1 instead of -1": "RED (3)"
+    },
+    "finding": "M113 (ignore dpkg-query's exit status) SURVIVED on first run: the stub failed with no output, so the empty-set guard stopped the run and masked the missing status check. Closed in f6f9965 (stub prints the fixture then fails); re-run M113: RED."
+   },
+   "gates": {
+    "python-syntax / shell-syntax / frontend-syntax / config-example / heredoc-python (9)": "pass (workstation)",
+    "sbom-consistency / sca (all pins clean) / ppsm-consistency (34 rows) / env-neutral (93 files) / version-surfaces / requirements-lock (15)": "pass (workstation)",
+    "tests --remote --strict (Linux host, git archive HEAD b3de193's code, /tmp only)": "229 passed, 0 failed, 20 skipped (all 'needs node'); exit 1 only because --strict counts those 20 skips, same shape as round 2",
+    "tests local (Git Bash)": "INCOMPLETE: full run hit the 10-minute tool limit at t17 (t00-t17: 0 failed); t19 3/3 and t23 17 pass / 5 skip (apt, pty) run separately",
+    "shellcheck -S warning (Linux)": "install.sh and t23 clean"
+   },
+   "not_verified": [
+    "Not run on the STIG+FIPS VM (owner to rebuild the bundle and re-run from a clean snapshot).",
+    "No FIPS host available to the builder: apt_fips_packages ran against the real non-FIPS test host (837 packages, empty result, 1.2 s); the FIPS branches are proven on fixtures only.",
+    "The bundle still holds whatever versions the build host had: if the build host is LESS patched than the target, a needed upgrade is absent and resolution fails with the clear message. Docs now say to build on a fully patched host."
+   ]
+  },
+  "round4": {
+   "date": "2026-09-26",
+   "trigger": "b3de193 bundle on the real STIG+FIPS VM: round-3 policy held (29 FIPS packages) and refused safely with --no-remove, but apt could only upgrade python3.12 0ubuntu0.13->0.17 by REMOVING libpython3.12t64, linux-fips-tools-6.8.0-142, linux-tools-*, ubuntu-server, vim.",
+   "root_cause": "Binaries built from one Debian source carry exact-version dependencies on each other. prepare-offline.sh bundled only the dependency closure of the REQUESTED packages, so the bundle had python3.12 at 0ubuntu0.17 but not libpython3.12t64 at 0ubuntu0.17 (installed on the target, not in the build host's request closure). Upgrading part of the source left apt only one way out: remove the rest of it and everything depending on it.",
+   "commits": [
+    "4506f79 fix (round 4): the offline bundle carries every lockstep sibling; a forced removal names them",
+    "ad13d60 tests (round 4): renumber the round-4 controls M143-M167 (no gap)",
+    "9d9fd36 tests (round 4): a kept purge marker on a removed name goes red (M165 survived)",
+    "58bfd60 docs (round 4): lockstep siblings in the bundle; build on a fully patched host; the removal refusal"
+   ],
+   "files_changed": [
+    "prepare-offline.sh",
+    "install.sh",
+    "tests/t26-bundle-siblings.sh (new)",
+    "tests/t23-offline-apt.sh",
+    "tests/lib/harness.sh",
+    "tests/mutate.sh",
+    "tests/mutations.txt",
+    "docs/INSTALL.md",
+    "TROUBLESHOOTING.md",
+    "CHANGELOG.md",
+    "install/README.md",
+    ".claude/project.yml"
+   ],
+   "design": {
+    "prepare-offline.sh": "apt section moved into bundle_apt_packages(). New apt_source_siblings(): the Source: field of each closure package (apt-cache show --no-all-versions; 'name (version)' split, absent = own name/version) keyed by source+source version, mapped back to binaries via apt-cache dumpavail (no deb-src needed). Keeps arch == dpkg --print-architecture or all; drops -dbg/-dbgsym/-doc and Section */debug; skips closure members; APT_SIBLING_MAX=40 per source (over: BOUND line, not expanded, reported). Downloaded as pkg=version; failures logged by name, never claimed. Prints 'lockstep siblings (same source): N added: ...'. dumpavail failure is an error, not 'no siblings'. An empty closure now dies instead of indexing an empty repository.",
+    "install.sh": "apt_plan_names() reads apt's 'will be REMOVED/upgraded' blocks (wrapped lines, purge '*' stripped); apt_removal_reason() maps removed and upgraded names to sources with dpkg-query ${source:Package} and names removals sharing a source with an upgrade as 'Lockstep siblings missing from the bundle', the rest as 'Would be removed with them', and points at rebuilding on a fully patched build host. Wording only: the refusal already happened (--no-remove)."
+   },
+   "why_not_showsrc": "apt-cache dumpavail was used as the single path rather than showsrc-when-available: it needs no deb-src, carries Architecture and Section (showsrc Binary: lists do not), took 0.63 s for 97 MB on the Ubuntu 24.04 test host, and one path is one thing to test.",
+   "amendments": [
+    {
+     "file": "tests/mutate.sh",
+     "reason": "a 'prepare' target key so controls can mutate prepare-offline.sh (a copy outside the repo, like the other two)"
+    },
+    {
+     "file": "tests/lib/harness.sh",
+     "reason": "tm_prepare_sh() for that target"
+    },
+    {
+     "file": "install/README.md, .claude/project.yml",
+     "reason": "described the bundle as the closure only"
+    }
+   ],
+   "tests": {
+    "t26 (new, 5 cases)": "stub: siblings chosen by source+source version, binNMU 'name (version)', a source different from the package name; dbg/dbgsym/doc/Section debug/other arch/other source version/unrelated/closure members excluded; 41-binary source reported BOUND and not expanded, 40-binary source expanded; failed dumpavail is an error. REAL (dpkg-deb + apt-ftparchive + apt): pysrc 1 installed on a fixture target (pyx, libpyx, libpyx-t64 with libpyx (= 1), app-x on libpyx-t64); mirror at 1 and 2; request pyx-venv. Expanded bundle = pyx-venv, pyx, libpyx, libpyx-t64 at 2 only, no doc, undownloadable libpyx-gone logged; target resolves with NO removal: 'UPGRADE (3): pyx=2 (from 1) libpyx-t64=2 (from 1) libpyx=2 (from 1)'. With the bound at 0 the same target is refused: 'Lockstep siblings missing from the bundle: libpyx-t64 (source pysrc)', 'Would be removed with them ...: app-x' (the real host failure, reproduced).",
+    "t23": "24 cases: +forced removal names the sibling vs collateral (wrapped list, purge marker), +a removal sharing no source with an upgrade is not called a sibling; the dpkg-query stub now answers only for the names asked, as dpkg-query does (it had answered for every name, which mis-classified vim)."
+   },
+   "mutation_controls": {
+    "result": "167 run in two remote batches (M01-M137 hit the 10-min tool limit and was completed with M138-M167 on the same HEAD 58bfd60): 161 killed, 0 survived, 0 aborted, 6 documented equivalents (M14, M45, M87, M103, M141, M142). Target sha256 unchanged for all three scripts.",
+    "required": {
+     "M143 sibling expansion disabled": "RED (2 cases incl. real-apt no-removal)",
+     "M144 bound 0": "RED (3)"
+    },
+    "finding": "M165 (purge marker '*' kept on a removed name) SURVIVED first: the assertion was a fixed-string substring and 'vim' matched 'vim*'. Closed in 9d9fd36; re-run M165: RED."
+   },
+   "gates": {
+    "python-syntax / shell-syntax / frontend-syntax / config-example / heredoc-python (9) / sbom / sca (clean) / ppsm (34) / env-neutral (94) / version-surfaces / requirements-lock (15)": "pass, workstation, HEAD 58bfd60",
+    "tests --remote --strict (Linux host, git archive HEAD 58bfd60, /tmp only)": "236 passed, 0 failed, 20 skipped (all 'needs node'); exit 1 only from --strict counting those skips",
+    "shellcheck -S warning (Linux)": "install.sh, prepare-offline.sh, t23, t26 clean"
+   },
+   "not_verified": [
+    "prepare-offline.sh was not run end-to-end against the real Ubuntu archive by the builder (no bundle was built); the pipeline is proven on a fixture mirror. The owner's rebuild should show 'lockstep siblings (same source): N added: ... libpython3.12t64=3.12.3-1ubuntu0.17 ...' and any BOUND/NOT-downloadable lines.",
+    "Not re-run on the STIG+FIPS VM.",
+    "Sources over the 40 bound are not expanded (e.g. gcc-14). If a target has an older sibling of such a source installed, resolution is still refused, with the message naming it."
+   ]
+  },
+  "round5": {
+   "date": "2026-09-26",
+   "trigger": "58bfd60 bundle on the real STIG+FIPS VM: every step through the nginx.conf TLS edit succeeded (357 lockstep siblings added, gcc-14 not expanded); install.sh:1020 `ufw --quiet allow 80/tcp` -> 'ERROR: Invalid syntax', exit 1. With the flag removed on the VM (staged copy), a reinstall ran clean: health ok 1.1.0, tm.db 0600, boundary verified.",
+   "root_cause": "ufw has no --quiet option (confirmed against real ufw with --dry-run: usage + rc 1). The call dates from v1.0.6 (119ec47) and was never run against an active ufw by any test, so every host with ufw active failed at the firewall step. The success line was also unconditional.",
+   "commit": "b4c94ee fix (round 5): the firewall step uses valid ufw syntax and checks each rule",
+   "files_changed": [
+    "install.sh",
+    "tests/t27-firewall.sh (new)",
+    "tests/mutations.txt",
+    "docs/INSTALL.md",
+    "TROUBLESHOOTING.md",
+    "CHANGELOG.md"
+   ],
+   "design": "open_firewall_ports(): no-op unless ufw exists and `ufw status` (read whole, matched in-shell, not piped to grep -q under pipefail) says active; `ufw allow 80/tcp` and `443/tcp` with output captured and each exit code checked; failure = WARN naming the port, ufw's first line and the command to run, and no 'ports open' claim. Warn, not die: everything else is installed by then and a late die would skip logrotate, the nginx test and the service start.",
+   "tree_sweep": "only install.sh:1020-1021 used ufw with an option; upgrade-full.sh has no ufw call; docs mention ufw only in prose. Other --quiet uses (pip, systemctl, sha256sum -c) are valid options of those tools.",
+   "amendments": [],
+   "tests": "t27 (4 cases): strict ufw stub (rejects any --option other than --dry-run/--version/--force, matching real ufw); active -> both rules with valid syntax, output quiet, install carries on; inactive -> untouched; failed rule -> warning with reason, no claim, not fatal; no invalid ufw option in scripts/docs (comments excluded).",
+   "mutation_controls": "M168 (--quiet re-added) RED 3 cases; M169 exit code ignored RED; M170 output not captured RED; M171 success unconditional RED; M172 inactive firewall touched RED; M173 failure made fatal RED. 6/6 killed, run --remote.",
+   "gates": {
+    "all declared gates (workstation, HEAD b4c94ee)": "pass; sca clean",
+    "tests --remote --strict (Linux host, git archive HEAD b4c94ee, /tmp only)": "240 passed, 0 failed, 20 skipped (all 'needs node'); exit 1 only from --strict counting those skips",
+    "shellcheck -S warning": "install.sh, t27 clean"
+   },
+   "not_verified": [
+    "The fixed install.sh has not been run end-to-end on the STIG+FIPS VM by the builder (the owner's staged-copy run removed the flag by hand, the same change)."
+   ]
+  },
+  "round6": {
+   "date": "2026-09-26",
+   "trigger": "render proof on the real host: Dark/Light identical to v1.0.6 to 0.0px; Color Blind bdg-ok 0.6px and bdg-warn 1.3px higher, badge-only row 1.3px shorter",
+   "root_cause": "The CB glyph was drawn INSIDE the badge's 5x5 ::before marker (display:inline-flex, line-height:0). The marker is the first flex item of the inline-flex badge, so the badge's baseline came from the glyph's text line instead of the empty box's synthesized baseline, and the badge sat higher in its line box. The CSS comment claimed no placement change and nothing measured it.",
+   "commit": "eddb2fe ui (round 6): colour-blind badge glyph is out of flow; the marker box is untouched",
+   "files_changed": [
+    "app/styles/main.css",
+    "tests/lib/theme_css_check.py",
+    "CHANGELOG.md"
+   ],
+   "design": ".cb-mode .bdg { position:relative }; .cb-mode .bdg::before keeps the base marker exactly (content '', inline-block, 5x5, radius) with only background:transparent; the glyph is .cb-mode .bdg-*::after, position:absolute over the marker (left:7px = padding, width 5px, top/bottom 0, flex-centred). stat-card .sub.*, lag-*, stig*, login-err glyphs were already absolute in relative parents; measured, not changed.",
+   "render_proof": {
+    "tool": "Playwright (python, chromium headless) on the workstation - usable",
+    "harness": "scratchpad/harness6.py: the render agent's synthetic page plus a block with bdg-int/ok/warn rows, lag-hi/lag-tag/lag-ok, stat-card sub.warn/sub.err, stig/stig.w/stig.r, login-err.show; d808219 main.css vs working-tree main.css; getBoundingClientRect of 33 elements",
+    "result": "new vs v1.0.6: 0.0px on all 33 elements in dark, light and cb at 1920 and 1366; new cb vs new dark: 0.0px at both widths",
+    "glyphs": "computed content in CB: bdg ok/warn/int ::after = check/!/bullet; sub ok/warn/err, lag-hi/ok/tag, stig/w/r, login-err ::before all present, position absolute, visible",
+    "control": "the same harness on the pre-fix CSS (HEAD b4c94ee) reports badge_ok -0.66, badge_warn -1.31, row2 height -1.31 (the owner's numbers) and cascades to -3.94 below: FAIL (99)"
+   },
+   "mutation_controls": {
+    "C1 glyph back inside the marker (pre-fix CSS)": "RED: checker cb_cues + cb_placement; harness FAIL 0.66/1.31px",
+    "C2 ::after position:static (glyph in flow)": "RED: checker cb_placement; harness 9px wider badges, FAIL (40)",
+    "C3 badge not position:relative": "RED: checker cb_placement",
+    "C4 bdg-ok glyph content removed": "RED: checker cb_cues",
+    "C5 marker given line-height:0": "RED: checker cb_placement",
+    "method": "mutated copies outside the repo; tracked main.css sha256 verified unchanged afterwards. An aborted first attempt at C2 (anchor matched twice) was redone with a unique anchor."
+   },
+   "gates": {
+    "frontend-syntax / python-syntax / shell-syntax / config-example / heredoc-python / sbom / ppsm / env-neutral / version-surfaces / requirements-lock": "pass (workstation, eddb2fe)",
+    "t15 (workstation, node present)": "10/10"
+   },
+   "not_run": "the remote Linux suite was not re-run this round (CSS-only change; t15, the only suite reading main.css, needs node and SKIPs on that host). The harness is a same-page synthetic render, not the live app on the real host.",
+   "amendments": [
+    {
+     "file": "tests/lib/theme_css_check.py",
+     "reason": "it asserted the glyph lived in .bdg::before and that the marker was restyled; both are now the defect"
+    }
+   ]
+  },
+  "round7": {
+   "date": "2026-09-26",
+   "type": "docs only",
+   "commit": "cf4e48f docs (round 7): Kafka client TLS risk acceptance; DAST and air-gapped install verified",
+   "owner_ruling": "James, 2026-09-26: 'note the kafka as risk acceptance for now'",
+   "files_changed": [
+    "SBOM.md",
+    "TROUBLESHOOTING.md",
+    "docs/INSTALL.md",
+    "CHANGELOG.md"
+   ],
+   "content": "Risk acceptance record (confluent-kafka 2.15.1 bundled OpenSSL; SC-13, SRG-APP-000014/000514, CWE-327; accepted by system owner 2026-09-26; compensating SSL/SASL_SSL + measured host FIPS paths '3.0.13+Fips2'; removal path distro python3-confluent-kafka or site wheel on system libssl). CHANGELOG Verified: ZAP 2.17.0 0H/0L/2M (CSP unsafe-eval, unsafe-inline; deferred); air-gapped install completed; STIG audit unchanged 209/8.",
+   "beyond_the_brief": "Replaced two CHANGELOG 'Not verified' bullets ('no FIPS-enabled host was available'; 'round-2 bundle not yet re-installed') and one SBOM sentence ('a run on a FIPS-enabled host has not yet been made'): each directly contradicted the Verified note being added.",
+   "gates": "sbom-consistency, env-neutral (95 files), version-surfaces, ppsm-consistency: pass; no internal host/IP/account in added lines",
+   "amendments": []
+  },
+  "round8": {
+   "date": "2026-09-26",
+   "trigger": "gatekeeper verdict NOT stamped: blocker B1 (SIGPIPE race under pipefail) + gate blind spots reproduced from the Codex review + contract drift",
+   "commits": [
+    "1246b3a tests (round 8): no early-exit consumer under pipefail; the runner cannot pass on nothing",
+    "30f4a2e gates (round 8): close the gatekeeper's blind spots; contract drift"
+   ],
+   "root_cause": {
+    "B1": "Every test runs under pipefail. `producer | grep -q` (and grep -m, head) let the consumer exit on its first match; a producer still writing took SIGPIPE (141) and pipefail failed the pipeline. As `cmd || fail` that is a false RED (t24:78 2 in 3 remote runs); inside `if`/`&&` it is a false PASS (t11:159/190, t18:148).",
+    "run.sh": "it counted its verdict FROM the results file the caller could redirect (TM_RESULTS_OUT=/dev/null => 0 fails, 0 skips); it had no notion of 'ran nothing' (zero files, a caseless file); tm_die inside tm_unmet ran in a command-substitution subshell, so an unknown requirement printed HARNESS ERROR and the case then ran",
+    "sca": "advisory IDs were grepped against a prefix allowlist; the lock was optional",
+    "requirements-lock": "structure only; nothing compared the lock with the resolved set",
+    "env-neutral": "UnicodeDecodeError -> skip; lstrip('./') removed the dot of a leading .work/; no IPv6 private ranges",
+    "version-surfaces": "read only \\d+ tokens and only compared distinct values, so a removed or non-numeric token was invisible",
+    "sbom-consistency": "transitive rows parsed then ignored as 'extra components'",
+    "config-example": "checked key presence, not value"
+   },
+   "files_changed": [
+    "tests/run.sh",
+    "tests/lib/harness.sh",
+    "tests/mutate.sh",
+    "tests/t00,t11,t14,t15,t16,t17,t18,t20,t21,t22,t23,t24,t25",
+    "tools/check-pipefail-consumers.sh (new)",
+    "tools/sca-check.sh",
+    "tools/check-requirements-lock.sh",
+    "tools/gen-requirements-lock.py",
+    "tools/check-env-neutral.sh",
+    "tools/check-version-surfaces.sh",
+    "tools/check-sbom-consistency.sh",
+    "tools/check-config-example.sh",
+    ".claude/project.yml"
+   ],
+   "b1_sweep": "All 26 sites in tests/ and tests/lib/ rewritten: the 8 listed (t11:154/159/190/194, t14:250, t18:148/270, t24:78) plus t14:117/119, t15:70, t16:111, t17 x6, t20 x3, t21:90, t23 x3, mutate.sh:251. `grep -q PAT <<<\"$(producer)\"`, `sed -n 1p` for head. tools/check-pipefail-consumers.sh flags `| grep` with -q/-m/--quiet/--silent/--max-count, `| head`, `| awk ... exit` outside comments; t00 runs it on tests/ and proves it red on 5 shapes and green on 3 safe ones.",
+   "product_code_note": "NOT changed (test and gate code only): the same shape exists in product scripts with small single-write producers, e.g. install.sh:673 pkg_installed `dpkg-query ... | grep -q`, upgrade-full.sh:1133 `lsattr | awk | grep -q`, :1143 `getfacl | grep -qE`, and several `| head -1` in $(...) under set -e. Low risk (the producer's one write completes before grep exits), but the same class; left for a decision.",
+   "lock_completeness": "no cached resolution exists, so the gate runs gen-requirements-lock.py --check-set (pip dry-run resolve, name==version compared, hash lists not) when https://pypi.org/simple/pip/ answers, else prints 'lock completeness NOT verified (offline)' and exits 0; a failed resolution is exit 3. Workstation: 'requirements.lock covers the resolved set (15 packages)'; removing MarkupSafe from a copy: exit 1. t25 drives it with stub curl/resolver so the suite is deterministic on hosts without pip or PyPI.",
+   "amendments": [],
+   "mutation_controls": {
+    "hand_run": "cp backup outside the repo, one mutation on the real file, targeted test file on the workstation, restore verified by sha256 (all 26 restores OK; a first background attempt was cut off mid-G17 and left the G17 mutant in tools/check-config-example.sh - caught by the pre-run sha256 list, restored from the G17 backup and re-verified before anything else ran; that attempt's results were discarded and the whole set re-run)",
+    "results": [
+     "G1   RED t25 rc=1 [FAIL  sca-any-osv-advisory-is-a-finding-whatever-its-prefix]",
+     "G2   RED t25 rc=1 [FAIL  sca-refuses-without-requirements-lock]",
+     "G3   RED t25 rc=1 [FAIL  a-malformed-hash-on-a-transitive-entry-is-caught]",
+     "G4   RED t25 rc=1 [FAIL  lock-completeness-is-checked-or-said-to-be-unchecked]",
+     "G5   RED t25 rc=1 [FAIL  lock-completeness-is-checked-or-said-to-be-unchecked]",
+     "G6   RED t25 rc=1 [FAIL  lock-completeness-is-checked-or-said-to-be-unchecked]",
+     "G7   RED t21 rc=1 [FAIL  ipv6-private-and-non-utf8-ties-are-caught]",
+     "G8   RED t21 rc=1 [FAIL  ipv6-private-and-non-utf8-ties-are-caught]",
+     "G9   RED t21 rc=1 [FAIL  ipv6-private-and-non-utf8-ties-are-caught]",
+     "G10  RED t21 rc=1 [FAIL  a-flat-bundle-carrying-work-is-refused]",
+     "G11  RED t22 rc=1 [FAIL  a-removed-cache-token-is-caught]",
+     "G12  RED t22 rc=1 [FAIL  a-non-numeric-cache-token-is-caught]",
+     "G13  RED t22 rc=1 [FAIL  a-non-numeric-cache-token-is-caught]",
+     "G14  RED t25 rc=1 [FAIL  sbom-transitive-rows-are-held-to-the-lock]",
+     "G15  RED t25 rc=1 [FAIL  sbom-transitive-rows-are-held-to-the-lock]",
+     "G16  RED t20 rc=1 [FAIL  config-example-required-keys-must-have-values]",
+     "G17  RED t20 rc=1 [FAIL  config-example-required-keys-must-have-values]",
+     "H1   RED t00 rc=1 [FAIL  runner-strict-counts-its-own-tally]",
+     "H2   RED t00 rc=1 [FAIL  runner-refuses-a-suite-with-no-files]",
+     "H3   SURVIVED  ** FINDING **",
+     "H4   RED t00 rc=1 [FAIL  runner-default-set-is-every-test-file]",
+     "H5   RED t00 rc=1 [FAIL  runner-fails-on-an-unknown-requirement]",
+     "L1   RED t00 rc=1 [FAIL  the-pipefail-lint-goes-red-on-each-shape]",
+     "L2   RED t00 rc=1 [FAIL  the-pipefail-lint-goes-red-on-each-shape]",
+     "B1   RED t00 rc=1 [FAIL  no-grep-q-or-head-at-the-end-of-a-pipe]",
+     "H3   RED t00 rc=1 [FAIL  runner-refuses-a-file-with-no-cases]"
+    ],
+    "finding": "H3 (the per-file 'reported no case' check neutralised) SURVIVED: the single-file fixture was also caught by the total-count guard. Closed with a two-file fixture (a two-case file beside a caseless one); H3 re-run: RED.",
+    "mutate_sh_subset": "controls whose TESTS include a touched file (96: M48-M52, M58-M142, M162-M167), --remote: 92 killed, 0 survived, 0 aborted, 4 documented equivalents (M87, M103, M141, M142)"
+   },
+   "gates": {
+    "all declared gates, workstation, HEAD 30f4a2e": "pass (python/shell/frontend syntax, config-example, heredoc-python 9, sbom 3 copies + 8 transitive, sca 16 clean, ppsm 34 rows, env-neutral 100 files, version-surfaces 16 tokens, requirements-lock incl. resolved-set, pipefail lint 31 files)",
+    "remote --strict x3 (fresh trees, git archive HEAD 30f4a2e)": [
+     "257 passed / 0 failed / 20 skipped",
+     "257 passed / 0 failed / 20 skipped",
+     "257 passed / 0 failed / 20 skipped"
+    ],
+    "remote skips": "all 20 'needs node'; exit 1 only because --strict counts them",
+    "workstation suite": "200 passed / 0 failed / 77 skipped (modes/chown/symlink/apt/pty)"
+   },
+   "contract": "repo-tests note t00-t27 (28 files) + round-8 runner rules; version-surfaces 16-token rule enforced; audit list 16 (re-derived with the AST: SETTINGS_UPDATE is the 16th); sca/lock/env-neutral/sbom/config-example notes; no_ci_no_tests and principles now say t00-t27"
+  }
+ },
+ "decisions": [
+  {
+   "by": "James",
+   "date": "2026-09-26",
+   "id": "kafka-fips-risk-acceptance",
+   "ruling": "RISK ACCEPTED for now: confluent-kafka 2.15.1 wheel bundles librdkafka + its own OpenSSL, so Kafka client TLS runs outside the host's FIPS 140-3 validated module (SC-13, SRG-APP-000014/000514). Revisit: switch to distro python3-confluent-kafka linked to system OpenSSL, or a site-built wheel."
+  }
+ ]
+}
