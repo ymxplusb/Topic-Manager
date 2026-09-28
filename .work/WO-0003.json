@@ -899,6 +899,12 @@
       "date": "2026-09-26",
       "id": "kafka-fips-risk-acceptance",
       "ruling": "RISK ACCEPTED for now: confluent-kafka 2.15.1 wheel bundles librdkafka + its own OpenSSL, so Kafka client TLS runs outside the host's FIPS 140-3 validated module (SC-13, SRG-APP-000014/000514). Revisit: switch to distro python3-confluent-kafka linked to system OpenSSL, or a site-built wheel."
+    },
+    {
+      "by": "James",
+      "date": "2026-09-28",
+      "id": "browser-floor-object-hasown",
+      "ruling": "ACCEPTED: Object.hasOwn (Sonar S6653 fix, SettingsTab.js:567) raises the Settings tab's minimum browser to Chrome/Edge 93, Firefox 92, Safari 15.4. Stated in CHANGELOG 1.1.1."
     }
   ],
   "stages": {
@@ -917,8 +923,8 @@
     "assure": {
       "code": 0,
       "meaning": "passed",
-      "verdict": "BACKFILLED 2026-09-28. Gatekeeper CONFIRMED round 12 @ 8ccbb10 (11 gates pass; lock/sca/sbom falsified red on every divergent lock; 28k-case pip differential fuzz, 0 divergences). Adversary = Codex falsification of round 8 (REG-0005..0013): the one HIGH, REG-0005, fixed on v1.1.0 by round 11; the Mediums/Lows fixed on v1.2.0. sec-review ran (hash-lock preferred option adopted). Render proof + ZAP 2.17.0 0 High on the real STIG+FIPS VM; REG-0001/0002 CSP Mediums open (deferred to precompile release); REG-0003 Kafka FIPS risk accepted by James. Caveats: Codex lane not re-run on rounds 11-12.",
-      "at": "2026-09-28T19:57:43Z"
+      "verdict": "v1.1.1 @ 3ee4e94: gatekeeper CONFIRMED (13 gates on Linux, each falsified red; strict 303/0/0; cascade 1.1.1/1101; Sonar read-only: the 6 new issues are exactly the 6 fixed, measured cognitive complexity auth 17->10, migrate 20->9, helpers <=5; tests/lib out of scan scope). Adversary (Codex daybreak-blue, EXIT 0): TM-AUTH-01 FALSE (real ldap3 + 30 auth / 21 migrate scenarios byte-identical old vs new); TM-UI-01 MED confirmed = Object.hasOwn browser floor, ACCEPTED by James 2026-09-28. v1.1.0 assure (rounds 1-12, BACKFILLED) stands for the rest.",
+      "at": "2026-09-28T20:48:57Z"
     },
     "ship": {
       "code": 1,
