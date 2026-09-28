@@ -19,10 +19,12 @@ How it is built (run on a developer machine with network access):
      install on aarch64 too; sdists are never listed, so nothing is compiled.
 
     python tools/gen-requirements-lock.py            # rewrite requirements.lock
-    python tools/gen-requirements-lock.py --check    # exit 1 if it would change
+    python tools/gen-requirements-lock.py --check    # same verdict as the lock gate
 
 Needs pip >= 23 in the running interpreter and network access to PyPI.
-tools/check-requirements-lock.sh verifies the result offline.
+tools/check-requirements-lock.sh verifies the result: published hashes and all target
+wheel hashes, not byte equality with regeneration. Offline is exit 3 unless
+TM_LOCK_OFFLINE_OK=1 explicitly accepts structure-only verification.
 
 Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 """
@@ -61,8 +63,10 @@ def wheel_hashes(name, version):
     url = 'https://pypi.org/pypi/%s/%s/json' % (name, version)
     with urllib.request.urlopen(url, timeout=30) as r:
         meta = json.load(r)
+    # Exact == pins can select yanked files too; include them so regeneration
+    # satisfies the gate's all-published-target-files policy.
     hashes = sorted({f['digests']['sha256'] for f in meta['urls']
-                     if f.get('packagetype') == 'bdist_wheel' and not f.get('yanked')})
+                     if f.get('packagetype') == 'bdist_wheel'})
     if not hashes:
         raise SystemExit('%s==%s has no wheels on PyPI; refusing to lock an sdist' % (name, version))
     return hashes
@@ -163,6 +167,14 @@ def check_closure():
 
 
 def main():
+    if '--check' in sys.argv:
+        # One policy for both entry points; the gate calls --check-set below,
+        # never --check, so this cannot recurse. Optional non-target wheels
+        # must not make --check stricter than the gate.
+        gate = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'check-requirements-lock.sh')
+        env = dict(os.environ, PYTHON=sys.executable)
+        sys.exit(subprocess.run(['bash', gate, '--root', ROOT], env=env).returncode)
     if '--check-set' in sys.argv:
         try:
             problems = check_closure()
@@ -178,13 +190,6 @@ def main():
         print('requirements.lock is a complete, self-consistent closure (%d packages)' % len(lock_set()))
         return
     text = render(resolve())
-    if '--check' in sys.argv:
-        cur = open(LOCK, encoding='utf-8').read() if os.path.exists(LOCK) else ''
-        if cur.replace('\r\n', '\n') != text:
-            print('requirements.lock is out of date; run tools/gen-requirements-lock.py')
-            sys.exit(1)
-        print('requirements.lock is current')
-        return
     open(LOCK, 'w', encoding='utf-8', newline='\n').write(text)
     print('wrote %s' % LOCK)
 

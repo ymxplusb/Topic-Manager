@@ -85,12 +85,18 @@ g_lock_exact() {
         sed -i "s/^blinker==1\.9\.0 /${bad} /" "$FX/requirements.lock"
         grep -qF "${bad} " "$FX/requirements.lock" || tm_die "fixture did not apply ${bad}"
         _run env PATH="${TM_TMP}/nobin:${PATH}" bash "$FX/tools/check-requirements-lock.sh" --root "$FX"
-        [ "$RC" -ne 0 ] || _tm_afail "the lock gate accepted '${bad}' as a lock: ${OUT}"
+        # Exit 1 = refused by the STRUCTURE check. Offline is exit 3 on its own
+        # since round 9, so "non-zero" would stay green with the check deleted.
+        tm_assert_rc 1 "$RC" "the lock gate accepted '${bad}' as a lock: ${OUT}"
     done
     rm -rf "${TM_TMP}/tree"; _tree tools/check-requirements-lock.sh tools/gen-requirements-lock.py tools/lib requirements.txt requirements.lock
     sed -i 's/^Flask==3\.1\.3$/Flask>=3.1.3/' "$FX/requirements.txt"
     _run env PATH="${TM_TMP}/nobin:${PATH}" bash "$FX/tools/check-requirements-lock.sh" --root "$FX"
-    [ "$RC" -ne 0 ] || _tm_afail "a RANGE in requirements.txt was accepted as a pin: ${OUT}"
+    tm_assert_rc 1 "$RC" "a RANGE in requirements.txt was accepted as a pin: ${OUT}"
+    # ...and the real tree stays green on the same (structure-only) path.
+    rm -rf "${TM_TMP}/tree"; _tree tools/check-requirements-lock.sh tools/gen-requirements-lock.py tools/lib requirements.txt requirements.lock
+    _run env PATH="${TM_TMP}/nobin:${PATH}" TM_LOCK_OFFLINE_OK=1 bash "$FX/tools/check-requirements-lock.sh" --root "$FX"
+    tm_assert_rc 0 "$RC" "the real lock was refused on the structure-only path: ${OUT}"
 }
 tm_case "reg0007-only-exact-pins-are-a-lock" none g_lock_exact
 

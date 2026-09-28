@@ -61,7 +61,8 @@ LOCK_FILE="${SCRIPT_DIR}/requirements.lock"
 [[ -f "$REQ_FILE" ]]  || die "${REQ_FILE} not found — it is the source of every Python pin."
 [[ -f "$LOCK_FILE" ]] || die "${LOCK_FILE} not found — regenerate it with tools/gen-requirements-lock.py."
 bash "${SCRIPT_DIR}/tools/check-requirements-lock.sh" \
-    || die "requirements.lock does not agree with requirements.txt — regenerate it."
+    || die "requirements.lock failed its gate (see above): it disagrees with requirements.txt or
+     with PyPI's published hashes, or could not be verified (PyPI unreachable). Fix or regenerate it."
 
 info "Downloading hash-locked Python wheels to ${PY_PKG_DIR}..."
 pip download \

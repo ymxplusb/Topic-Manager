@@ -326,12 +326,28 @@ gates:
       round 8 also on a REMOVED token and a non-numeric one.
   - name: requirements-lock
     cmd: "bash tools/check-requirements-lock.sh"
-    verified: 2026-09-26
+    verified: 2026-09-27
     note: >-
-      ROUND 8: with PyPI reachable it also runs gen-requirements-lock.py
-      --check-set (the resolved name==version set must equal the lock's);
-      offline it prints "lock completeness NOT verified (offline)" and checks
-      structure and agreement only — it never passes silently.
+      ROUND 9 (gatekeeper B2): with PyPI reachable it (1) runs
+      gen-requirements-lock.py --check-set (the resolved name==version set
+      must equal the lock's) and (2) fetches https://pypi.org/pypi/<n>/<v>/json
+      for every locked release: every lock hash must be one PyPI published for
+      that exact release, and ALL published target wheel hashes are required
+      (at least one per package): cp312 or cp3x abi3 (x <= 12) manylinux
+      x86_64 with glibc <= 2.39 (Ubuntu 24.04), or py3-none-any. This catches
+      a dropped cffi target hash even when another remains. Non-target hashes
+      are optional, so new non-target wheels cannot false-red. A newly added
+      TARGET wheel deliberately requires regeneration; fixed releases rarely
+      add these. gen-requirements-lock.py --check delegates to this same gate.
+      OFFLINE IS EXIT 3 ("could not verify")
+      unless TM_LOCK_OFFLINE_OK=1 explicitly accepts a structure-only result
+      (t25 sets it only for structure fixtures); the verdict and the exit code
+      agree. t25 drives the online branch with a fake PyPI (stand-in curl):
+      a dropped target hash and one changed hex digit go RED, a dropped
+      non-target hash and a newly published non-target wheel stay GREEN. ROUND 8:
+      offline it had printed "NOT verified" and exited 0.
+      Round 9 verification here: t25's fake-PyPI branch and offline cases pass;
+      live PyPI verification is blocked by sandbox DNS/network access (exit 3).
       requirements.lock (tools/gen-requirements-lock.py) pins every Python
       package incl. transitive ones with the sha256 of every published wheel;
       every installer uses it with --require-hashes --only-binary :all:. The
@@ -339,7 +355,9 @@ gates:
       entries. After changing a pin: regenerate, commit, re-run sca (which now
       queries the transitive pins too). Red-proofed in t25.
   # v1.2.0 (REG-0005..0013): sca queries every LOCKED version; requirements-lock
-  # checks a self-consistent closure and CI runs it with --require-online;
+  # checks a self-consistent closure and CI runs it with --require-online
+  # (merged with round 9: --require-online refuses offline even under
+  # TM_LOCK_OFFLINE_OK=1; t25 asserts both flag values, t41 asserts exit 1);
   # version-surfaces scans every app/ JS with comments stripped; sbom holds the
   # About dialog's infrastructure rows to SBOM.md. Reproductions in t41.
   - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-09-26, note: "t00-t27 (28 files). Round 8 (gatekeeper): the runner refuses zero files, a default set that is not every tests/t*.sh, a file that reports no case, and an unknown requirement (all exit 2); --strict counts its OWN tally (TM_RESULTS_OUT is only a copy); no `| grep -q` / `| grep -m` / `| head` / awk-exit consumer at the end of a pipe in tests/ (tools/check-pipefail-consumers.sh, run by t00) after a SIGPIPE race false-failed t24 in 2 of 3 fresh remote runs. Round 2, 2026-09-26: Linux host via --remote --strict (ships git archive HEAD) 210+ pass / 0 fail, only the 'needs node' cases skip (node absent there; the workstation run covers them). Mutation controls M01-M107 (tests/mutate.sh --remote): all killed except 4 documented equivalents. Round 3, 2026-09-26 (offline apt policy): --remote --strict 229 pass / 0 fail / 20 skip (all needs node); M01-M142 --remote: 136 killed, 0 survived, 6 documented equivalents (M14, M45, M87, M103, M141, M142). Round 4: --remote --strict and M01-M167, see WO-0003 builder.round4. t23's real-apt cases need the 'apt' requirement and its prompt cases 'pty' (both Linux only; they SKIP on the workstation). Workstation-only artefact: t12's route case can fail under Git Bash (MSYS path conversion); passes on Linux and CI." }
