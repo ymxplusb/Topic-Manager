@@ -227,6 +227,20 @@ Adversary and security-review findings, all fixed on this branch before release:
   everywhere, and colour-blind equal to dark; every glyph still renders (computed `content`
   checked). The same harness on the previous CSS reproduced the 0.66 / 1.31px deltas.
 
+### Round 9 (gatekeeper, 2026-09-27)
+
+- **`tools/check-requirements-lock.sh` verifies the hashes, and offline is not a pass.** It
+  checked structure and the resolved `name==version` set only: dropping a hash, or changing one
+  hex digit of one, stayed green, and offline it printed "NOT verified" while exiting 0. With
+  PyPI reachable it now fetches each locked release's JSON: every hash in the lock must be one
+  PyPI published for that exact release, and all published target wheel hashes must be present
+  (at least one per release; CPython 3.12 x86_64, manylinux glibc <= 2.39 or py3-none-any).
+  Dropping one target hash fails even if another remains. Non-target hashes are optional;
+  adding a non-target wheel on PyPI cannot turn it red. Adding a target wheel deliberately
+  requires regeneration. `gen-requirements-lock.py --check` uses the same gate. Offline it
+  exits 3 ("could not verify") unless `TM_LOCK_OFFLINE_OK=1` explicitly
+  accepts a structure-only result. t25 covers the online branch against a fake PyPI.
+
 ### Known limitations
 
 - **FIPS module boundary**: the `cryptography` and `confluent-kafka` wheels bundle their own

@@ -20,12 +20,12 @@ GATE="${TM_REPO_ROOT}/tools/check-requirements-lock.sh"
 [ -f "$GATE" ] || tm_die "tools/check-requirements-lock.sh is missing"
 
 l_agrees() {
-    # Structure and agreement, deterministically: curl is stubbed to fail, so
-    # the gate's network-dependent completeness step reports itself NOT
-    # verified instead of depending on this host's PyPI access and pip
-    # (l_completeness below drives that step with a stub resolver).
+    # Structure and agreement, deterministically: curl is stubbed to fail and
+    # TM_LOCK_OFFLINE_OK=1 explicitly accepts a structure-only result (round 9:
+    # offline is otherwise exit 3). The online completeness and HASH checks
+    # are driven below against a fake PyPI (l_completeness, h_*).
     mkdir -p "${TM_TMP}/nobin"; printf '#!/bin/sh\nexit 7\n' > "${TM_TMP}/nobin/curl"; chmod +x "${TM_TMP}/nobin/curl"
-    PATH="${TM_TMP}/nobin:${PATH}" bash "$GATE" > "${TM_TMP}/out" 2>&1 || _tm_afail "the lock is inconsistent: $(cat "${TM_TMP}/out")"
+    PATH="${TM_TMP}/nobin:${PATH}" TM_LOCK_OFFLINE_OK=1 bash "$GATE" > "${TM_TMP}/out" 2>&1 || _tm_afail "the lock is inconsistent: $(cat "${TM_TMP}/out")"
 }
 tm_case "the-lock-agrees-with-requirements-txt" none l_agrees
 
@@ -107,7 +107,7 @@ l_transitive_hash_format() {
                        "${TM_REPO_ROOT}/requirements.lock" > "${TM_TMP}/c/requirements.lock" ;;
         esac
         cmp -s "${TM_REPO_ROOT}/requirements.lock" "${TM_TMP}/c/requirements.lock" && tm_die "the ${bad} fixture changed nothing"
-        PATH="${TM_TMP}/nobin:${PATH}" bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 \
+        PATH="${TM_TMP}/nobin:${PATH}" TM_LOCK_OFFLINE_OK=0 bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 \
             && _tm_afail "a TRANSITIVE entry with a ${bad} sha256 passed"
         tm_assert_grep "markupsafe has a malformed hash" "${TM_TMP}/out" "the ${bad} hash on a transitive entry was not named"
     done
@@ -117,28 +117,189 @@ tm_case "a-malformed-hash-on-a-transitive-entry-is-caught" none _offline_wrap
 
 l_completeness() {
     _offline; _copy
-    # Offline: say so, never pass silently.
-    PATH="${TM_TMP}/nobin:${PATH}" bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 \
-        || _tm_afail "the offline gate failed on a good lock: $(cat "${TM_TMP}/out")"
-    tm_assert_grep "lock completeness NOT verified (offline)" "${TM_TMP}/out" "offline, the gate passed without saying completeness was not verified"
-    # Online: the resolved set is compared. A stub resolver stands in for PyPI
+    # Offline (round 9, B2): the printed verdict and the exit code agree — it
+    # is exit 3 "could not verify", even for a lock MISSING a package, unless
+    # TM_LOCK_OFFLINE_OK=1 explicitly accepts a structure-only result.
+    local rc=0
+    PATH="${TM_TMP}/nobin:${PATH}" TM_LOCK_OFFLINE_OK=0 bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_rc 3 "$rc" "offline, the gate did not exit 3 ($(cat "${TM_TMP}/out"))"
+    tm_assert_grep "COULD NOT VERIFY" "${TM_TMP}/out" "offline, the verdict does not say it could not verify"
+    rc=0; PATH="${TM_TMP}/nobin:${PATH}" TM_LOCK_OFFLINE_OK=1 bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_rc 0 "$rc" "TM_LOCK_OFFLINE_OK=1 did not accept a structure-only result"
+    tm_assert_grep "hashes NOT verified (offline; TM_LOCK_OFFLINE_OK=1)" "${TM_TMP}/out" "the accepted offline result does not print the warning"
+    for flag in 0 1; do
+        rc=0
+        PATH="${TM_TMP}/nobin:${PATH}" TM_LOCK_OFFLINE_OK="$flag" "$(tm_python)" "${TM_REPO_ROOT}/tools/gen-requirements-lock.py" --check --root "${TM_TMP}/c" > "${TM_TMP}/gen-out" 2>&1 || rc=$?
+        tm_assert_rc "$((3 * (1 - flag)))" "$rc" "generator --check disagrees with the offline policy"
+    done
+    awk '/^blinker==/{s=1;next} s&&/^    --hash/{next} {s=0;print}' "${TM_REPO_ROOT}/requirements.lock" > "${TM_TMP}/c/requirements.lock"
+    rc=0; PATH="${TM_TMP}/nobin:${PATH}" TM_LOCK_OFFLINE_OK=0 bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_rc 3 "$rc" "offline, a lock missing blinker exited ${rc} (the gatekeeper measured 0)"
+    # Online: the resolved set is compared. A stub resolver stands in for pip
     # and reports a package the lock lacks — the gate must go red.
-    mkdir -p "${TM_TMP}/on" "${TM_TMP}/c/tools"
-    printf '#!/bin/sh\nexit 0\n' > "${TM_TMP}/on/curl"; chmod +x "${TM_TMP}/on/curl"
+    _copy; _fake_pypi
     printf '%s\n' 'import sys' 'print("MISSING from requirements.lock: newdep==1.0 (resolved from requirements.txt)")' 'sys.exit(1)' \
         > "${TM_TMP}/c/tools/gen-requirements-lock.py"
     PATH="${TM_TMP}/on:${PATH}" bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 \
         && _tm_afail "a lock missing a resolved package passed"
     tm_assert_grep "does not cover the resolved set" "${TM_TMP}/out" "the gate failed, but not on completeness"
     printf '%s\n' 'import sys' 'print("could not resolve")' 'sys.exit(3)' > "${TM_TMP}/c/tools/gen-requirements-lock.py"
-    PATH="${TM_TMP}/on:${PATH}" bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 \
-        && _tm_afail "a resolution that failed was reported as a pass"
-    printf '%s\n' 'print("requirements.lock covers the resolved set (15 packages)")' > "${TM_TMP}/c/tools/gen-requirements-lock.py"
-    PATH="${TM_TMP}/on:${PATH}" bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 \
-        || _tm_afail "a complete lock failed online: $(cat "${TM_TMP}/out")"
-    tm_assert_grep "covers the resolved set" "${TM_TMP}/out" "the completeness result was not printed"
+    rc=0; PATH="${TM_TMP}/on:${PATH}" bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 || rc=$?
+    tm_assert_rc 3 "$rc" "a resolution that failed was not 'could not verify'"
 }
-tm_case "lock-completeness-is-checked-or-said-to-be-unchecked" none l_completeness
+
+# ─── round 9 (gatekeeper B2): the HASHES, against PyPI ───────────────────────
+# A fake PyPI: `curl` answers the reachability probe and serves, for every
+# name==version in the REAL lock, a JSON release whose files carry exactly the
+# lock's hashes. The FIRST TWO hashes are target wheels (cp312 and abi3
+# manylinux x86_64); the rest and an extra newly published wheel are macOS
+# wheels. Dropping one target hash must fail even with another remaining.
+# A stub resolver says the set is complete, so only the hash check decides.
+_fake_pypi() {
+    local J="${TM_TMP}/pypi"
+    mkdir -p "$J" "${TM_TMP}/on" "${TM_TMP}/c/tools"
+    tr -d '\r' < "${TM_REPO_ROOT}/requirements.lock" | awk -v J="$J" '
+        function flush() {
+            if (nv == "") return
+            f = J "/" nv ".json"
+            printf "{\"urls\": [" > f
+            for (i = 1; i <= n; i++)
+                printf "%s{\"filename\": \"%s-%s-%s-%s.whl\", \"packagetype\": \"bdist_wheel\", \"digests\": {\"sha256\": \"%s\"}}", \
+                    (i > 1 ? ", " : ""), name, ver, (i == 2 ? "cp38-abi3" : "cp312-cp312"), (i <= 2 ? "manylinux_2_17_x86_64" : "macosx_11_0_arm64"), h[i] > f
+            printf ", {\"filename\": \"%s-%s-cp312-cp312-macosx_11_0_arm64.whl\", \"packagetype\": \"bdist_wheel\", \"digests\": {\"sha256\": \"%s\"}}]}\n", \
+                name, ver, "0000000000000000000000000000000000000000000000000000000000000000" > f
+            close(f); nv = ""; n = 0
+        }
+        /^[A-Za-z0-9._-]+==/ { flush(); split($1, p, "=="); name = p[1]; ver = p[2]; nv = name "==" ver; next }
+        /--hash=sha256:/ { s = $0; sub(/.*--hash=sha256:/, "", s); sub(/[^0-9a-f].*$/, "", s); h[++n] = s }
+        END { flush() }'
+    [ "$(find "$J" -name '*.json' | wc -l | tr -d ' ')" -eq 15 ] || tm_die "the fake PyPI was not built for all 15 releases"
+    cat > "${TM_TMP}/on/curl" <<STUB
+#!/usr/bin/env bash
+out=""; url=""
+while [ \$# -gt 0 ]; do case "\$1" in -o) shift; out="\$1" ;; -*) ;; *) url="\$1" ;; esac; shift; done
+case "\$url" in
+    */simple/*) exit 0 ;;
+    https://pypi.org/pypi/*/json)
+        nv="\${url#https://pypi.org/pypi/}"; nv="\${nv%/json}"; nv="\${nv%%/*}==\${nv#*/}"
+        [ -f "${TM_TMP}/pypi/\${nv}.json" ] || exit 22
+        cp "${TM_TMP}/pypi/\${nv}.json" "\$out" ;;
+    *) exit 7 ;;
+esac
+STUB
+    chmod +x "${TM_TMP}/on/curl"
+    printf '%s\n' 'print("requirements.lock covers the resolved set (15 packages)")' > "${TM_TMP}/c/tools/gen-requirements-lock.py"
+}
+_hash_gate() {
+    RC=0; PATH="${TM_TMP}/on:${PATH}" TM_LOCK_OFFLINE_OK=0 bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 || RC=$?
+    local grc=0
+    PATH="${TM_TMP}/on:${PATH}" TM_LOCK_OFFLINE_OK=0 "$(tm_python)" "${TM_REPO_ROOT}/tools/gen-requirements-lock.py" --check --root "${TM_TMP}/c" > "${TM_TMP}/gen-out" 2>&1 || grc=$?
+    tm_assert_rc "$RC" "$grc" "generator --check disagrees with the gate: $(cat "${TM_TMP}/gen-out")"
+}
+# _cffi_hash <n> — the n-th hash of cffi in the real lock (1 and 2 = fake target wheels)
+_cffi_hash() { tr -d '\r' < "${TM_REPO_ROOT}/requirements.lock" | awk -v k="$1" '/^cffi==/{c=1;next} c&&/--hash/{i++; if(i==k){s=$0; sub(/.*sha256:/,"",s); sub(/[^0-9a-f].*$/,"",s); print s}} c&&!/--hash/{c=0}'; }
+# _drop_hash <hash> — remove that hash line, keeping the continuation backslashes valid
+_drop_hash() {
+    tr -d '\r' < "${TM_REPO_ROOT}/requirements.lock" | awk -v h="$1" '
+        { l[NR] = $0 } END {
+            for (i = 1; i <= NR; i++) if (index(l[i], "sha256:" h)) d = i
+            if (d && l[d] !~ / \\$/) sub(/ \\$/, "", l[d-1])
+            for (i = 1; i <= NR; i++) if (i != d) print l[i] }' > "${TM_TMP}/c/requirements.lock"
+}
+
+tm_case "lock-completeness-is-checked-or-exits-3" none l_completeness
+
+h_online_good_lock() {
+    _copy; _fake_pypi; _hash_gate
+    tm_assert_rc 0 "$RC" "the real lock failed against a PyPI that publishes its hashes: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "15 releases: every hash is one PyPI published" "${TM_TMP}/out" "the hash verdict was not printed"
+}
+tm_case "online-the-real-lock-matches-published-hashes" none h_online_good_lock
+
+h_dropped_target_hash() {
+    _copy; _fake_pypi; _drop_hash "$(_cffi_hash 1)"
+    cmp -s "${TM_REPO_ROOT}/requirements.lock" "${TM_TMP}/c/requirements.lock" && tm_die "the drop fixture changed nothing"
+    _hash_gate
+    tm_assert_rc 1 "$RC" "dropping one of cffi's two target-wheel hashes stayed GREEN — gatekeeper B2"
+    tm_assert_grep "cffi==2.1.1 — missing target wheel hash" "${TM_TMP}/out" "the dropped target hash was not named"
+}
+tm_case "online-a-dropped-target-hash-is-caught" none h_dropped_target_hash
+
+h_altered_hash() {
+    local h k new
+    for k in 1 3; do
+        _copy; _fake_pypi; h="$(_cffi_hash "$k")"
+        case "${h: -1}" in 0) new="${h%?}1" ;; *) new="${h%?}0" ;; esac
+        sed -i "s/${h}/${new}/" "${TM_TMP}/c/requirements.lock"
+        cmp -s "${TM_REPO_ROOT}/requirements.lock" "${TM_TMP}/c/requirements.lock" && tm_die "the hex fixture changed nothing"
+        _hash_gate
+        tm_assert_rc 1 "$RC" "one changed hex digit in cffi hash #${k} stayed GREEN — gatekeeper B2"
+        tm_assert_grep "is not one PyPI published for this release" "${TM_TMP}/out" "the altered hash #${k} was not named"
+    done
+}
+tm_case "online-one-changed-hex-digit-is-caught" none h_altered_hash
+
+h_no_false_red() {
+    # A NON-target hash dropped (pip never picks that file on the target), and
+    # a new non-target wheel PyPI published: both GREEN.
+    _copy; _fake_pypi; _drop_hash "$(_cffi_hash 3)"
+    cmp -s "${TM_REPO_ROOT}/requirements.lock" "${TM_TMP}/c/requirements.lock" && tm_die "the drop fixture changed nothing"
+    _hash_gate
+    tm_assert_rc 0 "$RC" "a lock without a non-target hash, beside a newly published non-target wheel, went red: $(cat "${TM_TMP}/out")"
+}
+tm_case "online-optional-non-target-hashes-are-not-a-false-red" none h_no_false_red
+
+h_target_tags() {
+    local tag expected
+    for tag in cp312-cp312-manylinux_2_17_x86_64 cp38-abi3-manylinux2014_x86_64 py2.py3-none-any \
+               cp313-abi3-manylinux_2_17_x86_64 cp312-cp312-manylinux_2_17_aarch64 \
+               cp312-cp312-musllinux_1_2_x86_64 cp312-cp312-manylinux_2_40_x86_64; do
+        _copy; _fake_pypi
+        "$(tm_python)" - "${TM_TMP}/pypi/cffi==2.1.1.json" "$tag" <<'PY'
+import json, sys
+path, tag = sys.argv[1:]
+data = json.load(open(path))
+for i, f in enumerate(data['urls'][:2]):
+    f['filename'] = 'cffi-2.1.1-%d-%s.whl' % (i + 1, tag)
+with open(path, 'w') as out:
+    json.dump(data, out)
+PY
+        case "$tag" in
+            cp312-cp312-manylinux_2_17_x86_64|cp38-abi3-manylinux2014_x86_64|py2.py3-none-any) expected=0 ;;
+            *) expected=1 ;;
+        esac
+        _hash_gate
+        tm_assert_rc "$expected" "$RC" "wrong target classification for $tag: $(cat "${TM_TMP}/out")"
+    done
+}
+tm_case "online-target-tags-match-python-312-on-ubuntu-2404" none h_target_tags
+
+h_new_target() {
+    _copy; _fake_pypi
+    # Turn the extra, unlisted macOS wheel into a target wheel: the documented
+    # all-target policy deliberately requires regeneration in this case.
+    "$(tm_python)" - "${TM_TMP}/pypi/cffi==2.1.1.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data['urls'][-1]['filename'] = 'cffi-2.1.1-cp312-cp312-manylinux_2_28_x86_64.whl'
+with open(path, 'w') as out:
+    json.dump(data, out)
+PY
+    _hash_gate
+    tm_assert_rc 1 "$RC" "a newly published target wheel must require regeneration"
+    tm_assert_grep "missing target wheel hash" "${TM_TMP}/out" "the new target wheel was not named"
+}
+tm_case "online-new-target-wheel-requires-regeneration" none h_new_target
+
+h_pypi_silent() {
+    _copy; _fake_pypi; rm -f "${TM_TMP}/pypi/cffi==2.1.1.json"; _hash_gate
+    tm_assert_rc 3 "$RC" "a release PyPI did not answer for was not 'could not verify'"
+    printf '%s\n' '<html>502</html>' > "${TM_TMP}/pypi/cffi==2.1.1.json"
+    _hash_gate
+    tm_assert_rc 3 "$RC" "an unreadable release answer was not 'could not verify'"
+}
+tm_case "online-an-unanswered-release-is-exit-3" none h_pypi_silent
 
 SCA="${TM_REPO_ROOT}/tools/sca-check.sh"
 s_osv_any_vuln_is_a_finding() {

@@ -314,12 +314,28 @@ gates:
       round 8 also on a REMOVED token and a non-numeric one.
   - name: requirements-lock
     cmd: "bash tools/check-requirements-lock.sh"
-    verified: 2026-09-26
+    verified: 2026-09-27
     note: >-
-      ROUND 8: with PyPI reachable it also runs gen-requirements-lock.py
-      --check-set (the resolved name==version set must equal the lock's);
-      offline it prints "lock completeness NOT verified (offline)" and checks
-      structure and agreement only — it never passes silently.
+      ROUND 9 (gatekeeper B2): with PyPI reachable it (1) runs
+      gen-requirements-lock.py --check-set (the resolved name==version set
+      must equal the lock's) and (2) fetches https://pypi.org/pypi/<n>/<v>/json
+      for every locked release: every lock hash must be one PyPI published for
+      that exact release, and ALL published target wheel hashes are required
+      (at least one per package): cp312 or cp3x abi3 (x <= 12) manylinux
+      x86_64 with glibc <= 2.39 (Ubuntu 24.04), or py3-none-any. This catches
+      a dropped cffi target hash even when another remains. Non-target hashes
+      are optional, so new non-target wheels cannot false-red. A newly added
+      TARGET wheel deliberately requires regeneration; fixed releases rarely
+      add these. gen-requirements-lock.py --check delegates to this same gate.
+      OFFLINE IS EXIT 3 ("could not verify")
+      unless TM_LOCK_OFFLINE_OK=1 explicitly accepts a structure-only result
+      (t25 sets it only for structure fixtures); the verdict and the exit code
+      agree. t25 drives the online branch with a fake PyPI (stand-in curl):
+      a dropped target hash and one changed hex digit go RED, a dropped
+      non-target hash and a newly published non-target wheel stay GREEN. ROUND 8:
+      offline it had printed "NOT verified" and exited 0.
+      Round 9 verification here: t25's fake-PyPI branch and offline cases pass;
+      live PyPI verification is blocked by sandbox DNS/network access (exit 3).
       requirements.lock (tools/gen-requirements-lock.py) pins every Python
       package incl. transitive ones with the sha256 of every published wheel;
       every installer uses it with --require-hashes --only-binary :all:. The
