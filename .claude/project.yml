@@ -251,8 +251,14 @@ gates:
       bash -n still exited 0. Was prose in gate_verification; now a real gate.
   - name: sbom-consistency
     cmd: "bash tools/check-sbom-consistency.sh"
-    verified: 2026-09-26
+    verified: 2026-09-28
     note: >-
+      ROUND 12 (gatekeeper B2): the lock's entries and versions come from
+      tools/lib/lockparse.py (pip's rules), never a column-0 regex; a lock
+      the parser refuses is a FAIL. The regex kept a BOM glued to the first
+      entry (N03: blinker unseen, its SBOM row edited to 1.8.0 went green)
+      and read "pyasn1==0.6\" + ".4 \" as 0.6 (N04: SBOM row 0.6 green,
+      pip installs 0.6.4). Both RED in t25.
       ROUND 8: SBOM.md's transitive rows are held to requirements.lock (every
       locked package not in requirements.txt must be visible at the locked
       version); they were read and ignored.
@@ -268,9 +274,16 @@ gates:
       reading that as current produced six false failures on the first run.
   - name: sca
     cmd: "bash tools/sca-check.sh"
-    verified: 2026-09-26
+    verified: 2026-09-28
     requires_network: "api.osv.dev"
     note: >-
+      ROUND 11 (gatekeeper N1, TM-RL-002): requirements.lock is read by
+      tools/lib/lockparse.py (pip's rules, the lock gate's parser); every
+      entry is queried at the version PIP installs (a direct pin is skipped
+      only when requirements.txt already queried that same version), and
+      the entries handled must equal the parser's count (was: "> 0"). A lock
+      the parser refuses is exit 3. Measured live 2026-09-28: real lock 15 of
+      15, all clean; X21 lock -> pyasn1 0.4.8 VULNERABLE, exit 1.
       ROUND 8: OSV answers are parsed as JSON and ANY vulns entry is a
       finding, whatever its ID prefix (a prefix allowlist reported unknown
       prefixes CLEAN); a missing or unreadable requirements.lock is exit 3.
@@ -326,11 +339,14 @@ gates:
       round 8 also on a REMOVED token and a non-numeric one.
   - name: requirements-lock
     cmd: "bash tools/check-requirements-lock.sh"
-    verified: 2026-09-27
+    verified: 2026-09-28
     note: >-
       ROUND 9 (gatekeeper B2): with PyPI reachable it (1) runs
       gen-requirements-lock.py --check-set (the resolved name==version set
-      must equal the lock's) and (2) fetches https://pypi.org/pypi/<n>/<v>/json
+      must equal the set PIP reads from the lock — round 11, below — and the
+      gate checks its verdict line and that its count equals the lock's
+      entry count, not just exit 0; the resolver times out at 600 s -> exit 3)
+      and (2) fetches https://pypi.org/pypi/<n>/<v>/json
       for every locked release: every lock hash must be one PyPI published for
       that exact release, and ALL published target wheel hashes are required
       (at least one per package): cp312 or cp3x abi3 (x <= 12) manylinux
@@ -346,8 +362,64 @@ gates:
       a dropped target hash and one changed hex digit go RED, a dropped
       non-target hash and a newly published non-target wheel stay GREEN. ROUND 8:
       offline it had printed "NOT verified" and exited 0.
-      Round 9 verification here: t25's fake-PyPI branch and offline cases pass;
-      live PyPI verification is blocked by sandbox DNS/network access (exit 3).
+      ROUND 10 (gatekeeper B1): ONE parse of the lock, pip's rules
+      (backslash continuations, a "#" at line start or after whitespace is a
+      comment). The structure check's accepted entries are the list the PyPI
+      fetch and the hash check use; the hash check must judge EXACTLY that
+      many entries or it FAILS. Round 9 had a second parser that skipped a line
+      ending in "# comment": a bad hash there passed as "PASS — 14 releases" on
+      a 15-entry lock while pip still honoured it. t25 covers a commented bad
+      hash (blinker one-line; cffi's last --hash line) RED, commented good GREEN.
+      ROUND 11 (gatekeeper N1): tools/lib/lockparse.py is the ONLY parser of
+      requirements.lock, by pip's req_file rules (continuations, comments,
+      split on SPACE only, so a TAB before --hash is refused as pip refuses
+      it). The gate, gen-requirements-lock.py (--check-set/lock_set) and
+      sca-check.sh all import or run it; none keeps a regex of its own.
+      Round 10's --check-set and SCA matched raw column-0 lines: X20 (a
+      comment ending in a backslash hid cffi from pip and the gate, while
+      --check-set still counted it) passed as "PASS — 14 releases"; X21 (the
+      real pyasn1==0.6.4 swallowed, an indented pyasn1==0.4.8 below) passed
+      the gate and SCA said "pyasn1 0.6.4 CLEAN" while pip installed 0.4.8.
+      The gate also refuses a lock whose column-0 view differs from pip's (an
+      entry-shaped line pip does not read, an indented entry, a CR/FF/Unicode
+      line break), so the remaining column-0 readers (check-sbom-consistency,
+      upgrade-full.sh's pin grep) see what pip sees on any lock that passes
+      [FALSE — see ROUND 12 below].
+      SCA queries every lock entry at the version pip installs and its
+      handled count must equal the parser's. t25 compares lockparse with
+      pip's own parser (pip._internal.req.req_file) on nine lock shapes.
+      ROUND 12 (gatekeeper B1/B2): the round-11 claim above that the
+      column-0 readers "see what pip sees" was FALSE for two reasons. (1)
+      pip does not decode the lock as UTF-8: a BOM, else a PEP 263 coding
+      line in the first two lines, else the locale (auto_decode). N01
+      ("coding: latin-1" + U+0145, whose 0x85 byte is NEL) and N02 ("coding:
+      utf-7" + ASCII "+AAo-") made pip read a hidden pyasn1==0.4.8 entry:
+      gate PASS 15, SBOM green, SCA "0.6.4 CLEAN", pip installed 0.4.8. The
+      lock must now be PURE ASCII: every byte < 0x80, no BOM, no coding
+      declaration in lines 1-2, no line break but LF (CRLF tolerated), no
+      control character but TAB. lockparse.read() refuses anything else, so
+      the gate, --check-set, SCA and the SBOM check all refuse it; the
+      generator writes only ASCII (its header's em dash is now "-") and
+      refuses to write a lock these rules would refuse. (2) check-sbom-
+      consistency.sh kept its own column-0 regex (see sbom-consistency) and
+      now uses the parser. The gate also refuses an entry whose name==version
+      is not whole on its first line (N04). upgrade-full.sh's direct-pin grep
+      stays a column-0 grep: it only confirms the seven direct pins and fails
+      CLOSED on any lock it cannot match, and it runs on an air-gapped host
+      from a tree whose lock has already passed this gate (prepare-offline.sh
+      runs it); moving it onto the parser would make the installer depend on
+      tools/lib/ being in the bundle for no change in what pip installs.
+      t25: N01-N04 plus BOM, UTF-16, raw 0x85/0x0b/0x0c/0x00/U+2028 and a
+      coding line on line 2 are RED on the gate and on the SBOM check; the
+      pip oracle reads the fixtures' raw bytes.
+      WHERE THE REAL LOCK IS CHECKED AGAINST LIVE PyPI IN v1.1.0 (James,
+      round 10): only (a) prepare-offline.sh, which runs this gate and dies on
+      any non-zero exit (prepare-offline.sh:63), and (b) running this gate by
+      hand. CI does NOT: v1.1.0's .gitlab-ci.yml runs tests/run.sh --strict
+      only, where t25 checks the REAL lock structure-only (curl stubbed,
+      TM_LOCK_OFFLINE_OK=1) and drives the online logic against a FAKE PyPI
+      built from the lock's own hashes. v1.2.0 adds a --require-online CI step
+      (REG-0007). Measured 2026-09-28 by hand, live PyPI: PASS, 15 releases.
       requirements.lock (tools/gen-requirements-lock.py) pins every Python
       package incl. transitive ones with the sha256 of every published wheel;
       every installer uses it with --require-hashes --only-binary :all:. The

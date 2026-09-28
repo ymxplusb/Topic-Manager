@@ -50,7 +50,8 @@
       "finding": "SCA skips indented/unterminated lock lines and a direct package's differing locked version (tools/sca-check.sh:175-178)",
       "where": "tools/sca-check.sh:175-178",
       "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. not live: lock is generator-produced, unindented; agreement gate catches direct drift",
-      "status": "open"
+      "status": "fixed",
+      "fixed": "v1.1.0 round 11 (1c754ff, gatekeeper-confirmed round 12): one parser, tools/lib/lockparse.py, for the lock gate, --check-set and SCA; every entry queried at the version pip installs. v1.2.0 60ad85d fixed it independently; the two parsers were merged into v1.1.0's at the v1.1.0 -> release/v1.2.0 merge (WO-0004), carrying v1.2.0's PEP 440 version shape (REG-0007)."
     },
     {
       "id": "REG-0006",
@@ -60,7 +61,8 @@
       "finding": "requirements-lock online completeness false-red on a valid older compatible closure (gen-requirements-lock.py:113)",
       "where": "gen-requirements-lock.py:113",
       "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
-      "status": "open"
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 60ad85d (t41 reproduction), not yet released; at the v1.1.0 merge --check-set became a lock-CONSTRAINED resolution (v1.1.0 round 11 MISSING / NOT-in-set comparison kept) plus the closure check"
     },
     {
       "id": "REG-0007",
@@ -70,7 +72,8 @@
       "finding": "requirements-lock offline completeness fail-open is green in tests; wildcard pin accepted (check-requirements-lock.sh:47,83)",
       "where": "check-requirements-lock.sh:47,83",
       "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
-      "status": "open"
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 60ad85d (t41 reproduction), not yet released"
     },
     {
       "id": "REG-0008",
@@ -80,7 +83,8 @@
       "finding": "pipefail lint misses sed -n 1q, quoted alternation, line-continued pipe, `command grep`; false-red on quoted/commented text (check-pipefail-consumers.sh:43-45)",
       "where": "check-pipefail-consumers.sh:43-45",
       "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
-      "status": "open"
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 60ad85d (t41 reproduction), not yet released"
     },
     {
       "id": "REG-0009",
@@ -90,7 +94,8 @@
       "finding": "env-neutral misses latin-1 boundary, UTF-16, fc00::/8; false-red on binary pixel data (check-env-neutral.sh:85,111,115)",
       "where": "check-env-neutral.sh:85,111,115",
       "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
-      "status": "open"
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 60ad85d (t41 reproduction), not yet released"
     },
     {
       "id": "REG-0010",
@@ -100,7 +105,8 @@
       "finding": "version-surfaces: token in a comment counts; app/main.js not scanned; template literal false-red (check-version-surfaces.sh:88)",
       "where": "check-version-surfaces.sh:88",
       "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
-      "status": "open"
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 60ad85d (t41 reproduction), not yet released"
     },
     {
       "id": "REG-0011",
@@ -110,7 +116,8 @@
       "finding": "sbom-consistency: indented lock lines dropped; duplicate rows overwrite (check-sbom-consistency.sh:164,180)",
       "where": "check-sbom-consistency.sh:164,180",
       "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
-      "status": "open"
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 60ad85d (t41 reproduction), not yet released; the SBOM gate now reads the lock through v1.1.0's lockparse.py (round 12)"
     },
     {
       "id": "REG-0012",
@@ -120,7 +127,8 @@
       "finding": "config-example: empty containers/null cluster bootstrap pass; documented empty required_group false-red (check-config-example.sh:81)",
       "where": "check-config-example.sh:81",
       "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
-      "status": "open"
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 60ad85d (t41 reproduction), not yet released"
     },
     {
       "id": "REG-0013",
@@ -130,7 +138,8 @@
       "finding": "runner: malformed extra record masked by other passes; multiline requirement bypass (tests/run.sh:140, harness.sh:275)",
       "where": "tests/run.sh:140, harness.sh:275",
       "disposition": "gate hardening scheduled into v1.2.0 (gates shared); non-blocking for v1.1.0 unless gatekeeper rules otherwise. ",
-      "status": "open"
+      "status": "fixed-unreleased",
+      "fixed": "release/v1.2.0 60ad85d (t41 reproduction), not yet released"
     }
   ]
 }

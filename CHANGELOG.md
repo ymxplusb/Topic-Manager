@@ -348,6 +348,59 @@ Adversary and security-review findings, all fixed on this branch before release:
   exits 3 ("could not verify") unless `TM_LOCK_OFFLINE_OK=1` explicitly
   accepts a structure-only result. t25 covers the online branch against a fake PyPI.
 
+### Round 10 (gatekeeper, 2026-09-28)
+
+- **A trailing comment can no longer hide a lock entry from the hash check.** The structure
+  check stripped `# comments`; the hash check re-parsed the lock with a pattern that required
+  the line to end in hashes and silently skipped any other line. So
+  `blinker==1.9.0 --hash=sha256:<anything>  # pinned` passed as "PASS — 14 releases" on a
+  15-entry lock, while pip still honours that hash. The lock is now parsed once, by pip's rules
+  (continuations, comments), and the PyPI fetch and the hash check both use that entry list; the
+  hash check must judge every entry or the gate fails. t25 proves a commented bad hash goes red
+  (a one-line entry, and the last `--hash` line of a multi-hash entry) and a commented good one
+  stays green.
+- **Where the real lock meets live PyPI (corrected claim).** In v1.1.0, CI runs
+  `tests/run.sh --strict` only: t25 checks the real lock's structure offline and exercises the
+  online logic against a fake PyPI built from the lock's own hashes. CI does **not** verify the
+  real lock against live PyPI. That happens when `prepare-offline.sh` runs (it runs the gate
+  and stops on any failure) and when the gate is run by hand (2026-09-28: PASS, 15 releases).
+  v1.2.0 adds a `--require-online` CI step.
+
+### Round 11 (gatekeeper, 2026-09-28)
+
+- **One reader of `requirements.lock`, and it is pip's.** Round 10 made the lock gate read the
+  lock as pip does, but the completeness check (`gen-requirements-lock.py --check-set`) and
+  SCA (`tools/sca-check.sh`) still matched raw column-0 lines. Two locks exploited the gap:
+  a `# regenerated \` comment on blinker's hash line made pip and the gate lose `cffi` while
+  `--check-set` still counted it (gate "PASS — 14 releases", pip then refuses to install); and
+  an entry hidden behind such a comment with an indented `pyasn1==0.4.8` below it passed the
+  gate with 15 releases while SCA reported "pyasn1 0.6.4 CLEAN" and pip installed 0.4.8 (four
+  CVEs). All three now use `tools/lib/lockparse.py`, which follows pip's own rules
+  (continuations, comments, splitting on spaces only), and a t25 case compares it with pip's own
+  parser. SCA queries every lock entry at the version pip installs and its count must match
+  the parser's. The gate also refuses a lock laid out so that a reader looking only at
+  column 0 would see different entries from pip (a hidden entry, an indented entry, a
+  line break that pip honours and grep does not); the generator never writes one.
+- A TAB between a version and `--hash` is refused, as pip refuses it.
+- The lock gate reads the completeness verdict and its count instead of relying on exit 0.
+  The resolver now times out after 600 s and reports "could not verify".
+
+### Round 12 (gatekeeper, 2026-09-28)
+
+- **`requirements.lock` must be plain ASCII.** pip does not read the lock as UTF-8: it
+  honours a byte-order mark and a `# -*- coding: ... -*-` line in the first two lines. A
+  lock declaring `coding: latin-1` (or `utf-7`) could make pip read an entry that every gate
+  saw inside a comment: all gates passed and SCA reported pyasn1 0.6.4 clean while pip
+  installed 0.4.8. The shared parser now refuses any byte of 0x80 or above, a byte-order
+  mark, a coding line, a line break other than LF (CRLF is still accepted) and any control
+  character other than TAB. So the lock gate, the completeness check, SCA and the SBOM
+  check all refuse such a lock. The generator writes only ASCII (its header no longer has
+  an em dash) and will not write a lock these rules refuse.
+- **The SBOM check reads the lock through the same parser.** It had its own column-0
+  pattern, which missed an entry behind a byte-order mark and read a version split across a
+  continuation line (`pyasn1==0.6\` then `.4`) as `0.6`. In both cases a wrong SBOM row
+  passed. The lock gate also refuses an entry whose `name==version` is split across lines.
+
 ### Known limitations
 
 - **FIPS module boundary**: the `cryptography` and `confluent-kafka` wheels bundle their own

@@ -36,13 +36,29 @@ PY="${PYTHON:-python3}"
 command -v "$PY" >/dev/null 2>&1 || PY=python
 command -v "$PY" >/dev/null 2>&1 || { echo "check-requirements-lock: no python found" >&2; exit 3; }
 
-"$PY" - "$(cygpath -m "$ROOT" 2>/dev/null || printf '%s' "$ROOT")" <<'PYCHK'
-import os, re, sys
-root = sys.argv[1]
-def norm(n): return re.sub(r"[-_.]+", "-", n).lower()
-# A PEP 440 release, optionally with a pre/post/dev/local part — digits first,
-# no wildcard, no comma, no operator.
-VERSION = r"[0-9]+(?:\.[0-9]+)*(?:[-_.]?(?:a|b|rc|alpha|beta|c|pre|preview|post|rev|r|dev)[-_.]?[0-9]*)*(?:\+[A-Za-z0-9.]+)?"
+# One parse of the lock, shared by every check below (round 10, gatekeeper
+# B1): the structure check writes the entries it accepted to ${JDIR}; the
+# PyPI fetch and the hash check read THAT list, never the lock again.
+# Round 11 (gatekeeper N1): the parse itself lives in tools/lib/lockparse.py,
+# pip's rules, and is the SAME code gen-requirements-lock.py (--check-set) and
+# sca-check.sh use — they had kept column-0 regexes of their own, and saw
+# entries pip does not install and missed entries it does.
+JDIR="$(mktemp -d "${TMPDIR:-/tmp}/tm-lockjson.XXXXXX")" || { echo "check-requirements-lock: mktemp failed" >&2; exit 3; }
+trap 'rm -rf -- "$JDIR"' EXIT
+JDIR_PY="$(cygpath -m "$JDIR" 2>/dev/null || printf '%s' "$JDIR")"
+LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+[[ -f "${LIB}/lockparse.py" ]] || { echo "check-requirements-lock: ${LIB}/lockparse.py is missing" >&2; exit 3; }
+LIB_PY="$(cygpath -m "$LIB" 2>/dev/null || printf '%s' "$LIB")"
+
+"$PY" - "$(cygpath -m "$ROOT" 2>/dev/null || printf '%s' "$ROOT")" "$JDIR_PY" "$LIB_PY" <<'PYCHK'
+import json, os, re, sys
+root, jdir = sys.argv[1], sys.argv[2]
+sys.path.insert(0, sys.argv[3])
+import lockparse
+norm = lockparse.norm
+# REG-0007 (v1.2.0): requirements.txt is held to the same exact PEP 440 shape
+# the parser demands of the lock (no wildcard, range, comma or ===).
+VERSION = lockparse.VERSION
 req = os.path.join(root, "requirements.txt"); lock = os.path.join(root, "requirements.lock")
 if not os.path.isfile(lock):
     print("FAIL: requirements.lock is missing — the installers use it with --require-hashes"); sys.exit(1)
@@ -57,27 +73,21 @@ for line in open(req, encoding="utf-8"):
     pins[norm(m.group(1))] = m.group(2)
 if not pins:
     print("FAIL: no == pins in requirements.txt"); sys.exit(1)
-text = open(lock, encoding="utf-8").read().replace("\r\n", "\n").replace("\\\n", " ")
-entries, fail = {}, 0
-for line in text.splitlines():
-    line = line.split("#", 1)[0].strip() if not line.lstrip().startswith("--hash") else line.strip()
-    if not line:
-        continue
-    # REG-0007 (v1.2.0): EXACT ==<version> only. `==([^\s]+)` accepted a
-    # wildcard (==3.*) and a range glued on (==1.0,<2), both of which pip
-    # resolves to whatever is newest — not a lock.
-    m = re.match(r"^([A-Za-z0-9._-]+)==(" + VERSION + r")((?:\s+--hash=sha256:\S+)*)\s*$", line)
-    if not m:
-        print("FAIL: requirements.lock: not an exact pin with hashes: %s" % line[:80]); fail += 1; continue
-    name, ver, hs = norm(m.group(1)), m.group(2), re.findall(r"--hash=sha256:(\S+)", m.group(3))
-    if name in entries:
-        print("FAIL: %s appears twice in requirements.lock" % name); fail += 1
-    if not hs:
-        print("FAIL: %s==%s has no --hash" % (name, ver)); fail += 1
-    bad = [h for h in hs if not re.fullmatch(r"[0-9a-f]{64}", h)]
-    if bad:
-        print("FAIL: %s has a malformed hash: %s" % (name, bad[0][:20])); fail += 1
-    entries[name] = ver
+# Round 12 (gatekeeper B1): read() refuses any byte pip could decode another
+# way (non-ASCII, a BOM, a coding line, a line break other than LF).
+try:
+    text = lockparse.read(lock)
+except lockparse.LockEncodingError as e:
+    for p in e.problems:
+        print("FAIL: %s" % p)
+    print("check-requirements-lock: %d problem(s) — the lock must be plain ASCII." % len(e.problems)); sys.exit(1)
+except OSError as e:
+    print("FAIL: requirements.lock cannot be read: %s" % e); sys.exit(1)
+parsed, errors = lockparse.parse(text)
+fail = 0
+for e in errors + lockparse.layout_problems(text):
+    print("FAIL: %s" % e); fail += 1
+entries = {e["key"]: e["version"] for e in parsed}
 for n, v in sorted(pins.items()):
     if n not in entries:
         print("FAIL: requirements.txt pins %s==%s but requirements.lock does not carry it" % (n, v)); fail += 1
@@ -86,6 +96,10 @@ for n, v in sorted(pins.items()):
               % (n, v, entries[n])); fail += 1
 if fail:
     print("check-requirements-lock: %d problem(s)." % fail); sys.exit(1)
+with open(os.path.join(jdir, "entries.json"), "w", encoding="utf-8") as f:
+    json.dump([{"name": e["name"], "version": e["version"], "hashes": e["hashes"]} for e in parsed], f)
+with open(os.path.join(jdir, "entries.txt"), "w", encoding="utf-8", newline="\n") as f:
+    f.write("".join("%s==%s\n" % (e["name"], e["version"]) for e in parsed))
 print("check-requirements-lock: %d packages locked (%d direct pins agree), every one hash-pinned."
       % (len(entries), len(pins)))
 PYCHK
@@ -126,8 +140,19 @@ fi
 out="$("$PY" "$GEN" --check-set --root "$(cygpath -m "$ROOT" 2>/dev/null || printf '%s' "$ROOT")" 2>&1)"
 crc=$?
 out="$(grep -v '^\[notice\]' <<<"$out" | sed '/^$/d')"
+# Exit 0 is not taken on trust (round 11, TM-RL-005): the last line must be
+# the generator's verdict, and the resolved count must equal the number of
+# entries the structure check read from the lock.
+nlock="$(grep -c . "${JDIR}/entries.txt")"
 case "$crc" in
-    0) echo "check-requirements-lock: ${out##*$'\n'}" ;;
+    0) last="${out##*$'\n'}"
+       if [[ ! "$last" =~ ^requirements\.lock\ covers\ the\ resolved\ set\ \(([0-9]+)\ packages\)$ ]]; then
+           printf '%s\n' "$out"; echo "check-requirements-lock: COULD NOT VERIFY — the completeness check exited 0 without its verdict. Exit 3."; exit 3
+       fi
+       if [[ "${BASH_REMATCH[1]}" != "$nlock" ]]; then
+           printf '%s\n' "$out"; echo "check-requirements-lock: FAIL — the resolved set has ${BASH_REMATCH[1]} packages but the lock has ${nlock} entries."; exit 1
+       fi
+       echo "check-requirements-lock: ${last}" ;;
     1) printf '%s\n' "$out"; echo "check-requirements-lock: FAIL — the lock does not cover the resolved set; regenerate it."; exit 1 ;;
     *) printf '%s\n' "$out"; echo "check-requirements-lock: COULD NOT VERIFY — lock completeness (resolution failed, exit ${crc}). Exit 3."; exit 3 ;;
 esac
@@ -142,8 +167,8 @@ esac
 #        adding those on PyPI cannot turn the gate red. A new target file does
 #        require regeneration (deliberately; rare for a fixed release).
 #    Fetched with curl (one file per release), judged by python.
-JDIR="$(mktemp -d "${TMPDIR:-/tmp}/tm-lockjson.XXXXXX")" || { echo "check-requirements-lock: mktemp failed" >&2; exit 3; }
-trap 'rm -rf -- "$JDIR"' EXIT
+#    The releases are the structure check's entries (entries.txt), so a line
+#    this loop could not parse cannot quietly go unfetched.
 nfetch=0
 while IFS= read -r nv; do
     n="${nv%%==*}"; v="${nv#*==}"
@@ -152,14 +177,14 @@ while IFS= read -r nv; do
         exit 3
     fi
     nfetch=$((nfetch+1))
-done < <(tr -d '\r' < "${ROOT}/requirements.lock" | sed -n 's/^\([A-Za-z0-9._-][A-Za-z0-9._-]*\)==\([^[:space:]\\]*\).*/\1==\2/p')
+done < "${JDIR}/entries.txt"
 [[ $nfetch -gt 0 ]] || { echo "check-requirements-lock: COULD NOT VERIFY — no release was fetched. Exit 3."; exit 3; }
 
-"$PY" - "$(cygpath -m "$ROOT" 2>/dev/null || printf '%s' "$ROOT")" "$(cygpath -m "$JDIR" 2>/dev/null || printf '%s' "$JDIR")" <<'PYHASH'
+"$PY" - "$JDIR_PY" "$nfetch" <<'PYHASH'
 import json, os, re, sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-root, jdir = sys.argv[1], sys.argv[2]
-text = open(os.path.join(root, "requirements.lock"), encoding="utf-8").read().replace("\r\n", "\n").replace("\\\n", " ")
+jdir, nfetch = sys.argv[1], int(sys.argv[2])
+entries = json.load(open(os.path.join(jdir, "entries.json"), encoding="utf-8"))
 
 def target(fn):
     """A wheel pip would choose on CPython 3.12 / x86_64 glibc."""
@@ -187,13 +212,9 @@ def target(fn):
     return ok and any(manylinux(p) for p in plats)
 
 fail = unver = 0
-n_ok = 0
-for line in text.splitlines():
-    m = re.match(r"^([A-Za-z0-9._-]+)==([^\s]+)((?:\s+--hash=sha256:\S+)*)\s*$", line.strip())
-    if not m:
-        continue
-    name, ver = m.group(1), m.group(2)
-    hs = re.findall(r"--hash=sha256:(\S+)", m.group(3))
+n_ok = n_judged = 0
+for ent in entries:
+    name, ver, hs = ent["name"], ent["version"], ent["hashes"]
     path = os.path.join(jdir, "%s==%s.json" % (name, ver))
     try:
         meta = json.load(open(path, encoding="utf-8"))
@@ -205,6 +226,7 @@ for line in text.splitlines():
         print("COULD NOT VERIFY: %s==%s — PyPI's answer could not be read (%s)" % (name, ver, e.__class__.__name__))
         unver += 1
         continue
+    n_judged += 1
     if not published:
         print("FAIL: %s==%s — PyPI publishes no files for this release" % (name, ver)); fail += 1; continue
     foreign = [h for h in hs if h not in published]
@@ -221,6 +243,11 @@ for line in text.splitlines():
         fail += 1
 if unver:
     print("check-requirements-lock: COULD NOT VERIFY — %d release(s) unreadable. Exit 3." % unver); sys.exit(3)
+# Coverage (round 10, gatekeeper B1): EVERY entry the structure check counted
+# was fetched and judged. A shortfall is a failure, never a skip.
+if not (n_judged == nfetch == len(entries)):
+    print("check-requirements-lock: FAIL — the lock has %d entries but %d were fetched and %d hash-checked."
+          % (len(entries), nfetch, n_judged)); sys.exit(1)
 if fail:
     print("check-requirements-lock: FAIL — %d hash problem(s)." % fail); sys.exit(1)
 if n_ok == 0:

@@ -76,11 +76,66 @@ JSON
 }
 tm_case "reg0006-an-older-compatible-closure-passes-a-broken-one-fails" none g_lock_closure
 
+# ── REG-0006 on the REAL path (no TM_LOCK_METADATA): v1.1.0's --check-set
+# compares the lock with pip's resolution; at the merge that resolution became
+# CONSTRAINED to the lock's own pins, so an older compatible lock resolves to
+# itself. A stand-in pip (its __path__ extended to the real pip, so
+# pip._vendor.packaging still imports) resolves to the constraints when given
+# them and to the NEWEST beta when not, records its argv, and reports the
+# declared dependencies the closure check then judges.
+g_lock_constrained_resolution() {
+    _tree tools/gen-requirements-lock.py tools/lib
+    printf 'Alpha==1.0\n' > "$FX/requirements.txt"
+    local h; h="$(printf '%064d' 1)"
+    _lock() { printf '%s\n' "$@" | sed "s/\$/ --hash=sha256:${h}/" > "$FX/requirements.lock"; }
+    local F="${TM_TMP}/fakepip" realpip
+    realpip="$(PYTHONDONTWRITEBYTECODE=1 "$PY" -c 'import os, pip; print(os.path.dirname(pip.__file__))' | tr -d '\r')"
+    [ -d "$realpip" ] || tm_die "no real pip to extend"
+    mkdir -p "$F/pip"
+    printf '__path__.append(%s)\n' "$("$PY" -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$realpip")" > "$F/pip/__init__.py"
+    cat > "$F/pip/__main__.py" <<'PY'
+import json, os, re, sys
+a = sys.argv
+open(os.environ["FAKE_ARGV"], "w").write(" ".join(a))
+if os.environ.get("FAKE_CONFLICT"):
+    sys.stderr.write("ERROR: Cannot install because these package versions have conflicting dependencies.\n"
+                     "ERROR: ResolutionImpossible: for help visit https://pip.pypa.io\n")
+    sys.exit(1)
+pins = {}
+if "-c" in a:
+    for line in open(a[a.index("-c") + 1]):
+        n, v = line.strip().split("==")
+        pins[n.lower()] = v
+pins.setdefault("alpha", "1.0")
+pins.setdefault("beta", "9.0")                 # unconstrained: the newest
+deps = {"alpha": ["beta>=2.0"]}
+json.dump({"install": [{"metadata": {"name": n, "version": v, "requires_dist": deps.get(n, [])}}
+                       for n, v in pins.items()]}, open(a[a.index("--report") + 1], "w"))
+PY
+    _gen() { _run env PYTHONPATH="$F" FAKE_ARGV="${TM_TMP}/argv" "$PY" "$FX/tools/gen-requirements-lock.py" --check-set --root "$(cygpath -m "$FX" 2>/dev/null || echo "$FX")"; }
+    _lock 'Alpha==1.0' 'beta==2.1'; _gen
+    tm_assert_rc 0 "$RC" "a valid OLDER closure was compared with an unconstrained (newest) resolution: ${OUT}"
+    grep -q 'covers the resolved set (2 packages)' <<<"$OUT" || _tm_afail "no verdict line the gate can read: ${OUT}"
+    grep -q ' -c ' "${TM_TMP}/argv" || _tm_afail "pip was not given the lock as constraints: $(cat "${TM_TMP}/argv")"
+    _lock 'Alpha==1.0'; _gen
+    tm_assert_rc 1 "$RC" "a lock missing beta passed the constrained resolution: ${OUT}"
+    grep -q 'MISSING from requirements.lock: beta==9.0 (resolved' <<<"$OUT" || _tm_afail "the resolver's missing package is not named: ${OUT}"
+    _lock 'Alpha==1.0' 'beta==1.5'; _gen
+    tm_assert_rc 1 "$RC" "a locked beta the resolution's own metadata refuses passed: ${OUT}"
+    grep -q 'INCOMPATIBLE: beta==1.5' <<<"$OUT" || _tm_afail "the closure did not judge the resolution's requires_dist: ${OUT}"
+    _lock 'Alpha==1.0' 'beta==2.1'; FAKE_CONFLICT=1 _gen
+    tm_assert_rc 1 "$RC" "pins pip cannot install together were not a FAILURE (exit 1): ${OUT}"
+    grep -q 'INCONSISTENT' <<<"$OUT" || _tm_afail "ResolutionImpossible was not reported as an inconsistent lock: ${OUT}"
+}
+tm_case "reg0006-the-resolution-is-held-to-the-locks-own-pins" none g_lock_constrained_resolution
+
 # ── REG-0007: exact ==<version> only
 g_lock_exact() {
     mkdir -p "${TM_TMP}/nobin"; printf '#!/bin/sh\nexit 7\n' > "${TM_TMP}/nobin/curl"; chmod +x "${TM_TMP}/nobin/curl"
     local bad
-    for bad in 'blinker==1.*' 'blinker==1.9.0,<2' 'blinker===1.9.0'; do
+    # 'latest' and 'v1.9.0': the PEP 440 shape (REG-0007), carried into the one
+    # parser (tools/lib/lockparse.py) at the v1.1.0 merge; its PIN_RE took both.
+    for bad in 'blinker==1.*' 'blinker==1.9.0,<2' 'blinker===1.9.0' 'blinker==latest' 'blinker==v1.9.0'; do
         rm -rf "${TM_TMP}/tree"; _tree tools/check-requirements-lock.sh tools/gen-requirements-lock.py tools/lib requirements.txt requirements.lock
         sed -i "s/^blinker==1\.9\.0 /${bad} /" "$FX/requirements.lock"
         grep -qF "${bad} " "$FX/requirements.lock" || tm_die "fixture did not apply ${bad}"
@@ -181,13 +236,13 @@ tm_case "reg0010-version-tokens-live-only-every-js-template-literals" none g_ver
 
 # ── REG-0011: SBOM gate reads indented lock lines, refuses duplicate rows
 g_sbom() {
-    _tree tools/check-sbom-consistency.sh requirements.txt requirements.lock SBOM.md NOTICES.md app/components/modals/AboutModal.js install/upgrade-full.sh
+    _tree tools/check-sbom-consistency.sh tools/lib requirements.txt requirements.lock SBOM.md NOTICES.md app/components/modals/AboutModal.js install/upgrade-full.sh
     _run bash "$FX/tools/check-sbom-consistency.sh"; tm_assert_rc 0 "$RC" "the copy is not green: ${OUT}"
     sed -i 's/^MarkupSafe==3\.0\.3 /    MarkupSafe==3.0.2 /' "$FX/requirements.lock"
     grep -q '^    MarkupSafe==3.0.2 ' "$FX/requirements.lock" || tm_die "fixture did not indent the entry"
     _run bash "$FX/tools/check-sbom-consistency.sh"
     [ "$RC" -ne 0 ] || _tm_afail "an INDENTED lock entry that disagrees with SBOM.md was not read: ${OUT}"
-    rm -rf "${TM_TMP}/tree"; _tree tools/check-sbom-consistency.sh requirements.txt requirements.lock SBOM.md NOTICES.md app/components/modals/AboutModal.js install/upgrade-full.sh
+    rm -rf "${TM_TMP}/tree"; _tree tools/check-sbom-consistency.sh tools/lib requirements.txt requirements.lock SBOM.md NOTICES.md app/components/modals/AboutModal.js install/upgrade-full.sh
     awk '{print} /^\| Flask +\| 3\.1\.3/ && !d {print "| Flask | 2.0.0 | BSD-3-Clause | x |"; d=1}' "$R/SBOM.md" > "$FX/SBOM.md"
     grep -q '^| Flask | 2.0.0' "$FX/SBOM.md" || tm_die "fixture did not add a duplicate row"
     _run bash "$FX/tools/check-sbom-consistency.sh"
@@ -199,7 +254,7 @@ tm_case "reg0011-sbom-indented-lock-lines-and-duplicate-rows" none g_sbom
 g_sbom_infra() {
     # v1.2.0: the About dialog's infrastructure rows and SBOM.md's are held to
     # each other (rsyslog, rsyslog-openssl and chrony joined both).
-    _tree tools/check-sbom-consistency.sh requirements.txt requirements.lock SBOM.md NOTICES.md app/components/modals/AboutModal.js install/upgrade-full.sh
+    _tree tools/check-sbom-consistency.sh tools/lib requirements.txt requirements.lock SBOM.md NOTICES.md app/components/modals/AboutModal.js install/upgrade-full.sh
     sed -i "s/{ name: 'chrony',          version: '4.5',/{ name: 'chrony',          version: '4.4',/" "$FX/app/components/modals/AboutModal.js"
     grep -q "'chrony',          version: '4.4'" "$FX/app/components/modals/AboutModal.js" || tm_die "fixture did not apply"
     _run bash "$FX/tools/check-sbom-consistency.sh"

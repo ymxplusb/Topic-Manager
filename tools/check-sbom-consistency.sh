@@ -28,10 +28,16 @@ PY="${PYTHON:-python3}"
 command -v "$PY" >/dev/null 2>&1 || PY=python
 command -v "$PY" >/dev/null 2>&1 || { echo "check-sbom-consistency: no python found" >&2; exit 3; }
 
-"$PY" - "$REPO_ROOT" <<'PYCHK'
+# requirements.lock is read by tools/lib/lockparse.py, pip's rules (round 12).
+LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+[[ -f "${LIB}/lockparse.py" ]] || { echo "check-sbom-consistency: ${LIB}/lockparse.py is missing" >&2; exit 3; }
+
+"$PY" - "$REPO_ROOT" "$(cygpath -m "$LIB" 2>/dev/null || printf '%s' "$LIB")" <<'PYCHK'
 import io, os, re, sys
 
 root = sys.argv[1]
+sys.path.insert(0, sys.argv[2])
+import lockparse
 
 def read(rel):
     p = os.path.join(root, rel)
@@ -181,18 +187,34 @@ compare("SBOM.md", "SBOM.md", found)
 # the SBOM could say anything. requirements.lock is their source of truth:
 # every package it carries that requirements.txt does not must be VISIBLE in
 # SBOM.md at the locked version.
-def norm(n):
-    return re.sub(r"[-_.]+", "-", n).lower()
-lock_src = read("requirements.lock")
-if lock_src is None:
+# Round 12 (gatekeeper B2): the entries and versions are the ones PIP reads,
+# from tools/lib/lockparse.py — never a column-0 regex of this gate's own.
+# That regex kept a byte-order mark glued to the first entry (N03: blinker
+# unseen, its SBOM row free to say anything) and read "pyasn1==0.6\" as 0.6
+# when pip joins the continuation to 0.6.4 (N04). A lock the parser refuses
+# (not plain ASCII, a BOM, a coding line, any parse error) is a failure here.
+norm = lockparse.norm
+locked = None
+if not os.path.isfile(os.path.join(root, "requirements.lock")):
     print("FAIL: requirements.lock not found — the transitive SBOM rows have no source of truth")
     failures += 1
 else:
-    # REG-0011: read the lock the way pip does — continuation lines joined,
-    # indentation and a missing final newline tolerated. `^name==` at column 0
-    # dropped an indented entry from this check.
-    lock_text = re.sub(r"\\\n", " ", lock_src.replace("\r\n", "\n"))
-    locked = {norm(n): v for n, v in re.findall(r"^[ \t]*([A-Za-z0-9._-]+)==([^\s\\;,]+)", lock_text, re.M)}
+    try:
+        entries, lerrs = lockparse.parse(lockparse.read(os.path.join(root, "requirements.lock")))
+    except lockparse.LockEncodingError as e:
+        entries, lerrs = [], e.problems
+    except OSError as e:
+        entries, lerrs = [], ["requirements.lock cannot be read: %s" % e]
+    if lerrs:
+        print("FAIL: requirements.lock does not parse as pip reads it — the transitive rows cannot be checked:")
+        for e in lerrs:
+            print("    %s" % e)
+        failures += len(lerrs)
+    else:
+        # The parser's entries themselves, so the count is the parser's by
+        # construction (it refuses a duplicate, so no entry is merged away).
+        locked = {e["key"]: e["version"] for e in entries}
+if locked is not None:
     direct = {norm(n) for n in truth}
     trans = {n: v for n, v in locked.items() if n not in direct}
     if not trans:
