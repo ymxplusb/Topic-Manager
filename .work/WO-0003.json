@@ -4,7 +4,7 @@
   "project": "Topic Manager",
   "release": "minor",
   "opened": "2026-09-26",
-  "status": "assuring",
+  "status": "done",
   "scout": {
     "method": "grep across naming variants (colour literals via a Python regex scanner over main.css with token blocks :11-55 excluded; env ties via case-insensitive multi-pattern grep over the tree minus .git/.work/.claude/SonarQube reports); python ast for the README audit-action set; read-through of SettingsTab.js, TopBar.js, main.js theme sites, tm/routes.py settings + restart, tm/service_control.py, tm/config.py, tm/models.py, tm/app.py, tm/auth.py, tm/kafka_client.py, polkit rule, both systemd units, nginx site + snippet, upgrade-full.sh baseline/backup/restore blocks, cortex-prod SettingsTab rail + main.css. Latest versions measured live from pypi JSON and registry.npmjs.org 2026-09-26; OSV queried for the two moving pins. No JS language server: the inline-style colour sweep is grep-only (INCOMPLETE for colours composed at runtime).",
     "blast_radius": "product",
@@ -943,6 +943,12 @@
       "meaning": "passed",
       "verdict": "Prod .90 upgraded 1.0.6 -> 1.1.1 2026-09-28 (online, read-only deploy key, tag v1.1.1 @ 89f8c53), run by Claude on James's instruction. audit exit 1 (2 expected warnings) -> snapshot pre-v1.1.1-upgrade-20260928 -> backup-only exit 0 (/var/backups/topic-manager/20260928-214932, 48-record baseline) -> full upgrade exit 0, phases 1-12. Host verified: /api/version + /api/health 1.1.1 ok; TLS1.0/1.1 refused, 1.2 ok; HSTS/CSP/nosniff/referrer headers; 14 assets ?v=1101 all 200; topic-manager + nginx active; tm.db 0600, data/ 0700. OPEN: script says a REBOOT is needed for patched kernel/libs (not done); LDAPS sign-in VERIFIED by James 2026-09-28 (logged in, UI looks right, Settings not changed). No outward GitHub publish in this project's contract.",
       "at": "2026-09-28T21:52:45Z"
+    },
+    "wrap": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "WO-0003 done: v1.1.1 live on prod .90 (v1.1.0 tag unpublished, Sonar). OpenProject #110 Closed with evidence. Lessons approved: redact-by-structure, libressl-protocol-line, audit-exit semantics (topic-manager-vm); CI-only-gate lesson rejected by James. Session file session-2026-09-28d, index line in both copies, claude repo cae9429 pushed. Open follow-ups go to v1.2.0 (WO-0004).",
+      "at": "2026-09-28T22:12:11Z"
     }
   }
 }
