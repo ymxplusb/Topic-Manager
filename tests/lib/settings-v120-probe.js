@@ -275,7 +275,7 @@ async function main() {
         assert.equal(inst.statusGlyph('ok'), '✓');
         S.beforeUnmount.call(inst);
     } else if (scenario === 'tls') {
-        for (const failure of [null, 'no-chain', 'invalid_cert', 'audit_unavailable', 'network', 'pem', 'unknown']) {
+        for (const failure of [null, 'no-chain', 'invalid_cert', 'audit_unavailable', 'network', 'pem', 'unknown', 'proto']) {
             const inst = await ready();
             let resets = 0;
             const canary = 'PRIVATE_CANARY_92817';
@@ -285,7 +285,7 @@ async function main() {
             handler = (url, options) => {
                 if (options.method === 'POST') {
                     if (failure === 'network') throw new Error(pem);
-                    if (failure && failure !== 'no-chain') return json({ error: failure === 'audit_unavailable' ? failure : 'invalid_cert', reason: failure === 'invalid_cert' ? 'key_mismatch' : failure === 'pem' ? pem : failure === 'unknown' ? 'UNTRUSTED error text' : '' }, failure === 'audit_unavailable' ? 503 : 400);
+                    if (failure && failure !== 'no-chain') return json({ error: failure === 'audit_unavailable' ? failure : 'invalid_cert', reason: failure === 'invalid_cert' ? 'key_mismatch' : failure === 'pem' ? pem : failure === 'unknown' ? 'UNTRUSTED error text' : failure === 'proto' ? 'constructor' : '' }, failure === 'audit_unavailable' ? 503 : 400);
                     return json({ state: 'queued', domain: 'tls', job: 'cert1' }, 202);
                 }
                 return json(url === '/api/system/tls' ? tls : { state: 'ok', message: 'Certificate installed', details: ['Verified'] });
@@ -307,7 +307,8 @@ async function main() {
             assert.ok(!JSON.stringify(inst).includes(canary), 'PEM canary must be absent from all component state');
             assert.deepEqual(Object.keys(uploadBodies.at(-1).fields), [], 'release multipart file references after submit');
             assert.ok(!inst.applyJobs.tls.message.includes('UNTRUSTED'));
-            if (failure === 'pem' || failure === 'unknown') assert.equal(inst.applyJobs.tls.message, 'Certificate upload failed. Check the certificate and key, then try again.');
+            // 'proto': a reason that names an Object.prototype member is not a known reason (S6653 lookup).
+            if (failure === 'pem' || failure === 'unknown' || failure === 'proto') assert.equal(inst.applyJobs.tls.message, 'Certificate upload failed. Check the certificate and key, then try again.');
         }
         // Every domain filters hostile status message/details before storing them.
         for (const domain of ['syslog', 'time', 'nginx', 'tls']) {
@@ -434,7 +435,7 @@ async function main() {
             assert.ok(!csv.includes('9999') && !csv.includes('live.example.org'));
         }
     } else throw new Error('Unknown scenario: ' + scenario);
-    const expected = { bindings: 93, validation: 269, errors: 14, apply: 45, timeout: 13, panels: 27, tls: 92, ppsm: 28, integration: 83 };
+    const expected = { bindings: 93, validation: 269, errors: 14, apply: 45, timeout: 13, panels: 27, tls: 103, ppsm: 28, integration: 83 };
     rawAssert.equal(assertions, expected[scenario], 'complete the exact scenario assertion count');
     console.log('ALL ' + assertions + ' ASSERTIONS PASSED');
 }

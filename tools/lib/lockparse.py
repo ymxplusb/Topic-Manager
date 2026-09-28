@@ -194,27 +194,40 @@ def parse(text):
             errors.append("requirements.lock: not an exact ==<version> pin (PEP 440 release): %s" % line[:80])
             continue
         key = norm(name)
-        hashes, bad, other = [], [], []
-        for tok in opts.split():
-            h = HASH_RE.match(tok)
-            if not h:
-                other.append(tok)
-            elif HEX64_RE.match(h.group(1)):
-                hashes.append(h.group(1))
-            else:
-                bad.append(h.group(1))
+        hashes, bad, other = _options(opts)
         if key in seen:
             errors.append("%s appears twice in requirements.lock" % key)
         seen.add(key)
-        if other:
-            errors.append("%s==%s has an option that is not --hash=sha256:...: %s" % (key, ver, other[0][:40]))
-        if not hashes and not bad:
-            errors.append("%s==%s has no --hash" % (key, ver))
-        if bad:
-            errors.append("%s has a malformed hash: %s" % (key, bad[0][:20]))
+        errors.extend(_option_errors(key, ver, hashes, bad, other))
         entries.append({"name": name, "key": key, "version": ver,
                         "hashes": hashes + bad, "line": no})
     return entries, errors
+
+
+def _options(opts):
+    """(well-formed sha256 hashes, malformed hash values, other options)."""
+    hashes, bad, other = [], [], []
+    for tok in opts.split():
+        h = HASH_RE.match(tok)
+        if not h:
+            other.append(tok)
+        elif HEX64_RE.match(h.group(1)):
+            hashes.append(h.group(1))
+        else:
+            bad.append(h.group(1))
+    return hashes, bad, other
+
+
+def _option_errors(key, ver, hashes, bad, other):
+    """What one entry's options make of it, in the order they are reported."""
+    errors = []
+    if other:
+        errors.append("%s==%s has an option that is not --hash=sha256:...: %s" % (key, ver, other[0][:40]))
+    if not hashes and not bad:
+        errors.append("%s==%s has no --hash" % (key, ver))
+    if bad:
+        errors.append("%s has a malformed hash: %s" % (key, bad[0][:20]))
+    return errors
 
 
 def layout_problems(text):

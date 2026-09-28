@@ -38,47 +38,69 @@ def substitutions(text):
     out, i, n = [], 0, len(text)
     while i < n:
         c = text[i]
-        if c == "'" :
+        if c == "'":
             # single quotes: nothing inside is special (only at top level of
             # the line; inside "$(...)" the scan below handles its own quotes)
-            j = text.find("'", i + 1)
-            i = n if j < 0 else j + 1
-            continue
-        if c == '\\':
+            i = _past(text, "'", i + 1)
+        elif c == '\\':
             i += 2
-            continue
-        if text.startswith('$(', i) and not text.startswith('$((', i):
-            depth, j, q = 1, i + 2, None
-            while j < n and depth:
-                ch = text[j]
-                if q:
-                    if ch == q:
-                        q = None
-                    elif ch == '\\' and q == '"':
-                        j += 1
-                elif ch in ('"', "'"):
-                    q = ch
-                elif ch == '\\':
-                    j += 1
-                elif text.startswith('$(', j):
-                    depth += 1
-                    j += 1
-                elif ch == ')':
-                    depth -= 1
-                j += 1
-            body = text[i + 2:j - 1 if depth == 0 else j]
+        elif text.startswith('$(', i) and not text.startswith('$((', i):
+            body, i = _dollar_paren(text, i)
             out.append(body)
             out.extend(substitutions(body))
-            i = j
-            continue
-        if c == '`':
-            j = text.find('`', i + 1)
-            body = text[i + 1:n if j < 0 else j]
+        elif c == '`':
+            body, i = _backtick(text, i)
             out.append(body)
-            i = n if j < 0 else j + 1
-            continue
-        i += 1
+        else:
+            i += 1
     return out
+
+
+def _backtick(text, i):
+    """(body, index after it) of the `...` starting at i; unclosed runs to
+    the end."""
+    j = text.find('`', i + 1)
+    if j < 0:
+        return text[i + 1:], len(text)
+    return text[i + 1:j], j + 1
+
+
+def _past(text, ch, start):
+    """The index just after the next `ch` from start, or len(text) when
+    there is none (an unclosed quote runs to the end)."""
+    j = text.find(ch, start)
+    return len(text) if j < 0 else j + 1
+
+
+def _dollar_paren(text, i):
+    """(body, index after it) of the $( starting at i: nested $( counted,
+    quotes and backslashes respected; unclosed runs to the end."""
+    n = len(text)
+    depth, j, q = 1, i + 2, None
+    while j < n and depth:
+        ch = text[j]
+        if q:
+            j += _in_quote_step(ch, q)
+            if ch == q:
+                q = None
+            continue
+        if ch in ('"', "'"):
+            q = ch
+        elif ch == '\\':
+            j += 1
+        elif text.startswith('$(', j):
+            depth += 1
+            j += 1
+        elif ch == ')':
+            depth -= 1
+        j += 1
+    return text[i + 2:j - 1 if depth == 0 else j], j
+
+
+def _in_quote_step(ch, q):
+    """How far one character inside quote q moves the scan: a backslash in
+    double quotes escapes the next character."""
+    return 2 if ch == '\\' and q == '"' else 1
 
 
 def tokens(text):
@@ -113,36 +135,48 @@ def program(cmd):
 
 def early_exit(name, args):
     if name in GREP:
-        for a in args:
-            if a == '--':
-                break
-            if a.startswith('--'):
-                if a.split('=', 1)[0] in GREP_LONG:
-                    return True
-            elif a.startswith('-') and len(a) > 1 and re.match(r'^-[A-Za-z]*[qmlL]', a):
-                return True
-        return False
+        return _grep_stops_early(args)
     if name == 'head':
         return True
     if name == 'awk' or name in ('gawk', 'mawk', 'nawk'):
         return any(AWK_EXIT.search(a) for a in args if not a.startswith('-'))
     if name == 'sed':
-        scripts, i = [], 0
-        while i < len(args):
-            a = args[i]
-            if a in ('-e', '--expression'):
-                if i + 1 < len(args):
-                    scripts.append(args[i + 1])
-                i += 2; continue
-            if a.startswith('-e') and len(a) > 2:
-                scripts.append(a[2:])
-            elif not a.startswith('-'):
-                if not scripts:
-                    scripts.append(a)          # the first operand is the script
-                break
-            i += 1
-        return any(SED_QUIT.search(s) for s in scripts)
+        return any(SED_QUIT.search(s) for s in _sed_scripts(args))
     return False
+
+
+def _grep_stops_early(args):
+    """-q/-m/-l/-L (bundled or not) or their long forms, before any `--`."""
+    for a in args:
+        if a == '--':
+            return False
+        if a.startswith('--'):
+            if a.split('=', 1)[0] in GREP_LONG:
+                return True
+        elif a.startswith('-') and len(a) > 1 and re.match(r'^-[A-Za-z]*[qmlL]', a):
+            return True
+    return False
+
+
+def _sed_scripts(args):
+    """Every sed script in args: each -e/--expression value, or else the first
+    operand."""
+    scripts, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a in ('-e', '--expression'):
+            if i + 1 < len(args):
+                scripts.append(args[i + 1])
+            i += 2
+            continue
+        if a.startswith('-e') and len(a) > 2:
+            scripts.append(a[2:])
+        elif not a.startswith('-'):
+            if not scripts:
+                scripts.append(a)          # the first operand is the script
+            break
+        i += 1
+    return scripts
 
 
 def check_command_line(text):
@@ -150,25 +184,31 @@ def check_command_line(text):
     toks = tokens(text)
     if toks is None:
         return False
+    for words, piped in _commands(toks):
+        if not piped:
+            continue
+        name, args = program([w for w in words if w != '__redir__'])
+        if name and early_exit(name, args):
+            return True
+    return False
+
+
+def _commands(toks):
+    """[(words, reached through a pipe)] for each simple command in toks."""
     cmds, cur, after_pipe = [], [], False
     for t in toks:
         if t in ('|', '|&'):
-            cmds.append((cur, after_pipe)); cur, after_pipe = [], True
-        elif t and set(t) <= set('|&;()<>') :
-            cmds.append((cur, after_pipe)); cur, after_pipe = [], False
+            cmds.append((cur, after_pipe))
+            cur, after_pipe = [], True
+        elif t and set(t) <= set('|&;()<>'):
+            cmds.append((cur, after_pipe))
+            cur, after_pipe = [], False
             if t in ('<', '>', '<<', '>>', '<<<', '>&', '<&', '&>'):
                 cur = ['__redir__']            # the next word is a file, not a command
         else:
             cur.append(t)
     cmds.append((cur, after_pipe))
-    for words, piped in cmds:
-        if not piped:
-            continue
-        words = [w for w in words if w != '__redir__']
-        name, args = program(words)
-        if name and early_exit(name, args):
-            return True
-    return False
+    return cmds
 
 
 def logical_lines(src):

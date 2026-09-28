@@ -39,6 +39,7 @@ log = logging.getLogger(__name__)
 LAST_PRUNE_KEY = 'audit_last_prune'
 WARNED_KEY = 'audit_capacity_warned'
 SYSTEM_USER = 'system'
+_OLDEST_SQL = 'SELECT MIN(ts) FROM audit_log'
 
 
 def _now():
@@ -83,7 +84,7 @@ def prune(cfg, now=None):
             (s['audit_max_rows'] - 2,)).rowcount
         record = None
         if by_age or by_rows:
-            oldest = db.execute('SELECT MIN(ts) FROM audit_log').fetchone()[0]
+            oldest = db.execute(_OLDEST_SQL).fetchone()[0]
             reasons = []
             if by_age:
                 reasons.append('%d older than %d days (before %s UTC)'
@@ -105,7 +106,7 @@ def prune(cfg, now=None):
         remaining = None
         try:
             remaining = db.execute('SELECT COUNT(*) FROM audit_log').fetchone()[0]
-            oldest = db.execute('SELECT MIN(ts) FROM audit_log').fetchone()[0]
+            oldest = db.execute(_OLDEST_SQL).fetchone()[0]
         except Exception:
             oldest = None
         db.close()
@@ -151,7 +152,7 @@ def capacity(cfg, record_crossing=True):
     try:
         s = _settings(db)
         rows = db.execute('SELECT COUNT(*) FROM audit_log').fetchone()[0]
-        oldest = db.execute('SELECT MIN(ts) FROM audit_log').fetchone()[0]
+        oldest = db.execute(_OLDEST_SQL).fetchone()[0]
         last_prune = _last_prune(db)
     finally:
         db.close()

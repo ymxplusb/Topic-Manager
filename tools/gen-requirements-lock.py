@@ -190,12 +190,7 @@ def check_closure(locked, deps):
     release branch) was reported as incomplete. deps(name, version) returns
     the declared requirement strings, or None when there is nothing to judge.
     Returns the list of problems."""
-    wanted_extras = {}
-    for line in open(REQ, encoding='utf-8'):
-        m = re.match(r'^\s*([A-Za-z0-9._-]+)\s*(?:\[([^\]]*)\])?', line.split('#', 1)[0])
-        if m:
-            wanted_extras.setdefault(lockparse.norm(m.group(1)), set()).update(
-                x.strip() for x in (m.group(2) or '').split(',') if x.strip())
+    wanted_extras = _requested_extras()
     problems = []
     for name, version in sorted(locked.items()):
         specs = deps(name, version)
@@ -205,18 +200,44 @@ def check_closure(locked, deps):
         extras = wanted_extras.get(name, set()) | {''}
         for spec in specs:
             r = Requirement(spec)
-            if r.marker is not None and not any(
-                    r.marker.evaluate(dict(TARGET_ENV, extra=e)) for e in extras):
+            if not _applies_to_target(r, extras):
                 continue
             dep = lockparse.norm(r.name)
-            if dep not in locked:
-                problems.append('MISSING from requirements.lock: %s (%s==%s requires %s)'
-                                % (dep, name, version, spec))
-            elif r.specifier and not r.specifier.contains(Version(locked[dep]), prereleases=True):
-                problems.append('INCOMPATIBLE: %s==%s is locked, but %s==%s requires %s'
-                                % (dep, locked[dep], name, version, spec))
+            problem = _closure_problem(r, dep, locked, Version, '%s==%s' % (name, version), spec)
+            if problem:
+                problems.append(problem)
             wanted_extras.setdefault(dep, set()).update(r.extras)
     return problems
+
+
+def _requested_extras():
+    """{normalised name: extras} as requirements.txt asks for them; the
+    closure walk adds the extras each dependency is required with."""
+    wanted_extras = {}
+    for line in open(REQ, encoding='utf-8'):
+        m = re.match(r'^\s*([A-Za-z0-9._-]+)\s*(?:\[([^\]]*)\])?', line.split('#', 1)[0])
+        if m:
+            wanted_extras.setdefault(lockparse.norm(m.group(1)), set()).update(
+                x.strip() for x in (m.group(2) or '').split(',') if x.strip())
+    return wanted_extras
+
+
+def _applies_to_target(r, extras):
+    """A requirement with no marker always applies; one with a marker applies
+    when it holds on the TARGET for any extra the package is installed with."""
+    return r.marker is None or any(
+        r.marker.evaluate(dict(TARGET_ENV, extra=e)) for e in extras)
+
+
+def _closure_problem(r, dep, locked, Version, requirer, spec):
+    """The problem one applicable requirement makes of the lock, or None."""
+    if dep not in locked:
+        return ('MISSING from requirements.lock: %s (%s requires %s)'
+                % (dep, requirer, spec))
+    if r.specifier and not r.specifier.contains(Version(locked[dep]), prereleases=True):
+        return ('INCOMPATIBLE: %s==%s is locked, but %s requires %s'
+                % (dep, locked[dep], requirer, spec))
+    return None
 
 
 def check_set():

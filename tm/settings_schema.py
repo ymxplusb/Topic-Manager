@@ -125,54 +125,80 @@ def normalise(key, value):
     if key not in ADMIN_KEYS:
         raise InvalidSetting(key, 'not an administrator setting')
     text = _as_text(key, value)
+    validator = _validator(key)
+    if validator is None:
+        raise InvalidSetting(key, 'no validator')      # unreachable: every key has one
+    return validator(key, text)
 
+
+def _validator(key):
+    """The one validator for an admin key, or None (refused, never stored
+    unchecked)."""
     if key in _BOOL_KEYS:
-        if text.lower() not in ('true', 'false'):
-            raise InvalidSetting(key, 'must be "true" or "false"')
-        return text.lower()
-
+        return _norm_bool
     if key in _INT_RANGES:
-        lo, hi = _INT_RANGES[key]
-        if not _INT_RE.match(text):
-            raise InvalidSetting(key, 'must be a whole number from %d to %d' % (lo, hi))
-        n = int(text)
-        if not lo <= n <= hi:
-            raise InvalidSetting(key, 'must be from %d to %d' % (lo, hi))
-        return str(n)
+        return _norm_int
+    return _KEY_VALIDATORS.get(key)
 
-    if key == 'syslog_protocol':
-        if text.lower() not in SYSLOG_PROTOCOLS:
-            raise InvalidSetting(key, 'must be one of udp, tcp, tls')
-        return text.lower()
 
-    if key == 'syslog_app_id':
-        if not _APP_ID_RE.match(text):
-            raise InvalidSetting(key, '1-48 characters from A-Z a-z 0-9 . _ -')
-        return text
+def _norm_bool(key, text):
+    if text.lower() not in ('true', 'false'):
+        raise InvalidSetting(key, 'must be "true" or "false"')
+    return text.lower()
 
-    if key == 'syslog_host':
-        if text == '':
-            return ''
-        if not valid_host(text):
-            raise InvalidSetting(key, 'must be a host name (A-Z a-z 0-9 . -, '
-                                      'up to 253 characters) or an IP address')
-        return text
 
-    if key == 'ntp_servers':
-        if text == '':
-            return ''
-        servers = [s.strip() for s in text.split(',')]
-        if len(servers) > MAX_NTP_SERVERS:
-            raise InvalidSetting(key, 'at most %d servers' % MAX_NTP_SERVERS)
-        for s in servers:
-            if not valid_host(s):
-                raise InvalidSetting(key, '%r is not a host name or IP address'
-                                     % s[:64])
-        if len(set(s.lower() for s in servers)) != len(servers):
-            raise InvalidSetting(key, 'a server is listed twice')
-        return ','.join(servers)
+def _norm_int(key, text):
+    lo, hi = _INT_RANGES[key]
+    if not _INT_RE.match(text):
+        raise InvalidSetting(key, 'must be a whole number from %d to %d' % (lo, hi))
+    n = int(text)
+    if not lo <= n <= hi:
+        raise InvalidSetting(key, 'must be from %d to %d' % (lo, hi))
+    return str(n)
 
-    raise InvalidSetting(key, 'no validator')      # unreachable: every key has one
+
+def _norm_protocol(key, text):
+    if text.lower() not in SYSLOG_PROTOCOLS:
+        raise InvalidSetting(key, 'must be one of udp, tcp, tls')
+    return text.lower()
+
+
+def _norm_app_id(key, text):
+    if not _APP_ID_RE.match(text):
+        raise InvalidSetting(key, '1-48 characters from A-Z a-z 0-9 . _ -')
+    return text
+
+
+def _norm_host(key, text):
+    if text == '':
+        return ''
+    if not valid_host(text):
+        raise InvalidSetting(key, 'must be a host name (A-Z a-z 0-9 . -, '
+                                  'up to 253 characters) or an IP address')
+    return text
+
+
+def _norm_ntp(key, text):
+    if text == '':
+        return ''
+    servers = [s.strip() for s in text.split(',')]
+    if len(servers) > MAX_NTP_SERVERS:
+        raise InvalidSetting(key, 'at most %d servers' % MAX_NTP_SERVERS)
+    for s in servers:
+        if not valid_host(s):
+            raise InvalidSetting(key, '%r is not a host name or IP address'
+                                 % s[:64])
+    if len(set(s.lower() for s in servers)) != len(servers):
+        raise InvalidSetting(key, 'a server is listed twice')
+    return ','.join(servers)
+
+
+_KEY_VALIDATORS = {
+    'syslog_protocol': _norm_protocol,
+    'syslog_app_id':   _norm_app_id,
+    'syslog_host':     _norm_host,
+    'ntp_servers':     _norm_ntp,
+}
 
 
 def int_setting(values, key):

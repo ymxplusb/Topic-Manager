@@ -153,8 +153,22 @@ def _cert_info(pem, what):
 def validate(cert_pem, key_pem, chain_pem=None, now=None):
     """Validate an upload. Returns a dict describing the certificate:
     {subject, issuer, not_after, key_type, sans, chain_count, warnings};
-    raises CertInvalid with the reason otherwise."""
+    raises CertInvalid with the reason otherwise. The checks run in a fixed
+    order, so one upload always gets the same (first) reason."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
+    certs = _checked_upload(cert_pem, key_pem, chain_pem)
+    leaf = _cert_info(certs[0], 'the certificate')
+    not_after = _checked_leaf(leaf, now)
+    _check_key_matches(key_pem, leaf)
+    chain, warnings = _checked_chain(chain_pem, certs[0], leaf)
+    return {'subject': leaf.get('subject', ''), 'issuer': leaf.get('issuer', ''),
+            'not_after': not_after.isoformat(), 'key_type': leaf['key_type'],
+            'sans': leaf['sans'], 'chain_count': len(chain), 'warnings': warnings}
+
+
+def _checked_upload(cert_pem, key_pem, chain_pem):
+    """Size and shape, before openssl sees a byte: returns the one leaf
+    certificate's PEM in a list."""
     for label, blob in (('certificate', cert_pem), ('private key', key_pem),
                         ('chain', chain_pem or b'')):
         if len(blob) > MAX_PEM_BYTES:
@@ -171,8 +185,11 @@ def validate(cert_pem, key_pem, chain_pem=None, now=None):
                           '(it is stored root-only, 0600)')
     if sum(key_pem.count(h) for h in _KEY_HEADERS) != 1:
         raise CertInvalid('the key field must hold exactly one unencrypted PEM private key')
+    return certs
 
-    leaf = _cert_info(certs[0], 'the certificate')
+
+def _checked_leaf(leaf, now):
+    """Key type, signature and validity of the leaf; returns its notAfter."""
     if leaf['key_type'] not in ACCEPTED_KEY_TYPES:
         raise CertInvalid('unsupported key type: %s (accepted: %s)'
                           % (_safe_word(leaf['key_type']), ', '.join(ACCEPTED_KEY_TYPES)))
@@ -187,7 +204,11 @@ def validate(cert_pem, key_pem, chain_pem=None, now=None):
         raise CertInvalid('the certificate expired on %s' % not_after.isoformat())
     if not_before > now:
         raise CertInvalid('the certificate is not valid until %s' % not_before.isoformat())
+    return not_after
 
+
+def _check_key_matches(key_pem, leaf):
+    """The private key reads, and its public half is the certificate's."""
     with _Mem(key_pem, 'key') as k:
         rc, keypub, _ = _openssl(['pkey', '-pubout', '-passin', 'pass:', '-in', k.path], [k.fd])
     if rc != 0 or '-----BEGIN PUBLIC KEY-----' not in keypub:
@@ -196,6 +217,11 @@ def validate(cert_pem, key_pem, chain_pem=None, now=None):
     if '-----BEGIN PUBLIC KEY-----' not in leaf['pubkey'] or keypub.strip() != leaf['pubkey'].strip():
         raise CertInvalid('the private key does not match the certificate')
 
+
+def _checked_chain(chain_pem, leaf_pem, leaf):
+    """(chain certificates, warnings): every chain signature strong enough and
+    the leaf verified against the chain for TLS server use, or a warning that
+    there is no chain."""
     warnings = []
     chain = split_certs(chain_pem) if chain_pem else []
     if chain_pem and chain_pem.strip() and not chain:
@@ -209,7 +235,7 @@ def validate(cert_pem, key_pem, chain_pem=None, now=None):
                                                           'an unknown algorithm'))
     if chain:
         bundle = b''.join(chain)
-        with _Mem(bundle, 'chain') as ch, _Mem(certs[0], 'leaf') as lf:
+        with _Mem(bundle, 'chain') as ch, _Mem(leaf_pem, 'leaf') as lf:
             rc, out, err = _openssl(['verify', '-partial_chain', '-purpose', 'sslserver',
                                      '-CAfile', ch.path, '-untrusted', ch.path, lf.path],
                                     [ch.fd, lf.fd])
@@ -223,10 +249,7 @@ def validate(cert_pem, key_pem, chain_pem=None, now=None):
         warnings.append('no chain was supplied; clients must already trust the issuer')
     else:
         warnings.append('the certificate is self-signed')
-
-    return {'subject': leaf.get('subject', ''), 'issuer': leaf.get('issuer', ''),
-            'not_after': not_after.isoformat(), 'key_type': leaf['key_type'],
-            'sans': leaf['sans'], 'chain_count': len(chain), 'warnings': warnings}
+    return chain, warnings
 
 
 def describe_installed(fullchain_pem):

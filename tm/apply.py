@@ -57,6 +57,10 @@ STALE_AFTER_S = 120
 RESULT_DIR_DEFAULT = '/run/topic-manager-apply'
 STAGE_MAX_BYTES = 16 * 1024
 
+#: The two app_settings statements this module repeats, defined once.
+_SELECT_SETTING = 'SELECT value FROM app_settings WHERE key = ?'
+_UPSERT_SETTING = 'INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)'
+
 
 def stage_dir(cfg):
     db_path = cfg.get('audit', {}).get('db_path', '/opt/topic-manager/data/tm.db')
@@ -69,6 +73,11 @@ def result_dir():
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _stage_name(domain, suffix):
+    """<domain>.<suffix>: the one naming rule for every staging file."""
+    return '%s.%s' % (domain, suffix)
 
 
 def _ensure_stage_dir(cfg):
@@ -140,13 +149,13 @@ def write_stage(cfg, domain, settings, user, files=None):
            'requested_at': _now().isoformat(), 'settings': dict(settings or {}),
            'files': {}}
     for suffix, blob in sorted((files or {}).items()):
-        _write_private(d, '%s.%s' % (domain, suffix), blob)
+        _write_private(d, _stage_name(domain, suffix), blob)
         doc['files'][suffix] = hashlib.sha256(blob).hexdigest()
-    _write_private(d, '%s.json' % domain, json.dumps(doc, sort_keys=True).encode('utf-8'))
+    _write_private(d, _stage_name(domain, 'json'), json.dumps(doc, sort_keys=True).encode('utf-8'))
     # The app's own record of the latest request: the helper deletes the
     # staging files once it has read them, and the status needs to know which
     # job to wait for.
-    _write_private(d, '%s.last' % domain, json.dumps(
+    _write_private(d, _stage_name(domain, 'last'), json.dumps(
         {'job': job, 'requested_at': doc['requested_at'],
          'requested_by': doc['requested_by']}).encode('utf-8'))
     return job
@@ -158,7 +167,7 @@ def discard_stage(cfg, domain):
     d = stage_dir(cfg)
     for suffix in ('json', 'crt', 'key', 'chain', 'last'):
         try:
-            os.unlink(os.path.join(d, '%s.%s' % (domain, suffix)))
+            os.unlink(os.path.join(d, _stage_name(domain, suffix)))
         except FileNotFoundError:
             pass
 
@@ -182,7 +191,7 @@ _FINAL_KEY = 'apply_final_%s'
 def _final(cfg, domain):
     db = get_db(cfg)
     try:
-        row = db.execute('SELECT value FROM app_settings WHERE key = ?',
+        row = db.execute(_SELECT_SETTING,
                          (_FINAL_KEY % domain,)).fetchone()
     finally:
         db.close()
@@ -212,7 +221,7 @@ def claim_slot(cfg, domain, now=None):
         db.commit()
         if claimed:
             return True, 0.0
-        row = db.execute('SELECT value FROM app_settings WHERE key = ?', (key,)).fetchone()
+        row = db.execute(_SELECT_SETTING, (key,)).fetchone()
     finally:
         db.close()
     try:
@@ -229,17 +238,17 @@ def record_start_failure(cfg, domain, job, detail):
     at once instead of after STALE_AFTER_S."""
     d = stage_dir(cfg)
     try:
-        os.unlink(os.path.join(d, '%s.json' % domain))
+        os.unlink(os.path.join(d, _stage_name(domain, 'json')))
     except FileNotFoundError:
         pass
     for suffix in ('crt', 'key', 'chain'):
         try:
-            os.unlink(os.path.join(d, '%s.%s' % (domain, suffix)))
+            os.unlink(os.path.join(d, _stage_name(domain, suffix)))
         except FileNotFoundError:
             pass
-    last = _read_json(os.path.join(d, '%s.last' % domain)) or {'job': job}
+    last = _read_json(os.path.join(d, _stage_name(domain, 'last'))) or {'job': job}
     last['start_error'] = str(detail)[:500]
-    _write_private(d, '%s.last' % domain, json.dumps(last).encode('utf-8'))
+    _write_private(d, _stage_name(domain, 'last'), json.dumps(last).encode('utf-8'))
 
 
 def applied(cfg, domain):
@@ -250,7 +259,7 @@ def applied(cfg, domain):
     result file lives on /run and does not survive a reboot."""
     db = get_db(cfg)
     try:
-        row = db.execute('SELECT value FROM app_settings WHERE key = ?',
+        row = db.execute(_SELECT_SETTING,
                          (_APPLIED_KEY % domain,)).fetchone()
     finally:
         db.close()
@@ -266,28 +275,43 @@ def applied(cfg, domain):
 
 def status(cfg, domain):
     """The GET /api/system/apply/<domain> document."""
-    last = _read_json(os.path.join(stage_dir(cfg), '%s.last' % domain))
+    last = _read_json(os.path.join(stage_dir(cfg), _stage_name(domain, 'last')))
     res = read_result(domain)
     values, at = applied(cfg, domain)
     doc = {'domain': domain, 'state': 'idle', 'finished_at': None,
            'message': '', 'details': [], 'applied': values, 'applied_at': at}
-    # A result with NO job is the helper refusing a staging file it would not
-    # read (a symlink, a wrong owner, bad JSON): it could not learn the job id,
-    # so it is matched by time — a refusal written after this request was made
-    # is this request's answer.
-    refused_after = (res and res.get('job') is None and last and res.get('finished_at')
-                     and _parse_iso(res.get('finished_at')) and _parse_iso(last.get('requested_at'))
-                     and _parse_iso(res['finished_at']) >= _parse_iso(last['requested_at']))
-    if res and (not last or res.get('job') == last.get('job') or refused_after):
-        state = res.get('state') if res.get('state') in STATES else 'failed'
-        doc.update(state=state, finished_at=res.get('finished_at'),
-                   message=str(res.get('message', ''))[:2000],
-                   details=[str(x)[:500] for x in (res.get('details') or [])][:50])
-        if 'job' in res:
-            doc['job'] = res['job']
-        return doc
+    if res and (not last or res.get('job') == last.get('job') or _refused_after(res, last)):
+        return _from_result(doc, res)
     if not last:
         return doc
+    return _pending(cfg, domain, last, doc)
+
+
+def _refused_after(res, last):
+    """A result with NO job is the helper refusing a staging file it would not
+    read (a symlink, a wrong owner, bad JSON): it could not learn the job id,
+    so it is matched by time — a refusal written after this request was made
+    is this request's answer."""
+    return (res.get('job') is None and last and res.get('finished_at')
+            and _parse_iso(res.get('finished_at')) and _parse_iso(last.get('requested_at'))
+            and _parse_iso(res['finished_at']) >= _parse_iso(last['requested_at']))
+
+
+def _from_result(doc, res):
+    """The status document for a result the helper wrote for this request."""
+    state = res.get('state') if res.get('state') in STATES else 'failed'
+    doc.update(state=state, finished_at=res.get('finished_at'),
+               message=str(res.get('message', ''))[:2000],
+               details=[str(x)[:500] for x in (res.get('details') or [])][:50])
+    if 'job' in res:
+        doc['job'] = res['job']
+    return doc
+
+
+def _pending(cfg, domain, last, doc):
+    """The status document for a request with no result file of its own: the
+    verdict kept in tm.db, a start failure, a running unit, a stale request,
+    or still queued."""
     doc['job'] = last.get('job')
     final = _final(cfg, domain)
     if final and final.get('job') == last.get('job') and final.get('state') in FINAL_STATES:
@@ -344,7 +368,7 @@ def audit_result(cfg, domain):
                                         '', db=db))
         # The verdict itself, kept: the result file is on /run and a reboot
         # would otherwise turn a finished job back into "queued".
-        db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)',
+        db.execute(_UPSERT_SETTING,
                    (_FINAL_KEY % domain, json.dumps({
                        'job': job, 'state': res.get('state'),
                        'finished_at': res.get('finished_at'),
@@ -353,7 +377,7 @@ def audit_result(cfg, domain):
                        sort_keys=True)))
         done = res.get('applied')
         if res.get('state') == 'ok' and isinstance(done, dict):
-            db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)',
+            db.execute(_UPSERT_SETTING,
                        (_APPLIED_KEY % domain, json.dumps(
                            {'values': {str(k)[:64]: str(v)[:512] for k, v in done.items()},
                             'at': res.get('finished_at'), 'job': job}, sort_keys=True)))
@@ -402,7 +426,7 @@ def _cli_seed(cfg, pairs, by):
     try:
         db.execute('BEGIN IMMEDIATE')
         for k, v in values.items():
-            db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', (k, v))
+            db.execute(_UPSERT_SETTING, (k, v))
         detail = 'changed: %s' % '; '.join('%s -> %r' % (k, v) for k, v in sorted(values.items()))
         rec = audit.log_action(cfg, by, 'SETTINGS_UPDATE', 'app_settings', detail[:500], '', db=db)
         db.commit()

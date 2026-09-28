@@ -39,6 +39,54 @@ const SETTINGS_TLS_ERRORS = {
     encrypted_key: 'Use an unencrypted private key.',
     invalid_chain: 'The certificate chain is invalid.',
 };
+const SETTINGS_FAILED_STATES = new Set(['failed', 'rolled_back']);
+const SETTINGS_SETTLED_STATES = new Set(['idle', 'ok', 'failed', 'rolled_back']);
+const SETTINGS_PENDING_STATES = new Set(['queued', 'running']);
+// A POST answered with one of these was refused: nothing was queued.
+const SETTINGS_REFUSAL_STATUSES = new Set([400, 401, 403, 404, 411, 413, 415, 429, 502]);
+const SETTINGS_TLS_UPLOAD_FAILED = 'Certificate upload failed. Check the certificate and key, then try again.';
+// A backend refusal the operator is told about in words, keyed by
+// "<HTTP status> <error code>".
+const SETTINGS_HOST_ERRORS = {
+    '503 audit_unavailable': 'Audit logging is unavailable. The action was blocked; nothing was changed. Restore audit logging before retrying.',
+    '500 audit_write_failed': 'The change WAS made, but its audit record could not be written. Check the audit database and AUDIT_WRITE_FAILED in the host syslog before making any further change.',
+    '409 apply_in_progress': 'An apply is already queued or running. Check status before applying again.',
+    '404 unknown_domain': 'This apply domain is not supported. TLS changes must use the certificate upload form.',
+    '502 apply_unit_failed': 'The host apply service could not start. Check the service on the host, then check status before retrying.',
+};
+// Statuses nginx or the upload route answer before any JSON error code exists.
+const SETTINGS_HTTP_ERRORS = {
+    411: 'Certificate upload requires Content-Length. Retry the file upload and check that your proxy preserves this header.',
+    413: 'Certificate upload exceeds the 200 KiB request limit, including multipart framing. Choose smaller PEM files.',
+};
+
+function settingsThrottleText(response, data) {
+    const seconds = Number(response.headers?.get('Retry-After') || data.retry_after);
+    const wait = Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : 5;
+    return 'Apply requests are limited to one per domain every 5 seconds. Wait ' + wait + ' seconds before retrying.';
+}
+
+function settingsTlsErrorText(response, data) {
+    if (response.status === 400 && data.error === 'invalid_cert' && Object.hasOwn(SETTINGS_TLS_ERRORS, data.reason))
+        return SETTINGS_TLS_ERRORS[data.reason];
+    return SETTINGS_TLS_UPLOAD_FAILED;
+}
+
+// The operator-facing sentence for a failed host request (never a poll: a
+// failed poll is always "status unknown").
+function settingsHostErrorText(response, data, fallback, context) {
+    const known = response.status + ' ' + data.error;
+    if (Object.hasOwn(SETTINGS_HOST_ERRORS, known)) return SETTINGS_HOST_ERRORS[known];
+    if (response.status === 429 && data.error === 'apply_throttled') return settingsThrottleText(response, data);
+    if (Object.hasOwn(SETTINGS_HTTP_ERRORS, response.status)) return SETTINGS_HTTP_ERRORS[response.status];
+    if (response.status === 415) {
+        return context === 'tls' ? 'Certificate upload requires multipart/form-data. Select the PEM files and submit the upload form.'
+            : 'This request requires Content-Type: application/json. Reload the page before retrying.';
+    }
+    if (context === 'tls') return settingsTlsErrorText(response, data);
+    if (response.status === 400 && data.error === 'invalid') return data.field + ': ' + data.reason;
+    return data.reason || data.error || fallback + ' (HTTP ' + response.status + ').';
+}
 
 function settingsHostValid(value) {
     if (!value || value.length > 253) return false;
@@ -48,7 +96,7 @@ function settingsHostValid(value) {
     let address = value;
     if (address.includes('.')) {
         const tail = address.slice(address.lastIndexOf(':') + 1);
-        if (!/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(tail)
+        if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(tail)
             || tail.split('.').some(n => Number(n) > 255 || (n.length > 1 && n[0] === '0'))) return false;
         address = address.slice(0, address.lastIndexOf(':') + 1) + '0:0';
     }
@@ -59,24 +107,110 @@ function settingsHostValid(value) {
     return halves.length === 2 ? groups.length < 8 : groups.length === 8;
 }
 
+// The first line an apply run shows, before the host has answered.
+function settingsApplyStartMessage(domain, options) {
+    if (!options) return 'Checking host status…';
+    return domain === 'tls' ? 'Uploading certificate…' : 'Requesting apply of saved settings…';
+}
+
+// The 2 s between status polls; run.wake ends it early when the run stops.
+function settingsApplyPause(run) {
+    return new Promise(resolve => {
+        run.wake = resolve;
+        run.timer = setTimeout(resolve, 2000);
+    });
+}
+
+// TLS applied data is a certificate summary, never settings or PEM.
+function settingsTlsSummaryValue(key, value) {
+    if (key === 'chain_count') return Number.isInteger(value) ? value : null;
+    return settingsJobText(value);
+}
+
+function settingsTlsSummary(applied) {
+    return Object.fromEntries(['subject', 'issuer', 'not_after', 'key_type', 'chain_count']
+        .map(key => [key, settingsTlsSummaryValue(key, applied[key])]));
+}
+
+// What one status answer may put into job state: filtered text only.
+function settingsJobUpdate(domain, data) {
+    return {
+        job: settingsJobText(data.job), state: data.state, applied_at: settingsJobText(data.applied_at),
+        applied: domain === 'tls' && data.applied ? settingsTlsSummary(data.applied) : null,
+        message: settingsJobText(data.message),
+        details: Array.isArray(data.details) ? data.details.map(settingsJobText).filter(Boolean) : [],
+    };
+}
+
+// CC-1: the PPSM describes what the host status endpoint says was APPLIED,
+// never what is merely saved. One domain, bounded to 10 s.
+function settingsLiveState(data) {
+    if (data.applied === null) return { note: 'not yet applied' };
+    if (data.applied && typeof data.applied === 'object') return { config: data.applied };
+    return { note: 'state unknown' };
+}
+
+async function settingsLiveApplied(domain) {
+    const controller = new AbortController();
+    let timer;
+    try {
+        const data = await Promise.race([
+            (async () => {
+                const response = await fetch('/api/system/apply/' + domain, {
+                    signal: controller.signal, cache: 'no-store', headers: { 'X-TM-Background': '1' },
+                });
+                if (!response.ok) throw new Error('Status unavailable');
+                return response.json();
+            })(),
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Timeout')), 10000); }),
+        ]);
+        return [domain, settingsLiveState(data)];
+    } catch {
+        // Unreachable, refused, unparsable or too slow: the export states that
+        // the host state is unknown rather than failing or guessing.
+        return [domain, { note: 'state unknown' }];
+    } finally {
+        clearTimeout(timer);
+        controller.abort();
+    }
+}
+
+function settingsSyslogTransport(syslog, config) {
+    if (syslog.note) return 'N/A';
+    return config.syslog_protocol === 'udp' ? 'UDP' : 'TCP';
+}
+
+// One check per field that has one; a field with none always passes. The
+// server validates again (tm/settings_schema.py) and its answer is final.
+const SETTINGS_BOOL_KEYS = new Set(['syslog_enabled', 'http_redirect_enabled']);
+const SETTINGS_BOOL_VALUES = new Set(['true', 'false']);
+const SETTINGS_SYSLOG_PROTOCOLS = new Set(['udp', 'tcp', 'tls']);
+const SETTINGS_FIELD_CHECKS = {
+    syslog_protocol: value => SETTINGS_SYSLOG_PROTOCOLS.has(value.trim().toLowerCase()) ? '' : 'Choose UDP, TCP or TLS.',
+    syslog_app_id: value => /^[A-Za-z0-9._-]{1,48}$/.test(value) ? '' : 'Use 1–48 letters, numbers, dots, underscores or hyphens.',
+    syslog_host: (value, current) => (value === '' && current.syslog_enabled === 'false') || settingsHostValid(value)
+        ? '' : 'Enter a hostname or IP address (1–253 characters).',
+    ntp_servers: value => {
+        if (value === '') return '';
+        const servers = value.split(',').map(v => v.trim());
+        return servers.length > 5 || servers.some(v => !settingsHostValid(v))
+            ? 'Enter 1–5 comma-separated hostnames or IP addresses, or leave empty to keep host defaults.' : '';
+    },
+};
+
+function settingsFieldReason(key, value, current) {
+    const range = SETTINGS_V120_RANGES[key];
+    if (range) {
+        return !/^\d+$/.test(value) || Number(value) < range[0] || Number(value) > range[1]
+            ? 'Enter a whole number from ' + range[0] + ' to ' + range[1] + '.' : '';
+    }
+    if (SETTINGS_BOOL_KEYS.has(key)) return SETTINGS_BOOL_VALUES.has(value) ? '' : 'Choose true or false.';
+    return Object.hasOwn(SETTINGS_FIELD_CHECKS, key) ? SETTINGS_FIELD_CHECKS[key](value, current) : '';
+}
+
 function settingsValidation(payload, current) {
     for (const [key, value] of Object.entries(payload)) {
-        const range = SETTINGS_V120_RANGES[key];
-        let reason = '';
-        if (range && (!/^\d+$/.test(value) || Number(value) < range[0] || Number(value) > range[1]))
-            reason = 'Enter a whole number from ' + range[0] + ' to ' + range[1] + '.';
-        if (['syslog_enabled', 'http_redirect_enabled'].includes(key) && !['true', 'false'].includes(value))
-            reason = 'Choose true or false.';
-        if (key === 'syslog_protocol' && !['udp', 'tcp', 'tls'].includes(value.trim().toLowerCase())) reason = 'Choose UDP, TCP or TLS.';
-        if (key === 'syslog_app_id' && !/^[A-Za-z0-9._-]{1,48}$/.test(value))
-            reason = 'Use 1–48 letters, numbers, dots, underscores or hyphens.';
-        if (key === 'syslog_host' && !(value === '' && current.syslog_enabled === 'false') && !settingsHostValid(value))
-            reason = 'Enter a hostname or IP address (1–253 characters).';
-        if (key === 'ntp_servers' && value !== '') {
-            const servers = value.split(',').map(v => v.trim());
-            if (servers.length > 5 || servers.some(v => !settingsHostValid(v)))
-                reason = 'Enter 1–5 comma-separated hostnames or IP addresses, or leave empty to keep host defaults.';
-        }
+        const reason = settingsFieldReason(key, value, current);
         if (reason) return key + ': ' + reason;
     }
     return '';
@@ -281,33 +415,7 @@ const SettingsTab = {
             let data = parsed || {};
             if (!parsed) try { data = await response.json(); } catch (e) { /* non-JSON proxy response */ }
             if (context === 'poll') return SETTINGS_STATUS_UNKNOWN;
-            if (response.status === 503 && data.error === 'audit_unavailable')
-                return 'Audit logging is unavailable. The action was blocked; nothing was changed. Restore audit logging before retrying.';
-            if (response.status === 500 && data.error === 'audit_write_failed')
-                return 'The change WAS made, but its audit record could not be written. Check the audit database and AUDIT_WRITE_FAILED in the host syslog before making any further change.';
-            if (response.status === 409 && data.error === 'apply_in_progress')
-                return 'An apply is already queued or running. Check status before applying again.';
-            if (response.status === 429 && data.error === 'apply_throttled') {
-                const seconds = Number(response.headers?.get('Retry-After') || data.retry_after);
-                return 'Apply requests are limited to one per domain every 5 seconds. Wait '
-                    + (Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : 5) + ' seconds before retrying.';
-            }
-            if (response.status === 404 && data.error === 'unknown_domain')
-                return 'This apply domain is not supported. TLS changes must use the certificate upload form.';
-            if (response.status === 502 && data.error === 'apply_unit_failed')
-                return 'The host apply service could not start. Check the service on the host, then check status before retrying.';
-            if (response.status === 411)
-                return 'Certificate upload requires Content-Length. Retry the file upload and check that your proxy preserves this header.';
-            if (response.status === 413)
-                return 'Certificate upload exceeds the 200 KiB request limit, including multipart framing. Choose smaller PEM files.';
-            if (response.status === 415)
-                return context === 'tls' ? 'Certificate upload requires multipart/form-data. Select the PEM files and submit the upload form.'
-                    : 'This request requires Content-Type: application/json. Reload the page before retrying.';
-            if (context === 'tls' && response.status === 400 && data.error === 'invalid_cert') return Object.prototype.hasOwnProperty.call(SETTINGS_TLS_ERRORS, data.reason)
-                ? SETTINGS_TLS_ERRORS[data.reason] : 'Certificate upload failed. Check the certificate and key, then try again.';
-            if (context === 'tls') return 'Certificate upload failed. Check the certificate and key, then try again.';
-            if (response.status === 400 && data.error === 'invalid') return data.field + ': ' + data.reason;
-            return data.reason || data.error || fallback + ' (HTTP ' + response.status + ').';
+            return settingsHostErrorText(response, data, fallback, context);
         },
         async saveHostSection(section) {
             if (this.sectionSaving[section]) return;
@@ -336,7 +444,8 @@ const SettingsTab = {
             } finally { this.hostPanelLoading[panel] = false; }
         },
         statusGlyph(state) {
-            return state === 'ok' ? '✓' : ['failed', 'rolled_back'].includes(state) ? '✕' : '!';
+            if (state === 'ok') return '✓';
+            return SETTINGS_FAILED_STATES.has(state) ? '✕' : '!';
         },
         // One deadline covers POST, polling, and even a hung fetch/body read.
         // Run state holds cancellation handles only; certificate files stay local.
@@ -346,9 +455,7 @@ const SettingsTab = {
             if (options && (!this.settingsLoaded || job.uncertain)) return;
             job.busy = true;
             if (options) job.state = 'requesting';
-            job.message = options
-                ? (domain === 'tls' ? 'Uploading certificate…' : 'Requesting apply of saved settings…')
-                : 'Checking host status…';
+            job.message = settingsApplyStartMessage(domain, options);
             job.details = [];
             const run = { controller: new AbortController(), timer: null, wake: null, cancel: null };
             this.hostRuns[domain] = run;
@@ -361,60 +468,8 @@ const SettingsTab = {
                     reject(Object.assign(new Error('Monitoring timed out after 90 seconds. The host outcome is unknown. Check status before applying again.'), { safe: true }));
                 }, 90000);
             });
-            const request = async (url, opts) => {
-                let response;
-                try {
-                    response = await fetch(url, { ...opts, signal: run.controller.signal, cache: 'no-store' });
-                } finally {
-                    if (domain === 'tls' && opts.body) {
-                        ['cert', 'key', 'chain'].forEach(key => opts.body.delete(key));
-                        opts.body = null;
-                    }
-                }
-                if (!response.ok) {
-                    const error = new Error(await this.hostResponseError(response, 'Host request failed', opts.method === 'POST' ? domain : 'poll'));
-                    error.safe = true;
-                    error.refused = opts.method === 'POST' && ([400, 401, 403, 404, 411, 413, 415, 429, 502].includes(response.status)
-                        || error.message.startsWith('Audit logging is unavailable.'));
-                    throw error;
-                }
-                return response.json();
-            };
-            const monitor = async () => {
-                const submitted = Boolean(options);
-                if (options) {
-                    const data = await request(domain === 'tls' ? '/api/system/tls/cert' : '/api/system/apply/' + domain, options);
-                    options = null;
-                    if (this.hostDisposed || run.controller.signal.aborted) return;
-                    Object.assign(job, { job: settingsJobText(data.job), state: data.state, uncertain: true, message: 'Apply queued. Waiting for host status…' });
-                }
-                let first = !submitted;
-                while (!this.hostDisposed && Date.now() < deadline) {
-                    if (!first) await new Promise(resolve => {
-                        run.wake = resolve;
-                        run.timer = setTimeout(resolve, 2000);
-                    });
-                    first = false;
-                    if (this.hostDisposed || run.controller.signal.aborted) return;
-                    const data = await request('/api/system/apply/' + domain, { headers: { 'X-TM-Background': '1' } });
-                    if (this.hostDisposed || run.controller.signal.aborted) return;
-                    Object.assign(job, { job: settingsJobText(data.job), state: data.state, applied_at: settingsJobText(data.applied_at),
-                        // TLS applied data is a certificate summary, never settings or PEM.
-                        applied: domain === 'tls' && data.applied ? Object.fromEntries(
-                            ['subject', 'issuer', 'not_after', 'key_type', 'chain_count'].map(key =>
-                                [key, key === 'chain_count' ? (Number.isInteger(data.applied[key]) ? data.applied[key] : null) : settingsJobText(data.applied[key])])) : null,
-                        message: settingsJobText(data.message), details: Array.isArray(data.details) ? data.details.map(settingsJobText).filter(Boolean) : [] });
-                    if (['idle', 'ok', 'failed', 'rolled_back'].includes(data.state)) {
-                        job.uncertain = false;
-                        if (domain === 'time' || domain === 'tls') void this.loadHostPanel(domain);
-                        return;
-                    }
-                    if (!['queued', 'running'].includes(data.state)) throw new Error('Unknown apply state. Check status before applying again.');
-                }
-                if (!this.hostDisposed) throw new Error('Monitoring timed out after 90 seconds. The host outcome is unknown. Check status before applying again.');
-            };
             try {
-                await Promise.race([monitor(), expired]);
+                await Promise.race([this.monitorHostApply(domain, job, run, options, deadline), expired]);
             } catch (e) {
                 job.uncertain = !e.refused;
                 job.state = e.refused ? 'failed' : 'unknown';
@@ -432,6 +487,68 @@ const SettingsTab = {
                 job.busy = false;
                 delete this.hostRuns[domain];
             }
+        },
+        // One host request of an apply run. A refusal (the request was
+        // answered and nothing was queued) is marked so the job reads
+        // "failed", not "unknown".
+        async hostApplyRequest(domain, run, url, opts) {
+            let response;
+            try {
+                response = await fetch(url, { ...opts, signal: run.controller.signal, cache: 'no-store' });
+            } finally {
+                if (domain === 'tls' && opts.body) {
+                    ['cert', 'key', 'chain'].forEach(key => opts.body.delete(key));
+                    opts.body = null;
+                }
+            }
+            if (!response.ok) {
+                const error = new Error(await this.hostResponseError(response, 'Host request failed', opts.method === 'POST' ? domain : 'poll'));
+                error.safe = true;
+                error.refused = opts.method === 'POST' && (SETTINGS_REFUSAL_STATUSES.has(response.status)
+                    || error.message.startsWith('Audit logging is unavailable.'));
+                throw error;
+            }
+            return response.json();
+        },
+        hostRunStopped(run) {
+            return this.hostDisposed || run.controller.signal.aborted;
+        },
+        // Submit (when there is something to submit), then poll the status
+        // until the job settles, the run stops, or the deadline passes.
+        async monitorHostApply(domain, job, run, options, deadline) {
+            if (options && !(await this.submitHostApply(domain, job, run, options))) return;
+            await this.pollHostApply(domain, job, run, deadline, !options);
+        },
+        // The request itself. False when the run stopped while it was in flight.
+        async submitHostApply(domain, job, run, options) {
+            const url = domain === 'tls' ? '/api/system/tls/cert' : '/api/system/apply/' + domain;
+            const data = await this.hostApplyRequest(domain, run, url, options);
+            if (this.hostRunStopped(run)) return false;
+            Object.assign(job, { job: settingsJobText(data.job), state: data.state, uncertain: true, message: 'Apply queued. Waiting for host status…' });
+            return true;
+        },
+        // Poll until the job settles; `immediate` skips the first pause (a
+        // status check with nothing submitted).
+        async pollHostApply(domain, job, run, deadline, immediate) {
+            let first = immediate;
+            while (!this.hostDisposed && Date.now() < deadline) {
+                if (!first) await settingsApplyPause(run);
+                first = false;
+                if (this.hostRunStopped(run)) return;
+                const data = await this.hostApplyRequest(domain, run, '/api/system/apply/' + domain, { headers: { 'X-TM-Background': '1' } });
+                if (this.hostRunStopped(run)) return;
+                Object.assign(job, settingsJobUpdate(domain, data));
+                if (SETTINGS_SETTLED_STATES.has(data.state)) {
+                    this.settleHostApply(domain, job);
+                    return;
+                }
+                if (!SETTINGS_PENDING_STATES.has(data.state)) throw new Error('Unknown apply state. Check status before applying again.');
+            }
+            if (!this.hostDisposed) throw new Error('Monitoring timed out after 90 seconds. The host outcome is unknown. Check status before applying again.');
+        },
+        settleHostApply(domain, job) {
+            job.uncertain = false;
+            if (domain === 'time' || domain === 'tls') void this.loadHostPanel(domain);
         },
         applyToHost(domain) {
             if (!['syslog', 'time', 'nginx'].includes(domain)) return;
@@ -558,28 +675,10 @@ const SettingsTab = {
         // keep the static file in sync with the default rows below.
         async downloadPpsm() {
             // CC-1: only the host status endpoint describes applied configuration.
-            const live = Object.fromEntries(await Promise.all(['syslog', 'time', 'nginx'].map(async domain => {
-                const controller = new AbortController();
-                let timer;
-                try {
-                    const data = await Promise.race([
-                        (async () => {
-                            const response = await fetch('/api/system/apply/' + domain, {
-                                signal: controller.signal, cache: 'no-store', headers: { 'X-TM-Background': '1' },
-                            });
-                            if (!response.ok) throw new Error('Status unavailable');
-                            return response.json();
-                        })(),
-                        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Timeout')), 10000); }),
-                    ]);
-                    return [domain, data.applied === null ? { note: 'not yet applied' }
-                        : data.applied && typeof data.applied === 'object' ? { config: data.applied } : { note: 'state unknown' }];
-                } catch (e) { return [domain, { note: 'state unknown' }]; }
-                finally { clearTimeout(timer); controller.abort(); }
-            })));
+            const live = Object.fromEntries(await Promise.all(['syslog', 'time', 'nginx'].map(settingsLiveApplied)));
             const config = live.syslog.config || {};
             const syslogPort = config.syslog_port || 'N/A';
-            const syslogTransport = live.syslog.note ? 'N/A' : config.syslog_protocol === 'udp' ? 'UDP' : 'TCP';
+            const syslogTransport = settingsSyslogTransport(live.syslog, config);
             const syslogState = config.syslog_enabled === 'true' ? 'Enabled' : 'Disabled';
             const syslogDescription = live.syslog.note || syslogState + '; applied protocol: ' + config.syslog_protocol;
             const rows = [
@@ -619,7 +718,7 @@ const SettingsTab = {
                 ['Storage', 'Application config', 'N/A', 'File', 'Local', '/etc/topic-manager/config.yaml, 0640 root:topic-manager. Holds the session signing key and, if a service account is configured, the LDAP bind password.'],
                 ['Storage', 'Backups', 'N/A', 'File', 'Local', '/var/backups/topic-manager/, 0700 root:root. Holds config, TLS key and audit database; archives are 0600.'],
             ];
-            const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+            const csv = rows.map(r => r.map(v => `"${String(v).replaceAll('"', '""')}"`).join(',')).join('\n');
             const a = document.createElement('a');
             a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
             a.download = 'topic-manager-ppsm.csv';
@@ -1112,7 +1211,7 @@ function deriveSettingsRail(template) {
         while ((t = titleRe.exec(slice)) !== null) sections.push(settingsDecodeEntities(t[1]).trim());
         const terms = [];
         termRe.lastIndex = 0;
-        while ((t = termRe.exec(slice)) !== null) terms.push(settingsDecodeEntities(t[1].replace(/<[^>]*>/g, ' ')).trim());
+        while ((t = termRe.exec(slice)) !== null) terms.push(settingsDecodeEntities(t[1].replaceAll(/<[^<>]*>/g, ' ')).trim());
         return {
             id: pane.id,
             name: label ? settingsDecodeEntities(label[1]).trim() : pane.id,

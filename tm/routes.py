@@ -259,20 +259,9 @@ def login():
     # BEGIN IMMEDIATE takes the lock before the count; create_session's
     # commit releases it.
     db.execute('BEGIN IMMEDIATE')
-    if max_s > 0:
-        active = count_active_sessions(db, result['username'])
-        if active >= max_s:
-            db.rollback()
-            db.close()
-            log.warning('Concurrent session limit (%d) reached for user %s', max_s, result['username'])
-            audit.log_action(cfg, result['username'], 'LOGIN_REFUSED',
-                             request.remote_addr or 'unknown',
-                             'concurrent session limit reached (%d/%d)' % (active, max_s), '',
-                             best_effort=True)
-            return jsonify({
-                'error': f'Concurrent session limit reached ({active}/{max_s}). '
-                         f'Sign out from another session first.'
-            }), 429
+    refused = _session_limit_refusal(cfg, db, result['username'], max_s)
+    if refused:
+        return refused
 
     sid = create_session(db, result['username'], _timeout(), request.remote_addr)
     db.close()
@@ -305,6 +294,28 @@ def login():
     # session actually dies on. A hardcoded 15 in the frontend would be a
     # second definition that drifts the first time config.yaml is edited.
     return jsonify({'user': result, 'timeout_minutes': _timeout()})
+
+
+def _session_limit_refusal(cfg, db, username, max_s):
+    """The 429 for a user already at the concurrent-session limit (0 =
+    unlimited), with the write lock released and LOGIN_REFUSED recorded; None
+    when a session may be created, the lock still held for create_session."""
+    if max_s <= 0:
+        return None
+    active = count_active_sessions(db, username)
+    if active < max_s:
+        return None
+    db.rollback()
+    db.close()
+    log.warning('Concurrent session limit (%d) reached for user %s', max_s, username)
+    audit.log_action(cfg, username, 'LOGIN_REFUSED',
+                     request.remote_addr or 'unknown',
+                     'concurrent session limit reached (%d/%d)' % (active, max_s), '',
+                     best_effort=True)
+    return jsonify({
+        'error': f'Concurrent session limit reached ({active}/{max_s}). '
+                 f'Sign out from another session first.'
+    }), 429
 
 
 @bp.route('/auth/logout', methods=['POST'])
@@ -612,6 +623,18 @@ def list_topics():
         return jsonify({'error': str(exc)}), 502
 
 
+#: The create form's own top-level fields and the topic config key each one
+#: sets. They win over the same key in `config`, in this order.
+_TOPIC_BODY_CONFIGS = (
+    ('retention_ms',        'retention.ms'),
+    ('retention_bytes',     'retention.bytes'),
+    ('cleanup_policy',      'cleanup.policy'),
+    ('compression_type',    'compression.type'),
+    ('min_insync_replicas', 'min.insync.replicas'),
+    ('max_message_bytes',   'max.message.bytes'),
+)
+
+
 @bp.route('/topics', methods=['POST'])
 @require_auth
 @audit_gate
@@ -639,18 +662,9 @@ def create_topic():
         return jsonify({'error': 'config must be an object'}), 400
     config = {k: str(v) for k, v in raw_config.items() if k in _ALLOWED_TOPIC_CONFIGS}
 
-    if data.get('retention_ms'):
-        config['retention.ms'] = str(data['retention_ms'])
-    if data.get('retention_bytes'):
-        config['retention.bytes'] = str(data['retention_bytes'])
-    if data.get('cleanup_policy'):
-        config['cleanup.policy'] = str(data['cleanup_policy'])
-    if data.get('compression_type'):
-        config['compression.type'] = str(data['compression_type'])
-    if data.get('min_insync_replicas'):
-        config['min.insync.replicas'] = str(data['min_insync_replicas'])
-    if data.get('max_message_bytes'):
-        config['max.message.bytes'] = str(data['max_message_bytes'])
+    for field, key in _TOPIC_BODY_CONFIGS:
+        if data.get(field):
+            config[key] = str(data[field])
 
     cluster = _cluster()
     try:
