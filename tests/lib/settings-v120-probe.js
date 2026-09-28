@@ -229,6 +229,18 @@ async function main() {
             assert.equal(inst.statusGlyph(state), '✕');
             assert.equal(inst.applyJobs.syslog.busy, false);
         }
+        {
+            // A run stopped while its POST is in flight reports nothing about
+            // the queued job and never polls (submitHostApply, v1.2.0 refactor).
+            const inst = await ready();
+            handler = (url, options) => {
+                if (options.method === 'POST') { inst.hostDisposed = true; return json({ domain: 'syslog', job: 'job9', state: 'queued' }, 202); }
+                return json({ state: 'running' });
+            };
+            await finish(inst.applyToHost('syslog'));
+            assert.notEqual(inst.applyJobs.syslog.message, 'Apply queued. Waiting for host status…', 'a stopped run does not report the queued job');
+            assert.equal(calls.filter(c => !c.options.method).length, 0, 'a stopped run does not poll');
+        }
     } else if (scenario === 'timeout') {
         for (const hung of [false, true]) {
             const inst = await ready();
@@ -319,6 +331,17 @@ async function main() {
                 assert.equal(inst.applyJobs[domain].message, '');
                 assert.deepEqual(plain(inst.applyJobs[domain].details), ['Safe detail']);
             }
+        }
+        {
+            // The TLS applied summary: chain_count is an integer or null, never a string or a fraction.
+            const inst = await ready();
+            for (const [count, want] of [[2, 2], ['3', null], [1.5, null]]) {
+                handler = () => json({ state: 'ok', message: 'Certificate installed', details: [],
+                    applied: { subject: 'CN=x', issuer: 'CN=y', not_after: '2027-01-01', key_type: 'EC P-256', chain_count: count } });
+                await finish(inst.runHostApply('tls'));
+                assert.equal(inst.applyJobs.tls.applied.chain_count, want, 'chain_count ' + JSON.stringify(count));
+            }
+            assert.equal(inst.applyJobs.tls.applied.subject, 'CN=x');
         }
     } else if (scenario === 'integration') {
         const inst = await ready();
@@ -432,10 +455,12 @@ async function main() {
                 const row = csv.split('\n').find(row => row.includes('"' + service + '"'));
                 assert.ok(row.includes(note), service + ' explicitly reports ' + note);
             }
+            // Port and transport are N/A too: nothing is claimed about a state that is not known.
+            assert.ok(csv.split('\n').some(row => row.startsWith('"Logging","Syslog","N/A","N/A",')), 'syslog row claims a transport');
             assert.ok(!csv.includes('9999') && !csv.includes('live.example.org'));
         }
     } else throw new Error('Unknown scenario: ' + scenario);
-    const expected = { bindings: 93, validation: 269, errors: 14, apply: 45, timeout: 13, panels: 27, tls: 103, ppsm: 28, integration: 83 };
+    const expected = { bindings: 93, validation: 269, errors: 14, apply: 47, timeout: 13, panels: 27, tls: 107, ppsm: 32, integration: 83 };
     rawAssert.equal(assertions, expected[scenario], 'complete the exact scenario assertion count');
     console.log('ALL ' + assertions + ' ASSERTIONS PASSED');
 }

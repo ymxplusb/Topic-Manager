@@ -71,6 +71,12 @@ JSON
     _lock 'Alpha==1.0' 'beta==1.5'; _gen
     tm_assert_rc 1 "$RC" "a dependency locked at an INCOMPATIBLE version passed: ${OUT}"
     grep -q 'INCOMPATIBLE: beta==1.5' <<<"$OUT" || _tm_afail "the incompatible version is not named: ${OUT}"
+    # An extra requirements.txt asks for brings its own dependencies into the
+    # closure (Alpha[fancy] needs extra-dep); without the extra it does not.
+    printf 'Alpha[fancy]==1.0\n' > "$FX/requirements.txt"; _lock 'Alpha==1.0' 'beta==2.1'; _gen
+    tm_assert_rc 1 "$RC" "the dependency of an extra requirements.txt asks for was not required of the lock: ${OUT}"
+    grep -q 'MISSING from requirements.lock: extra-dep' <<<"$OUT" || _tm_afail "the extra's dependency is not named: ${OUT}"
+    printf 'Alpha==1.0\n' > "$FX/requirements.txt"
     printf '{}' > "$FX/meta.json"; _lock 'Alpha==1.0' 'beta==2.1'; _gen
     tm_assert_rc 3 "$RC" "a closure whose metadata could not be read was reported as verified: ${OUT}"
 }
@@ -162,6 +168,13 @@ g_pipelint() {
         "x ${P} sed -n 1q" "x ${P} sed 5q" "x ${P} command grep -q y" "x ${P} \\grep -q y"
         "x ${P} grep 'a${P}b' -q" "x ${P} grep -l y" "x ${P} head -n 1"
         "out=\"\$(x ${P} awk '{exit}')\""
+        # v1.2.0 Sonar refactor of pipelint: each shape below is one of its
+        # branches the mechanical pass found unobserved (sed -e, a nested $(
+        # inside quotes, an escaped quote inside a quoted $(, a backtick body).
+        "x ${P} sed -e 1q"
+        "v=\"\$(echo \$(date) ${P} head -1)\""
+        "v=\"\$(echo \"a\\\"b\" ${P} head -1)\""
+        "v=\"\`x ${P} head -1\`\""
     )
     for shape in "${RED[@]}"; do
         printf '%s\n' "$shape" > "${TM_TMP}/l.sh"
@@ -171,7 +184,7 @@ g_pipelint() {
     printf 'x \\\n    %s grep -q y\n' "$P" > "${TM_TMP}/l.sh"
     rc=0; bash "$R/tools/check-pipefail-consumers.sh" "${TM_TMP}/l.sh" >/dev/null 2>&1 || rc=$?
     tm_assert_rc 1 "$rc" "the lint missed a pipe continued onto the next line"
-    printf '%s\n' "echo 'x ${P} head -1'" "echo \"x ${P} grep -q y\"" "x ${P} sed 's/q/Q/'" \
+    printf '%s\n' "echo 'x ${P} head -1'" "echo \"x ${P} grep -q y\"" "x ${P} sed 's/q/Q/'" "x ${P} grep -- -q" \
         "cat <<'EOF'" "x ${P} head -1" "EOF" "x ${P} grep -c y # ${P} head" > "${TM_TMP}/l.sh"
     rc=0; bash "$R/tools/check-pipefail-consumers.sh" "${TM_TMP}/l.sh" > "${TM_TMP}/o" 2>&1 || rc=$?
     tm_assert_rc 0 "$rc" "the lint flagged pipe TEXT (a string, a heredoc body, a comment): $(cat "${TM_TMP}/o")"

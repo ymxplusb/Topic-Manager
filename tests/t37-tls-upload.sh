@@ -144,6 +144,56 @@ a_chains() {
 }
 tm_case "a-chain-must-verify-the-leaf" "linux,openssl" a_chains
 
+# The v1.2.0 Sonar refactor split validate() into four checks; the mechanical
+# pass over them found three behaviours no case observed. Each is pinned here:
+# the warnings a valid upload carries, a key field holding two keys, and a
+# chain certificate with a SHA-1 signature.
+_validate_info() {   # _validate_info <crt> <key> [chain] -> chain=<n> warnings=<json> | REFUSED:<reason>
+    PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 "$PY" - "$@" <<'PYEOF' 2>&1 | tr -d '\r'
+import json, sys
+from tm import tls_check
+a = sys.argv[1:]
+rd = lambda p: open(p, 'rb').read() if p else None
+try:
+    info = tls_check.validate(rd(a[0]), rd(a[1]), rd(a[2]) if len(a) > 2 and a[2] else None)
+    print('chain=%d warnings=%s' % (info['chain_count'], json.dumps(info['warnings'])))
+except tls_check.CertInvalid as e:
+    print('REFUSED:%s' % e)
+PYEOF
+}
+a_validate_warnings_and_shapes() {
+    local T="$TM_TMP" got
+    _mk_chain
+    _mk self -newkey ec -pkeyopt ec_paramgen_curve:P-256
+    tm_assert_eq 'chain=0 warnings=["the certificate is self-signed"]' "$(_validate_info "$T/self.crt" "$T/self.key")" \
+        "a self-signed leaf with no chain is not warned as self-signed"
+    tm_assert_eq 'chain=0 warnings=["no chain was supplied; clients must already trust the issuer"]' \
+        "$(_validate_info "$T/leaf.crt" "$T/leaf.key")" "a CA-issued leaf with no chain is not warned"
+    tm_assert_eq 'chain=2 warnings=[]' "$(_validate_info "$T/leaf.crt" "$T/leaf.key" "$T/chain.pem")" \
+        "a verified chain still carries a warning, or was not counted"
+    cat "$T/leaf.key" "$T/self.key" > "$T/two.key"
+    tm_assert_eq "REFUSED:the key field must hold exactly one unencrypted PEM private key" \
+        "$(_validate_info "$T/leaf.crt" "$T/two.key")" "a key field holding TWO keys was accepted"
+    if [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)" = 1 ]; then
+        tm_note "FIPS host: openssl will not sign a SHA-1 intermediate; the chain-signature refusal is proven on a non-FIPS host"
+        return 0
+    fi
+    openssl req -new -nodes -newkey ec -pkeyopt ec_paramgen_curve:P-256 -subj /CN=Weak-Int \
+        -keyout "$T/wint.key" -out "$T/wint.csr" >/dev/null 2>&1
+    openssl x509 -req -in "$T/wint.csr" -CA "$T/root.crt" -CAkey "$T/root.key" -CAcreateserial \
+        -days 40 -sha1 -extfile "$T/int.ext" -out "$T/wint.crt" >/dev/null 2>&1
+    openssl x509 -req -in "$T/leaf.csr" -CA "$T/wint.crt" -CAkey "$T/wint.key" -CAcreateserial \
+        -days 20 -sha256 -extfile "$T/leaf.ext" -out "$T/wleaf.crt" >/dev/null 2>&1
+    cat "$T/wint.crt" "$T/root.crt" > "$T/wchain.pem"
+    { [ -s "$T/wint.crt" ] && [ -s "$T/wleaf.crt" ]; } || tm_die "could not build the SHA-1 intermediate fixture"
+    got="$(_validate_info "$T/wleaf.crt" "$T/leaf.key" "$T/wchain.pem")"
+    case "$got" in
+        "REFUSED:chain certificate 1 is signed with "*"; SHA-1 and MD5 signatures are refused") ;;
+        *) _tm_afail "a chain certificate with a SHA-1 signature was not refused for it: ${got}" ;;
+    esac
+}
+tm_case "validate-warnings-two-keys-and-a-sha1-chain-signature" "linux,openssl" a_validate_warnings_and_shapes
+
 _route_setup() {
     mkdir -p "${TM_TMP}/clusters.d" "${TM_TMP}/cluster-certs" "${TM_TMP}/bin" "${TM_TMP}/run" "${TM_TMP}/data" "${TM_TMP}/tmp"
     printf 'clusters: []\n' > "${TM_TMP}/clusters.d/clusters.yaml"

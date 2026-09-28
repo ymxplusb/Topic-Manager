@@ -2364,3 +2364,126 @@ TARGET|py:app
 EQUIV|no
 ANCHOR|        self.socket.settimeout(audit.SYSLOG_SEND_TIMEOUT)
 REPLACE|        pass
+
+# ─── v1.2.0 Sonar refactor + REG-0018 (WO-0004 builder round 3) ─────────────
+# Found by the mechanical pass over the refactored functions; each was a
+# SURVIVOR until the case it names was added, and is kept here so the
+# harness re-proves it.
+--- M287
+DESC|upgrade: the report line counts newlines again
+TESTS|t10-baseline-record-format.sh
+EQUIV|no
+ANCHOR|success "Baseline recorded ($(baseline_count "$PERM_BASELINE") paths)"
+REPLACE|success "Baseline recorded ($(wc -l < "$PERM_BASELINE") paths)"
+
+--- M288
+DESC|upgrade: baseline_count counts NULs, not records
+TESTS|t10-baseline-record-format.sh
+EQUIV|no
+ANCHOR|    echo $(( nul / 4 ))
+REPLACE|    echo $(( nul ))
+
+--- M289
+DESC|routes: the session limit admits one more
+TESTS|t31-settings-keys.sh t42-route-characterisation.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if 0 < max_s <= active:          # 0 = unlimited
+REPLACE|    if 0 < max_s < active:          # 0 = unlimited
+
+--- M290
+DESC|routes: a limit of 0 is enforced instead of unlimited
+TESTS|t31-settings-keys.sh t42-route-characterisation.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if 0 < max_s <= active:          # 0 = unlimited
+REPLACE|    if 0 <= max_s <= active:          # 0 = unlimited
+
+--- M291
+DESC|routes: LOGIN_REFUSED is not audited
+TESTS|t31-settings-keys.sh t42-route-characterisation.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    audit.log_action(cfg, username, 'LOGIN_REFUSED',
+REPLACE|    (lambda *a, **k: None)(cfg, username, 'LOGIN_REFUSED',
+
+--- M292
+DESC|routes: one top-level topic config field dropped
+TESTS|t42-route-characterisation.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    ('min_insync_replicas', 'min.insync.replicas'),
+
+--- M293
+DESC|routes: top-level fields no longer win over config
+TESTS|t42-route-characterisation.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        if data.get(field):
+REPLACE|        if data.get(field) and key not in config:
+
+--- M294
+DESC|apply: a job-less refusal is never matched by time
+TESTS|t35-apply-routes.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|    return (res.get('job') is None and last and res.get('finished_at')
+REPLACE|    return (False and last and res.get('finished_at')
+
+--- M295
+DESC|apply: a result's state outside STATES is passed through
+TESTS|t35-apply-routes.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|    state = res.get('state') if res.get('state') in STATES else 'failed'
+REPLACE|    state = res.get('state')
+
+--- M296
+DESC|apply: a running unit reads as queued
+TESTS|t35-apply-routes.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|    if active in ('activating', 'active', 'reloading'):
+REPLACE|    if False:
+
+--- M297
+DESC|apply: the stale bound is never reached
+TESTS|t35-apply-routes.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|    if age is not None and age > STALE_AFTER_S:
+REPLACE|    if False:
+
+--- M298
+DESC|settings: an unknown validator stores unchecked
+TESTS|t31-settings-keys.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    if validator is None:
+ANCHOR|        raise InvalidSetting(key, 'no validator')      # unreachable: every key has one
+REPLACE|    if validator is None:
+REPLACE|        return text
+
+--- M299
+DESC|tls: a self-signed leaf with no chain is not warned
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|        warnings.append('the certificate is self-signed')
+REPLACE|        pass
+
+--- M300
+DESC|tls: the key header count is not checked
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|    if sum(key_pem.count(h) for h in _KEY_HEADERS) != 1:
+REPLACE|    if False:
+
+--- M301
+DESC|tls: a weak chain signature is accepted
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|        if not self_signed and (not ci['sig'] or _WEAK_SIG.search(ci['sig'])):
+REPLACE|        if False:

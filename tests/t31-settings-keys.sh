@@ -213,6 +213,24 @@ print('p2=%s' % s.check_domain('syslog', {'syslog_enabled':'false','syslog_host'
 }
 tm_case "syslog-enabled-needs-a-host" none a_cross_field
 
+# normalise() refuses a key it has no validator for, rather than storing it
+# unchecked. Unreachable for the shipped table (every admin key has one), so
+# the case adds a key WITHOUT one: the guard is what a future key that forgot
+# its validator would meet.
+a_no_validator_is_refused() {
+    local out
+    out="$(_py -c "
+from tm import settings_schema as s
+s.ADMIN_KEYS = s.ADMIN_KEYS | {'future_key'}
+try:
+    print('stored=%r' % s.normalise('future_key', 'x;rm -rf /'))
+except s.InvalidSetting as e:
+    print('refused=%s:%s' % (e.field, e.reason))
+")"
+    tm_assert_eq "refused=future_key:no validator" "$out" "a key with no validator was stored unchecked: ${out}"
+}
+tm_case "a-key-without-a-validator-is-refused" none a_no_validator_is_refused
+
 a_put_refuses_and_writes_nothing() {
     _setup
     local out

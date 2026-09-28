@@ -259,9 +259,9 @@ def login():
     # BEGIN IMMEDIATE takes the lock before the count; create_session's
     # commit releases it.
     db.execute('BEGIN IMMEDIATE')
-    refused = _session_limit_refusal(cfg, db, result['username'], max_s)
-    if refused:
-        return refused
+    active = count_active_sessions(db, result['username'])
+    if 0 < max_s <= active:          # 0 = unlimited
+        return _refuse_session_limit(cfg, db, result['username'], active, max_s)
 
     sid = create_session(db, result['username'], _timeout(), request.remote_addr)
     db.close()
@@ -296,15 +296,9 @@ def login():
     return jsonify({'user': result, 'timeout_minutes': _timeout()})
 
 
-def _session_limit_refusal(cfg, db, username, max_s):
-    """The 429 for a user already at the concurrent-session limit (0 =
-    unlimited), with the write lock released and LOGIN_REFUSED recorded; None
-    when a session may be created, the lock still held for create_session."""
-    if max_s <= 0:
-        return None
-    active = count_active_sessions(db, username)
-    if active < max_s:
-        return None
+def _refuse_session_limit(cfg, db, username, active, max_s):
+    """The 429 for a user already at the concurrent-session limit: the write
+    lock released and LOGIN_REFUSED recorded."""
     db.rollback()
     db.close()
     log.warning('Concurrent session limit (%d) reached for user %s', max_s, username)

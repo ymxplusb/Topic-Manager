@@ -223,6 +223,54 @@ print('keyfiles=%s' % sorted(f for f in os.listdir(STAGE) if not f.endswith('.la
 }
 tm_case "a-unit-that-cannot-start-is-failed-at-once" tmapp a_start_failure
 
+# The v1.2.0 Sonar refactor split status() into the result, the pending
+# request and the time-matched refusal; the mechanical pass over them found
+# four behaviours no case observed. Each is pinned here, in the order status()
+# decides them.
+a_status_running_stale_refused_and_unknown() {
+    _setup
+    local out
+    out="$(_run "
+r = c.post('/api/system/apply/nginx', data='{}', headers=H); job = r.get_json()['job']
+get = lambda: c.get('/api/system/apply/nginx').get_json()
+open(os.environ['UNIT_STATE'], 'w').write('active\n')
+s = get(); print('running=%s|%s' % (s['state'], s['message']))
+open(os.environ['UNIT_STATE'], 'w').write('inactive\n')
+def requested(ago_s=None, at=None):
+    last = json.load(open(os.path.join(STAGE, 'nginx.last')))
+    last['requested_at'] = at or (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=ago_s)).isoformat()
+    A._write_private(STAGE, 'nginx.last', json.dumps(last).encode())
+requested(ago_s=A.STALE_AFTER_S - 30)
+s = get(); print('fresh=%s' % s['state'])
+requested(ago_s=A.STALE_AFTER_S + 30)
+s = get(); print('stale=%s|%s' % (s['state'], 'no result was written for this request' in s['message']))
+# A refusal the helper wrote WITHOUT a job id (it could not read the staging
+# file) is this request's answer only when it was written after the request.
+requested(at='2026-09-26T10:00:00+00:00')
+result('nginx', state='failed', step='stage', message='staging file nginx.json is a symlink; refused', details=[],
+       finished_at='2026-09-26T10:00:05+00:00')
+s = get(); print('refused_after=%s|%s' % (s['state'], s['message']))
+result('nginx', state='failed', step='stage', message='staging file nginx.json is a symlink; refused', details=[],
+       finished_at='2026-09-26T09:59:00+00:00')
+s = get(); print('refused_before=%s|%s' % (s['state'], s['message'][:38]))
+# A result for this job whose state is not one the contract knows is failed.
+result('nginx', job=job, state='exploded', step='x', message='m', details=[], finished_at='2026-09-26T10:01:00+00:00')
+s = get(); print('unknown_state=%s' % s['state'])
+")"
+    tm_assert_eq "running=running|the apply helper is running" "$(grep '^running=' <<<"$out")" \
+        "an active apply unit with no result is not reported as running: ${out}"
+    tm_assert_eq "fresh=queued" "$(grep '^fresh=' <<<"$out")" "a request inside the stale bound is not queued: ${out}"
+    tm_assert_eq "stale=failed|True" "$(grep '^stale=' <<<"$out")" \
+        "a request past STALE_AFTER_S with no result is not failed with its reason: ${out}"
+    tm_assert_eq "refused_after=failed|staging file nginx.json is a symlink; refused" "$(grep '^refused_after=' <<<"$out")" \
+        "a job-less refusal written after the request was not taken as its answer: ${out}"
+    tm_assert_eq "refused_before=failed|no result was written for this request" "$(grep '^refused_before=' <<<"$out")" \
+        "a job-less refusal written BEFORE the request was taken as its answer: ${out}"
+    tm_assert_eq "unknown_state=failed" "$(grep '^unknown_state=' <<<"$out")" \
+        "a result state outside the contract's set was passed through: ${out}"
+}
+tm_case "status-running-stale-time-matched-refusal-and-unknown-state" tmapp a_status_running_stale_refused_and_unknown
+
 a_polkit_rule() {
     local rules="${TM_REPO_ROOT}/install/polkit/50-topic-manager.rules"
     node - "$rules" <<'JSEOF' > "${TM_TMP}/pk.out" 2>&1 || _tm_afail "the polkit rule did not evaluate: $(cat "${TM_TMP}/pk.out")"

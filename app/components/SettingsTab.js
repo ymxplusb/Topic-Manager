@@ -521,8 +521,7 @@ const SettingsTab = {
         },
         // The request itself. False when the run stopped while it was in flight.
         async submitHostApply(domain, job, run, options) {
-            const url = domain === 'tls' ? '/api/system/tls/cert' : '/api/system/apply/' + domain;
-            const data = await this.hostApplyRequest(domain, run, url, options);
+            const data = await this.hostApplyRequest(domain, run, domain === 'tls' ? '/api/system/tls/cert' : '/api/system/apply/' + domain, options);
             if (this.hostRunStopped(run)) return false;
             Object.assign(job, { job: settingsJobText(data.job), state: data.state, uncertain: true, message: 'Apply queued. Waiting for host status…' });
             return true;

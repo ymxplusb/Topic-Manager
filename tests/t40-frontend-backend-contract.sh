@@ -81,7 +81,13 @@ function fields(t) {
 let checked = 0;
 for (const [label, source] of [['SettingsTab', settings], ['LoginView', login]]) {
     const t = lex(source);
-    const requests = calls(t, 'request');
+    // The shared request helper is hostApplyRequest(domain, run, url, opts)
+    // (v1.2.0 Sonar refactor; it was a closure named request(url, opts)):
+    // each call site's url and opts are the 3rd and 4th arguments.
+    const requests = calls(t, 'hostApplyRequest').map(a => {
+        assert.equal(a.length, 4, label + ': hostApplyRequest takes (domain, run, url, opts)');
+        return a.slice(2);
+    });
     const applyCalls = calls(t, 'runHostApply').filter(a => a[1]);
     function urls(expr) {
         const s = expr.join('');
@@ -171,20 +177,41 @@ const context = { ClusterModal: {} };
 vm.createContext(context);
 vm.runInContext(settings + '\nglobalThis.component = SettingsTab;', context);
 const handler = context.component.methods.hostResponseError;
-const tokens = lex(handler.toString()).join(' ');
-for (const { status, error } of errors) {
-    // Invalid/empty JSON has a general 400 fallback; callers always serialize
-    // JSON. All named contract errors and transport statuses need branches.
-    if (error === 'Invalid or empty JSON body') continue;
-    assert.ok(tokens.includes('response . status === ' + status), 'missing explicit handling for HTTP ' + status + ' ' + error);
-    if (/^[a-z_]+$/.test(error))
-        assert.ok(tokens.includes("data . error === '" + error + "'"), 'missing explicit handling for ' + error);
-}
 for (const error of ['audit_unavailable', 'audit_write_failed']) {
     assert.ok(lex(login).join(' ').includes("data . error === '" + error + "'"), 'LoginView missing explicit ' + error);
 }
-assert.match(tokens, /Retry-After/);
-console.log('Checked ' + checked + ' resolved fetch path/method combinations against ' + routes.length + ' Flask decorators; ' + errors.length + ' backend error/status pairs handled.');
+// Explicit handling is asked of the REAL handler, by running it: every backend
+// status/error pair must produce its own sentence in at least one context the
+// Settings tab calls it with, never one of the generic fallbacks. (The v1.2.0
+// Sonar refactor made the handler table-driven, so a token scan of its body
+// no longer sees the branches; running it is the stronger check anyway.)
+const GENERIC_TLS = 'Certificate upload failed. Check the certificate and key, then try again.';
+const answer = (status, parsed, ctx, retryAfter = null) =>
+    handler.call({}, { status, headers: { get: h => (h === 'Retry-After' ? retryAfter : null) } }, 'FALLBACK', ctx, parsed);
+async function explicit(status, error) {
+    for (const ctx of ['save', 'syslog', 'tls']) {
+        const parsed = { error, reason: error === 'invalid_cert' ? 'key_mismatch' : 'backend-reason', field: 'backend-field' };
+        const text = await answer(status, parsed, ctx);
+        // The generic answers: the caller's fallback, the backend's own error
+        // or reason echoed back, and the TLS form's catch-all sentence.
+        if (![ 'FALLBACK (HTTP ' + status + ').', error, parsed.reason, GENERIC_TLS ].includes(text)) return true;
+    }
+    return false;
+}
+const asyncChecks = (async () => {
+    for (const { status, error } of errors) {
+        // Invalid/empty JSON has a general 400 fallback; callers always serialize
+        // JSON. All named contract errors and transport statuses need branches.
+        if (error === 'Invalid or empty JSON body') continue;
+        assert.ok(await explicit(status, error), 'missing explicit handling for HTTP ' + status + ' ' + error);
+    }
+    assert.match(await answer(429, { error: 'apply_throttled' }, 'syslog', '7'), /Wait 7 seconds/, 'Retry-After is read');
+    assert.match(await answer(429, { error: 'apply_throttled', retry_after: 3 }, 'syslog'), /Wait 3 seconds/, 'retry_after is read');
+    assert.equal(await answer(503, { error: 'audit_unavailable' }, 'poll'), vm.runInContext('SETTINGS_STATUS_UNKNOWN', context),
+        'a failed poll is always status unknown');
+})();
+asyncChecks.then(() => console.log('Checked ' + checked + ' resolved fetch path/method combinations against ' + routes.length + ' Flask decorators; ' + errors.length + ' backend error/status pairs handled.'))
+    .catch(e => { console.error(e && e.stack || e); process.exit(1); });
 NODE
 }
 c_contract() {
@@ -200,7 +227,7 @@ const [src, dest, kind] = process.argv.slice(2);
 const source = fs.readFileSync(src, 'utf8');
 const changed = kind === 'fetch-typo'
     ? source.replace("fetch('/api/settings')", "fetch('/api/settingz')")
-    : source.replace(/            if \(response\.status === 409 && data\.error === 'apply_in_progress'\)\n                return [^\n]+;\n/, '');
+    : source.replace(/    '409 apply_in_progress': [^\n]+,\n/, '');
 if (source === changed) throw Error('Mutation anchor did not match: ' + kind);
 fs.writeFileSync(dest, changed);
 NODE
