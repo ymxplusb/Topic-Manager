@@ -398,4 +398,25 @@ c_example_required_values() {
 }
 tm_case "config-example-required-keys-must-have-values" none c_example_required_values
 
+# ─── v1.1.1: the sign-in sequence is characterised, step by step ─────────────
+# validate_credentials() and missing_ldap_keys() were refactored in v1.1.1 for
+# Sonar (S3776, S1871). Nothing above drove a bind: the service bind, the
+# second bind as the user, the unbinds, the group check and the returned user
+# record were all untested. tests/lib/auth_probe.py drives every branch against
+# a scripted directory and prints each step; the expected transcript was
+# recorded on the v1.1.0 code BEFORE the refactor, so any observable change to
+# the sign-in path fails here.
+d_signin_sequence_is_unchanged() {
+    PYTHONPATH="$TM_REPO_ROOT" PYTHONDONTWRITEBYTECODE=1 \
+        "$PY" "${TM_TESTS_DIR}/lib/auth_probe.py" > "${TM_TMP}/got" 2>&1
+    local rc=$?
+    tr -d '\r' < "${TM_TESTS_DIR}/lib/auth_probe.expected" > "${TM_TMP}/want"
+    tr -d '\r' < "${TM_TMP}/got" > "${TM_TMP}/got.lf"
+    tm_assert_rc 0 "$rc" "the sign-in probe did not run: $(cat "${TM_TMP}/got")"
+    diff -u "${TM_TMP}/want" "${TM_TMP}/got.lf" > "${TM_TMP}/diff" \
+        || _tm_afail "the sign-in sequence changed from the recorded v1.1.0 behaviour:
+$(cat "${TM_TMP}/diff")"
+}
+tm_case "sign-in-sequence-matches-the-recorded-behaviour" tmapp d_signin_sequence_is_unchanged
+
 tm_finish

@@ -1,0 +1,190 @@
+== direct-ok-no-group
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind alice@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=alice) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind alice@example.org
+   -> (True, {'username': 'alice', 'display_name': 'Alice A', 'email': 'alice@example.org', 'upn': 'alice@example.org'})
+== direct-ok-group-member
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind alice@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=alice) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind alice@example.org
+   -> (True, {'username': 'alice', 'display_name': 'Alice A', 'email': 'alice@example.org', 'upn': 'alice@example.org'})
+== direct-group-case-insensitive
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind alice@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=alice) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind alice@example.org
+   -> (True, {'username': 'alice', 'display_name': 'Alice A', 'email': 'alice@example.org', 'upn': 'alice@example.org'})
+== direct-not-a-member
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind bob@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=bob) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind bob@example.org
+   -> (False, 'Not a member of required group: CN=Kafka-Admins,CN=Users,DC=example,DC=org')
+== direct-wrong-password
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind alice@example.org auth=SIMPLE auto_bind=True
+   -> (False, 'Invalid credentials')
+== direct-transport-error
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind down@example.org auth=SIMPLE auto_bind=True
+   -> (False, 'LDAP error: socket unreachable')
+== direct-user-not-found
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind ghost@example.org auth=SIMPLE auto_bind=True
+   -> (False, 'Invalid credentials')
+== direct-bound-but-not-found
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind dave@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=dave) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind dave@example.org
+   -> (False, 'User not found in directory')
+== direct-empty-attributes
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind carol@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=carol) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind carol@example.org
+   -> (True, {'username': 'carol', 'display_name': 'carol', 'email': '', 'upn': 'carol@example.org'})
+== direct-empty-attributes-group
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind carol@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=carol) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind carol@example.org
+   -> (False, 'Not a member of required group: CN=Kafka-Admins,CN=Users,DC=example,DC=org')
+== netbios-form
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind alice@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=alice) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind alice@example.org
+   -> (True, {'username': 'alice', 'display_name': 'Alice A', 'email': 'alice@example.org', 'upn': 'alice@example.org'})
+== upn-form
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind alice@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=alice) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind alice@example.org
+   -> (True, {'username': 'alice', 'display_name': 'Alice A', 'email': 'alice@example.org', 'upn': 'alice@example.org'})
+== filter-escaped
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind a*(b)@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=a\2a\28b\29) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind a*(b)@example.org
+   -> (True, {'username': 'a*(b)', 'display_name': 'Odd', 'email': '', 'upn': 'a*(b)@example.org'})
+== ca-cert-configured
+   tls validate=2 ca=/etc/ssl/ad-ca.pem
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind alice@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=alice) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind alice@example.org
+   -> (True, {'username': 'alice', 'display_name': 'Alice A', 'email': 'alice@example.org', 'upn': 'alice@example.org'})
+== service-ok-group-member
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind CN=svc,DC=example,DC=org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=alice) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind CN=svc,DC=example,DC=org
+   bind alice@example.org auth=SIMPLE auto_bind=True
+   unbind alice@example.org
+   -> (True, {'username': 'alice', 'display_name': 'Alice A', 'email': 'alice@example.org', 'upn': 'alice@example.org'})
+== service-user-wrong-password
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind CN=svc,DC=example,DC=org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=alice) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind CN=svc,DC=example,DC=org
+   bind alice@example.org auth=SIMPLE auto_bind=True
+   -> (False, 'Invalid credentials')
+== service-user-wrong-password-not-member
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind CN=svc,DC=example,DC=org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=bob) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind CN=svc,DC=example,DC=org
+   bind bob@example.org auth=SIMPLE auto_bind=True
+   -> (False, 'Invalid credentials')
+== service-not-a-member
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind CN=svc,DC=example,DC=org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=bob) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind CN=svc,DC=example,DC=org
+   bind bob@example.org auth=SIMPLE auto_bind=True
+   unbind bob@example.org
+   -> (False, 'Not a member of required group: CN=Kafka-Admins,CN=Users,DC=example,DC=org')
+== service-bind-fails
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind CN=svc,DC=example,DC=org auth=SIMPLE auto_bind=True
+   -> (False, 'Invalid credentials')
+== service-user-not-found
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind CN=svc,DC=example,DC=org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=ghost) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind CN=svc,DC=example,DC=org
+   -> (False, 'User not found in directory')
+== service-placeholder-password
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind alice@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=alice) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind alice@example.org
+   -> (True, {'username': 'alice', 'display_name': 'Alice A', 'email': 'alice@example.org', 'upn': 'alice@example.org'})
+== service-dn-without-password
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind alice@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=alice) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind alice@example.org
+   -> (True, {'username': 'alice', 'display_name': 'Alice A', 'email': 'alice@example.org', 'upn': 'alice@example.org'})
+== service-password-without-dn
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind alice@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=alice) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind alice@example.org
+   -> (True, {'username': 'alice', 'display_name': 'Alice A', 'email': 'alice@example.org', 'upn': 'alice@example.org'})
+== group-empty-string
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind CN=svc,DC=example,DC=org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=bob) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind CN=svc,DC=example,DC=org
+   bind bob@example.org auth=SIMPLE auto_bind=True
+   unbind bob@example.org
+   -> (True, {'username': 'bob', 'display_name': 'Bob B', 'email': 'bob@example.org', 'upn': 'bob@example.org'})
+== not-configured
+   -> (False, 'Sign-in is unavailable. Contact the administrator.')
+== plain-ldap-refused
+   -> (False, 'Sign-in is unavailable. Contact the administrator.')
+== auth-not-a-mapping
+   -> (False, 'Sign-in is unavailable. Contact the administrator.')
+== auth-none
+   -> (False, 'Sign-in is unavailable. Contact the administrator.')
+missing complete -> []
+missing server-placeholder -> ['ldap_server']
+missing server-plain-ldap -> ['ldap_server']
+missing server-padded -> []
+missing server-no-host -> ['ldap_server']
+missing server-not-a-string -> ['ldap_server']
+missing base-dn-placeholder -> ['ldap_base_dn']
+missing base-dn-half-bracket -> []
+missing domain-blank -> ['ldap_domain']
+missing domain-not-ldaps-is-fine -> []
+missing all-absent -> ['ldap_server', 'ldap_base_dn', 'ldap_domain']
+missing no-auth -> ['ldap_server', 'ldap_base_dn', 'ldap_domain']
+missing cfg-none -> ['ldap_server', 'ldap_base_dn', 'ldap_domain']
+missing auth-list -> ['ldap_server', 'ldap_base_dn', 'ldap_domain']

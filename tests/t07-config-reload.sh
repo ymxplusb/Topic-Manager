@@ -452,4 +452,24 @@ print('ids=%s' % [c['id'] for c in d['clusters']])
 }
 tm_case "legacy-profiles-still-migrate-into-an-empty-store" none c_legacy_block_still_migrates_into_an_empty_store
 
+# ─── v1.1.1: every starting state is characterised ───────────────────────────
+# migrate() was split into helpers in v1.1.1 (Sonar S3776). Its printed lines
+# are what TROUBLESHOOTING.md is keyed to and no case above pinned them, nor
+# the two SystemExit refusals, nor the post-migration verification.
+# tests/lib/migrate_probe.py runs every starting state migrate() distinguishes
+# and prints the result, the output and both files; the expected transcript was
+# recorded on the v1.1.0 code BEFORE the refactor.
+c_every_state_matches_the_recorded_behaviour() {
+    PYTHONPATH="$TM_REPO_ROOT" PYTHONDONTWRITEBYTECODE=1 \
+        "$PY" "${TM_TESTS_DIR}/lib/migrate_probe.py" > "${TM_TMP}/got" 2>&1
+    local rc=$?
+    tr -d '\r' < "${TM_TESTS_DIR}/lib/migrate_probe.expected" > "${TM_TMP}/want"
+    tr -d '\r' < "${TM_TMP}/got" > "${TM_TMP}/got.lf"
+    tm_assert_rc 0 "$rc" "the migration probe did not run: $(cat "${TM_TMP}/got")"
+    diff -u "${TM_TMP}/want" "${TM_TMP}/got.lf" > "${TM_TMP}/diff" \
+        || _tm_afail "migrate() changed from the recorded v1.1.0 behaviour:
+$(cat "${TM_TMP}/diff")"
+}
+tm_case "migration-matches-the-recorded-behaviour-in-every-state" none c_every_state_matches_the_recorded_behaviour
+
 tm_finish
