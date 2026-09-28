@@ -4,7 +4,7 @@
   "project": "Topic Manager",
   "release": "minor",
   "opened": "2026-09-26",
-  "status": "scoped",
+  "status": "assuring",
   "depends_on": "WO-0003 (v1.1.0) is the baseline. Its builder is mid-edit on release/v1.1.0: HEAD moved 36576f3 -> 7d05e56 during this scout, 19 files staged (tm/routes.py, tm/auth.py, install.sh, install/upgrade-full.sh, prepare-offline.sh, config examples, tests, tools). Every line number below is measured on that working tree and WILL move; re-anchor before building.",
   "scout": {
     "method": "Read-through of every file in scope; python ast over tm/*.py for every log_action call (16) and every audit_log SQL site (1 writer); grep across naming variants for max_concurrent/_max_sessions, listen 80/ufw 80, server.crt/server.key/ssl_certificate, PPSM rows, rsyslog/chrony/timesyncd, and test/gate bindings (tests/*.sh, tests/lib/*, tests/mutations.txt, tools/*.sh, .gitlab-ci.yml). Frontend and shell reachability established by reading guards, not by AST (no JS or bash language server): INCOMPLETE for sites reached through string-built names.",
@@ -336,6 +336,44 @@
         "a durable DB marker for a record that missed syslog (e.g. an AUDIT_SYSLOG_FAILED row) - not built; the CRITICAL app-log line is the only trace",
         "lockparse now refuses non-PEP-440 versions pip would accept or reject on its own: the round-12 28k pip differential fuzz was not re-run against the merged parser",
         "top-level status left to the coordinator (frontend half)"
+      ]
+    },
+    {
+      "by": "builder (round 3: v1.1.1 merge, Sonar pre-check, REG-0014..0019)",
+      "date": "2026-09-28",
+      "worktree": "/Users/jamesrodman/Scripts/topic-manager-v120, branch release/v1.2.0 (base e1f0b73)",
+      "commits": [
+        "83af254 merge v1.1.1 (89f8c53) into release/v1.2.0",
+        "2095d65 sonar (v1.2.0): hold the new code to the gate that stopped v1.1.0",
+        "30ef852 gates (v1.2.0): REG-0014..REG-0019",
+        "e03ccdd tests (v1.2.0): close the survivors the mutation pass found in the refactor"
+      ],
+      "root_cause": "v1.2.0 was cut from v1.1.0, so it carried none of v1.1.1's fixes, and its own ~3,700 new lines had never been measured the way the release gate measures (new_violations > 0 fails; new-code period = previous version, now 1.1.1): 6 Python functions and 3 SettingsTab functions over cognitive complexity 15, hasOwnProperty.call, 5 nested ternaries, an ignored catch, 3 duplicated SQL literals. Separately, six gates/docs gaps from the register (REG-0014..0019).",
+      "merge": "14 conflicts, all version surfaces or the changelog head: kept 1.2.0/?v=1200; CHANGELOG keeps 1.2.0 > 1.1.1 > 1.1.0. auth.py/migrate_clusters.py merged clean (v1.2.0 never changed them); t07/t20 transcripts pass UNCHANGED - no transcript edited.",
+      "sonar_precheck": "A cognitive-complexity counter calibrated to Sonar's own v1.1.x findings (5/5 exact: 27, 24, 17, 17, 20; complexipy disagreed both ways and was not used for decisions), eslint-plugin-sonarjs+unicorn on changed JS lines (0 after), S1192 shape. Rule activation and existing issues read from sonar.int.crypticlight.com (read-only, no analysis uploaded). Refactored: apply.status 18, settings_schema.normalise 32, tls_check.validate 36, routes.login 16, routes.create_topic 16, gen-requirements-lock.check_closure 18; tools/lib (Sonar-excluded) pipelint 41/37/16, lockparse.parse 21; SettingsTab 25/31/26/18. All now <= 15. Not refactored: install/libexec/tm-apply (7 functions 18-45; not tm/ or tools/, and not indexed by Sonar - no .py suffix) and lockparse byte_problems/logical_lines (unchanged since v1.1.x).",
+      "files_changed": [
+        "tm/apply.py, tm/settings_schema.py, tm/tls_check.py, tm/routes.py, tm/audit_retention.py: S3776/S1192 refactors",
+        "tools/gen-requirements-lock.py, tools/lib/pipelint.py, tools/lib/lockparse.py: S3776 refactors (old/new differentials identical)",
+        "app/components/SettingsTab.js: S6653, S3776 x4, S3358 x5, S2486, S6353, S7781, S5852 shape, Sets for membership",
+        "tools/check-version-surfaces.sh (REG-0014), tests/run.sh (REG-0015), tests/t08 + t15 (REG-0016), NEW tools/check-frontend-syntax.sh (REG-0017), install/upgrade-full.sh (REG-0018), TROUBLESHOOTING.md (REG-0019)",
+        "tests: NEW t42; t10, t30 (+probe), t31, t35, t37, t39, t40, t41 cases; t30 '# tm-expect-cases: 9'; tests/mutations.txt M287-M301",
+        ".work/REGISTER.json REG-0014..0019; CHANGELOG.md"
+      ],
+      "amendments": [
+        ".claude/project.yml gates[frontend-syntax].cmd -> bash tools/check-frontend-syntax.sh: required by REG-0017 (the gate IS the fix)",
+        "tests/t40-frontend-backend-contract.sh: its structural lex of hostResponseError could not see the table-driven handler; it now RUNS the real handler per backend status/error pair (stronger) and follows hostApplyRequest",
+        "tools/lib/pipelint.py, tools/lib/lockparse.py: in tools/ per the brief although Sonar excludes **/lib/**"
+      ],
+      "t41_fixture_changed": "reg0010's 'live token in main.js' fixture is now a src= attribute (REG-0014 changes what a live token is); every assertion kept.",
+      "self_check": "py_compile tm/*.py tools; bash -n every edited shell file; node --check via the suite and the frontend-syntax gate; tests/mutations.txt anchors 301/301 exactly once; git diff re-read.",
+      "mutation_controls": "53 distinct manual controls, 77 runs (cp-backup, one at a time, PYTHONDONTWRITEBYTECODE, __pycache__ cleared, sha256-verified restore) + 15 via tests/mutate.sh. First pass 51: 33 RED, 18 SURVIVED (P1-P4 apply status, T1-T3 tls validate, S2, G8-G10 SettingsTab, L3 closure extras, Q1-Q5 pipelint) - all closed with new cases and re-run RED; H2 (t40) survived once (a fallback set that missed the backend's own reason), fixed, RED. Remaining: G2 (Object.hasOwn vs `in` on SETTINGS_FIELD_CHECKS) SURVIVES - documented EQUIVALENT: SETTINGS_V120_RANGES[key] answers every Object.prototype name before the field-check lookup.",
+      "suite": "Linux python:3.12-bookworm on 192.168.202.81, git-bundle clone of e03ccdd, CI TEST_SETUP (incl. nginx), CI TEST_COMMAND: check-requirements-lock --require-online PASS (15 releases hash-verified); tests/run.sh --strict 416 passed, 0 failed, 0 skipped, exit 0. Every declared gate exit 0 (13). t42 also passes against the pre-refactor tm (83af254). tests/mutate.sh M287-M301: 15/15 killed.",
+      "not_done": [
+        "install/libexec/tm-apply functions over 15 (load_job 39, plan_time 45, plan_syslog 37, execute 33, restore 19, plan_tls 18): outside tm/ and tools/, not analysed by Sonar; refactoring the root helper wants its own WO",
+        "tm/service_control.py 'no output' x4: an EXISTING Sonar issue (S1192, from v1.1.x); v1.2.0 added the 4th use; left - tracked as the same issue, not new code",
+        "tm/apply.py B904 (raise SystemExit inside except without from) x2: ruff only, no Sonar rule in the profile",
+        "CHANGELOG 1.2.0 is dated 2026-09-27, above 1.1.1 dated 2026-09-28: release date is surface-sweep's",
+        "lockparse 28k pip differential fuzz (round 12) not re-run; parse() was checked old-vs-new on 100k lock texts instead"
       ]
     }
   ]
