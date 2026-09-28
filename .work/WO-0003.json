@@ -804,6 +804,51 @@
     "linux_full": "python:3.12-bookworm on 192.168.202.81 with the CI TEST_SETUP, git bundle, git safe.directory set in the container: tests/run.sh --strict 295 passed, 0 failed, 0 skipped, exit 0."
    },
    "not_done": "check-sbom-consistency.sh and upgrade-full.sh still read the lock at column 0 (outside scope; made safe by the gate's layout rule, see consumers_addressed). No .gitlab-ci.yml change. Not pushed, not tagged."
+  },
+  "round12": {
+   "date": "2026-09-28",
+   "trigger": "gatekeeper round-11 re-gate NOT CONFIRMED: B1 (lock encoding: pip honours a BOM and a PEP 263 coding line; N01 latin-1/NEL, N02 utf-7) and B2 (check-sbom-consistency.sh kept a column-0 lock regex; N03 BOM hides the first entry, N04 version split across a continuation).",
+   "root_cause": {
+    "B1": "lockparse.read() decoded the lock as UTF-8 (BOM stripped), but pip decodes it with auto_decode: a BOM, else a coding declaration in the first two lines, else the locale. A 'coding: latin-1' line turns the UTF-8 bytes C5 85 into NEL (a line break to splitlines) and 'coding: utf-7' turns ASCII '+AAo-' into a newline, so pip read an entry the parser saw inside a comment. The one parser and pip did not agree on the TEXT, so agreeing on the rules was not enough.",
+    "B2": "check-sbom-consistency.sh never moved onto lockparse (round 11 said column-0 readers were safe because the gate refuses misleading layouts - false: the gate did not refuse a BOM on the first entry, and a version split across a continuation reads '0.6' at column 0)."
+   },
+   "files_changed": [
+    "tools/lib/lockparse.py: byte_problems()/LockEncodingError; read() accepts only pure ASCII (every byte < 0x80), no BOM, no PEP 263 coding line in lines 1-2 (regex ^[ \\t\\f]*#.*?coding[:=], stricter than pip's), no line break but LF (CRLF tolerated, as before) and no control char but TAB; FOREIGN_BREAKS moved from layout_problems() into the byte check; layout_problems() also refuses an entry whose name==version is not whole on its first line (N04); CLI exit 2 on an encoding refusal.",
+    "tools/check-requirements-lock.sh: prints each encoding problem as FAIL, exit 1.",
+    "tools/check-sbom-consistency.sh: transitive rows compared with lockparse's entries/versions (entry set is the parser's by construction); a lock the parser refuses is a FAIL; missing lockparse.py is exit 3.",
+    "tools/gen-requirements-lock.py: header em dash -> '-'; lock_bytes() checks the bytes to be written with byte_problems + parse + layout_problems and main() refuses to write a lock that fails; lock_set() reports an encoding refusal as FAIL (exit 1).",
+    "requirements.lock: header line 1 em dash -> '-' (byte-for-byte what the generator now writes; entries untouched).",
+    "tests/t25-requirements-lock.sh: 5 new cases; _sbom_copy ships tools/lib/lockparse.py.",
+    ".claude/project.yml: requirements-lock ROUND 12 note (round-11 column-0 claim marked FALSE), sbom-consistency ROUND 12 note, verified 2026-09-28.",
+    "CHANGELOG.md: [1.1.0] Round 12 section."
+   ],
+   "new_cases": [
+    "n01-n04-the-gate-refuses-a-lock-pip-could-decode-differently: N01, N02, N03, N04, BOM, UTF-16, coding line on line 2, raw 0x85, U+2028, 0x0b, 0x0c, 0x00, 0x7f, 0x80, 0x85 before CRLF -> exit 1 with the named reason; CRLF and a coding line on line 3 GREEN.",
+    "n03-n04-the-sbom-check-reads-the-lock-as-pip-does: N03 (+SBOM blinker 1.8.0) and N04 (+SBOM pyasn1 0.6) RED as measured; N04 with a true SBOM GREEN (the lock gate refuses it); every other fixture RED with the parser's reason; CRLF GREEN; missing parser exit 3.",
+    "n01-n02-every-consumer-refuses-a-coding-line: --check-set exit 1, SCA exit 3 (no 0.6.4 queried), lockparse CLI exit 2 with nothing on stdout.",
+    "the-generator-writes-only-plain-ascii: real render() (hashes stubbed) is ASCII and accepted; lock_bytes refuses the em dash and a split entry; main() refuses to write and writes nothing, then writes the rendered bytes.",
+    "n01-n04-pip-reads-the-raw-bytes-the-parser-refuses: pip's parse_requirements on the fixtures' raw bytes: pyasn1 0.4.8 from N01/N02 (hazard real), blinker from N03, 0.6.4 from N04; lockparse refuses N01-N03/BOM/UTF-16/coding2 and equals pip on N04, CRLF, coding3 and the real lock."
+   ],
+   "amendments": [
+    "requirements.lock (header line 1 only: U+2014 -> '-') - the real lock must satisfy the new ASCII rule; entries and hashes untouched."
+   ],
+   "consumers_addressed": "lockparse consumers 4/4 (gate, --check-set, sca via CLI, sbom now); sca-check.sh needed no change (CLI exit 2 -> its existing exit-3 refusal, t25 asserts it). upgrade-full.sh:1919-1922 LEFT as a column-0 grep: it checks only the seven direct pins and fails closed; the lock it installs has passed the gate (prepare-offline.sh runs it); moving it onto the parser would make the air-gapped installer depend on tools/lib/ in the bundle for no change in what pip installs. The new whole-at-column-0 rule makes grep and parser agree on any lock that passes.",
+   "live": "gatekeeper probe11.sh/probe11b.sh on the round-12 tree (python:3.12-bookworm, live PyPI/OSV): G00_real GATE 0 SBOM 0 (PASS 15 releases); N01, N02, N03, N03b, N05 GATE 1 SBOM 1; N04 GATE 1 SBOM 1; N04b GATE 1 SBOM 0 (SBOM true); SCA N01/N02/N03 exit 3; X20/X21 unchanged RED on the gate.",
+   "self_check": "py_compile lockparse.py and gen-requirements-lock.py; bash -n on both gates and t25; git diff re-read; no literal U+2028/U+0145 left in t25 (fixtures built from escapes).",
+   "mutation_controls": {
+    "method": "as round 11: private copy per control in python:3.12-bookworm on the Linux host (git bundle), anchor exactly once and file hash must change or ABORT, __pycache__ cleared, PYTHONDONTWRITEBYTECODE=1, full t25 per control, tree hash compared before/after (UNCHANGED). AST operators exhaustive over lockparse.py (124 mutants); 18 hand controls over every changed bash/generator line (G01-G03 gate, S01-S07 sbom, N01-N08 generator); 4 whole-file reverts to round 11 (R1 lockparse, R2 gate, R3 sbom, R4 generator).",
+    "first_pass": "146 run, 136 RED, 10 SURVIVED.",
+    "survivors_closed": "P05 coding check 'no <= 2' -> '<= 3' (no case on line 3) ; P10 CRLF strip line[:-1] -> [:-2] (no bad byte just before a CR) ; P14 '>= 0x80' -> '>= 0x81' (no 0x80 byte) ; P26 DEL '== 0x7f' -> 0x80 (no 0x7f byte). Closed by coding3 (GREEN), crlfnel, b80, del fixtures; each re-run RED.",
+    "final": "146 run, 140 RED, 6 SURVIVED - the round-11 documented equivalents: P51 final flush 'if buf' -> True; P60/P77/P86/P93 message truncation lengths; P121 CLI return 0 -> None (sys.exit(None) is 0). All G/S/N/R controls RED."
+   },
+   "test_runs": {
+    "linux_t25": "32 passed, 0 failed, 0 skipped",
+    "linux_full": "python:3.12-bookworm on 192.168.202.81, CI TEST_SETUP, git bundle: tests/run.sh --strict 300 passed, 0 failed, 0 skipped, exit 0."
+   },
+   "not_done": [
+    "upgrade-full.sh lock grep not moved onto the parser (reason in consumers_addressed).",
+    "gates not run as gatekeeper; no push/tag."
+   ]
   }
  },
  "decisions": [

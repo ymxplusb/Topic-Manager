@@ -54,10 +54,16 @@ for line in open(req, encoding="utf-8"):
         n, v = line.split("==", 1); pins[norm(n)] = v.strip()
 if not pins:
     print("FAIL: no == pins in requirements.txt"); sys.exit(1)
+# Round 12 (gatekeeper B1): read() refuses any byte pip could decode another
+# way (non-ASCII, a BOM, a coding line, a line break other than LF).
 try:
     text = lockparse.read(lock)
-except (OSError, UnicodeDecodeError) as e:
-    print("FAIL: requirements.lock cannot be read as UTF-8: %s" % e); sys.exit(1)
+except lockparse.LockEncodingError as e:
+    for p in e.problems:
+        print("FAIL: %s" % p)
+    print("check-requirements-lock: %d problem(s) — the lock must be plain ASCII." % len(e.problems)); sys.exit(1)
+except OSError as e:
+    print("FAIL: requirements.lock cannot be read: %s" % e); sys.exit(1)
 parsed, errors = lockparse.parse(text)
 fail = 0
 for e in errors + lockparse.layout_problems(text):

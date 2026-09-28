@@ -248,8 +248,14 @@ gates:
       bash -n still exited 0. Was prose in gate_verification; now a real gate.
   - name: sbom-consistency
     cmd: "bash tools/check-sbom-consistency.sh"
-    verified: 2026-09-26
+    verified: 2026-09-28
     note: >-
+      ROUND 12 (gatekeeper B2): the lock's entries and versions come from
+      tools/lib/lockparse.py (pip's rules), never a column-0 regex; a lock
+      the parser refuses is a FAIL. The regex kept a BOM glued to the first
+      entry (N03: blinker unseen, its SBOM row edited to 1.8.0 went green)
+      and read "pyasn1==0.6\" + ".4 \" as 0.6 (N04: SBOM row 0.6 green,
+      pip installs 0.6.4). Both RED in t25.
       ROUND 8: SBOM.md's transitive rows are held to requirements.lock (every
       locked package not in requirements.txt must be visible at the locked
       version); they were read and ignored.
@@ -365,10 +371,35 @@ gates:
       The gate also refuses a lock whose column-0 view differs from pip's (an
       entry-shaped line pip does not read, an indented entry, a CR/FF/Unicode
       line break), so the remaining column-0 readers (check-sbom-consistency,
-      upgrade-full.sh's pin grep) see what pip sees on any lock that passes.
+      upgrade-full.sh's pin grep) see what pip sees on any lock that passes
+      [FALSE — see ROUND 12 below].
       SCA queries every lock entry at the version pip installs and its
       handled count must equal the parser's. t25 compares lockparse with
       pip's own parser (pip._internal.req.req_file) on nine lock shapes.
+      ROUND 12 (gatekeeper B1/B2): the round-11 claim above that the
+      column-0 readers "see what pip sees" was FALSE for two reasons. (1)
+      pip does not decode the lock as UTF-8: a BOM, else a PEP 263 coding
+      line in the first two lines, else the locale (auto_decode). N01
+      ("coding: latin-1" + U+0145, whose 0x85 byte is NEL) and N02 ("coding:
+      utf-7" + ASCII "+AAo-") made pip read a hidden pyasn1==0.4.8 entry:
+      gate PASS 15, SBOM green, SCA "0.6.4 CLEAN", pip installed 0.4.8. The
+      lock must now be PURE ASCII: every byte < 0x80, no BOM, no coding
+      declaration in lines 1-2, no line break but LF (CRLF tolerated), no
+      control character but TAB. lockparse.read() refuses anything else, so
+      the gate, --check-set, SCA and the SBOM check all refuse it; the
+      generator writes only ASCII (its header's em dash is now "-") and
+      refuses to write a lock these rules would refuse. (2) check-sbom-
+      consistency.sh kept its own column-0 regex (see sbom-consistency) and
+      now uses the parser. The gate also refuses an entry whose name==version
+      is not whole on its first line (N04). upgrade-full.sh's direct-pin grep
+      stays a column-0 grep: it only confirms the seven direct pins and fails
+      CLOSED on any lock it cannot match, and it runs on an air-gapped host
+      from a tree whose lock has already passed this gate (prepare-offline.sh
+      runs it); moving it onto the parser would make the installer depend on
+      tools/lib/ being in the bundle for no change in what pip installs.
+      t25: N01-N04 plus BOM, UTF-16, raw 0x85/0x0b/0x0c/0x00/U+2028 and a
+      coding line on line 2 are RED on the gate and on the SBOM check; the
+      pip oracle reads the fixtures' raw bytes.
       WHERE THE REAL LOCK IS CHECKED AGAINST LIVE PyPI IN v1.1.0 (James,
       round 10): only (a) prepare-offline.sh, which runs this gate and dies on
       any non-zero exit (prepare-offline.sh:63), and (b) running this gate by

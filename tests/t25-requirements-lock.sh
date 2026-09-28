@@ -734,8 +734,9 @@ tm_case "sca-refuses-a-lock-it-cannot-read-in-full" none s_sca_refuses_a_short_o
 
 _sbom_copy() {
     local r="${TM_TMP}/sb"
-    mkdir -p "$r/tools" "$r/install" "$r/app/components/modals"
+    mkdir -p "$r/tools/lib" "$r/install" "$r/app/components/modals"
     cp "${TM_REPO_ROOT}/tools/check-sbom-consistency.sh" "$r/tools/"
+    cp "${TM_REPO_ROOT}/tools/lib/lockparse.py" "$r/tools/lib/"
     cp "${TM_REPO_ROOT}"/requirements.txt "${TM_REPO_ROOT}"/requirements.lock "${TM_REPO_ROOT}"/SBOM.md "${TM_REPO_ROOT}"/NOTICES.md "$r/"
     cp "${TM_REPO_ROOT}/install/upgrade-full.sh" "$r/install/"
     cp "${TM_REPO_ROOT}/app/components/modals/AboutModal.js" "$r/app/components/modals/"
@@ -757,5 +758,263 @@ b_sbom_transitive() {
     tm_assert_grep "pyasn1             NOT in SBOM.md" "${TM_TMP}/out" "the missing transitive row was not named"
 }
 tm_case "sbom-transitive-rows-are-held-to-the-lock" none b_sbom_transitive
+
+# ─── round 12 (gatekeeper B1/B2): the lock's ENCODING, and the SBOM reader ───
+# B1: pip decodes the lock by a byte-order mark, else by a PEP 263 coding line
+# in its first two lines, else by the locale — never simply as UTF-8.
+#   N01  "# -*- coding: latin-1 -*-" and a comment holding U+0145 (C5 85): 0x85
+#        is NEL, a line break, to a latin-1 reader, so pip read
+#        "pyasn1==0.4.8 --hash=<real> \" as an entry and it swallowed the real
+#        0.6.4 line. Gate PASS 15, SBOM 0, SCA "0.6.4 CLEAN"; pip installed 0.4.8.
+#   N02  the same with "coding: utf-7" and the pure-ASCII "+AAo-" (a newline).
+# The rule is now: pure ASCII, no BOM, no coding line, LF (CRLF) only.
+# B2: check-sbom-consistency.sh read the lock with a column-0 regex of its own:
+#   N03  a BOM glued to the first entry (blinker) hid it, so its SBOM row could
+#        say 1.8.0 with every gate green (pip installs 1.9.0).
+#   N04  "pyasn1==0.6\" + ".4 \": pip reads 0.6.4, the regex read 0.6, and an
+#        SBOM row of 0.6 was green.
+# _nlock <case> <out> — the fixture, built from the real lock's BYTES.
+_nlock() {
+    "$(tm_python)" - "$1" "${TM_REPO_ROOT}/requirements.lock" "$2" "$PYASN1_048_HASH" <<'PY' || tm_die "could not build the $1 fixture"
+import sys
+case, src, dst, h = sys.argv[1:5]
+raw = open(src, "rb").read().replace(b"\r\n", b"\n")
+lines = raw.split(b"\n")
+def at(prefix):
+    (i,) = [k for k, l in enumerate(lines) if l.startswith(prefix)]
+    return i
+pa = at(b"pyasn1==")
+hidden = b"pyasn1==0.4.8 --hash=sha256:" + h.encode() + b" \\"
+def comment_before_pyasn1(mid):
+    return lines[:pa] + [b"# note " + mid + hidden] + lines[pa:]
+if case == "n01":
+    out = comment_before_pyasn1(u"\u0145".encode("utf-8")); out[0] = b"# -*- coding: latin-1 -*-"
+elif case == "n02":
+    out = comment_before_pyasn1(b"+AAo-"); out[0] = b"# -*- coding: utf-7 -*-"
+elif case == "n03":
+    out = lines[at(b"blinker=="):]; out[0] = b"\xef\xbb\xbf" + out[0]
+elif case == "n04":
+    out = lines[:pa] + [b"pyasn1==0.6\\", b".4 \\"] + lines[pa + 1:]
+elif case == "bom":
+    out = list(lines); out[0] = b"\xef\xbb\xbf" + out[0]
+elif case == "coding2":
+    out = list(lines); out[1] = b"# -*- coding: utf-8 -*-"
+elif case in ("nel", "vt", "ff", "u2028", "nul", "b80", "del"):
+    mid = {"nel": b"\x85", "vt": b"\x0b", "ff": b"\x0c", "u2028": u"\u2028".encode("utf-8"), "nul": b"\x00",
+           "b80": b"\x80", "del": b"\x7f"}[case]
+    out = comment_before_pyasn1(mid)
+elif case == "coding3":     # a coding line on line 3: pip ignores it, so may the parser
+    out = list(lines); out[2] = b"# -*- coding: utf-7 -*-"
+elif case == "crlfnel":     # CRLF is stripped, and ONLY the CR: the byte before it is still checked
+    out = lines[:pa] + [b"# note x\x85"] + lines[pa:]
+    open(dst, "wb").write(b"\r\n".join(out)); sys.exit(0)
+elif case == "crlf":
+    open(dst, "wb").write(raw.replace(b"\n", b"\r\n")); sys.exit(0)
+elif case == "utf16":
+    open(dst, "wb").write(raw.decode("ascii").encode("utf-16")); sys.exit(0)
+else:
+    sys.exit("unknown case " + case)
+data = b"\n".join(out)
+assert data != raw, case
+open(dst, "wb").write(data)
+PY
+    cmp -s "${TM_REPO_ROOT}/requirements.lock" "$2" && tm_die "the $1 fixture changed nothing"
+    return 0
+}
+PA="$(awk '/^pyasn1==/ { print NR; exit }' "${TM_REPO_ROOT}/requirements.lock")"    # the real pyasn1 line
+[ -n "$PA" ] || tm_die "the real lock has no pyasn1 line"
+# The message each fixture must be refused with — by the gate AND by the SBOM check.
+_nwhy() {
+    case "$1" in
+        n01)     echo "requirements.lock line 1: a coding declaration (PEP 263)" ;;
+        n02)     echo "requirements.lock line 1: a coding declaration (PEP 263)" ;;
+        n03)     echo "requirements.lock starts with a byte-order mark" ;;
+        n04)     echo "requirements.lock line ${PA}: pyasn1==0.6.4 is not written whole on its first line" ;;
+        bom)     echo "requirements.lock starts with a byte-order mark" ;;
+        utf16)   echo "requirements.lock starts with a byte-order mark" ;;
+        coding2) echo "requirements.lock line 2: a coding declaration (PEP 263)" ;;
+        nel)     echo "requirements.lock line ${PA} col 8: byte 0x85 is not ASCII" ;;
+        u2028)   echo "requirements.lock line ${PA} col 8: byte 0xe2 is not ASCII" ;;
+        vt)      echo "requirements.lock line ${PA}: a line break pip honours and grep does not (byte 0x0b)" ;;
+        ff)      echo "requirements.lock line ${PA}: a line break pip honours and grep does not (byte 0x0c)" ;;
+        nul)     echo "requirements.lock line ${PA} col 8: control character 0x00" ;;
+        del)     echo "requirements.lock line ${PA} col 8: control character 0x7f" ;;
+        b80)     echo "requirements.lock line ${PA} col 8: byte 0x80 is not ASCII" ;;
+        crlfnel) echo "requirements.lock line ${PA} col 9: byte 0x85 is not ASCII" ;;
+    esac
+}
+N_CASES="n01 n02 n03 n04 bom utf16 coding2 nel u2028 vt ff nul del b80 crlfnel"
+
+n_gate_refuses_encodings() {
+    _offline
+    local x
+    for x in $N_CASES; do
+        _copy; _nlock "$x" "${TM_TMP}/c/requirements.lock"
+        RC=0; PATH="${TM_TMP}/nobin:${PATH}" TM_LOCK_OFFLINE_OK=1 bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 || RC=$?
+        tm_assert_rc 1 "$RC" "${x}: the gate passed it: $(cat "${TM_TMP}/out")"
+        tm_assert_grep "FAIL: $(_nwhy "$x")" "${TM_TMP}/out" "${x}: not refused for the right reason"
+    done
+    # N01/N02 carry a second, independent problem each: the non-ASCII byte
+    # (N01) — so a coding line alone and a stray byte alone are both refusals.
+    _copy; _nlock n01 "${TM_TMP}/c/requirements.lock"
+    RC=0; PATH="${TM_TMP}/nobin:${PATH}" TM_LOCK_OFFLINE_OK=1 bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 || RC=$?
+    tm_assert_grep "FAIL: requirements.lock line ${PA} col 8: byte 0xc5 is not ASCII" "${TM_TMP}/out" "N01: the C5 85 bytes were not named"
+    # CRLF is tolerated (as before): same bytes pip, grep and the parser split
+    # alike. A coding line on line 3 is not one pip reads (it looks at two).
+    for x in crlf coding3; do
+        _copy; _nlock "$x" "${TM_TMP}/c/requirements.lock"
+        RC=0; PATH="${TM_TMP}/nobin:${PATH}" TM_LOCK_OFFLINE_OK=1 bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 || RC=$?
+        tm_assert_rc 0 "$RC" "${x}: an otherwise real lock went red: $(cat "${TM_TMP}/out")"
+        tm_assert_grep "15 packages locked" "${TM_TMP}/out" "${x}: the lock lost entries"
+    done
+}
+tm_case "n01-n04-the-gate-refuses-a-lock-pip-could-decode-differently" none n_gate_refuses_encodings
+
+_sbom_run() { RC=0; bash "${TM_TMP}/sb/tools/check-sbom-consistency.sh" > "${TM_TMP}/out" 2>&1 || RC=$?; }
+n_sbom_reads_the_lock_as_pip_does() {
+    local x
+    # N03 / N04 exactly as measured: the SBOM row edited to what the old
+    # column-0 regex saw. Both must now be RED.
+    _sbom_copy; _nlock n03 "${TM_TMP}/sb/requirements.lock"
+    sed -i 's/^| blinker | 1\.9\.0 |/| blinker | 1.8.0 |/' "${TM_TMP}/sb/SBOM.md"
+    grep -q '^| blinker | 1\.8\.0 |' "${TM_TMP}/sb/SBOM.md" || tm_die "the N03 SBOM edit changed nothing"
+    _sbom_run
+    tm_assert_rc 1 "$RC" "N03: a BOM-hidden blinker with its SBOM row at 1.8.0 passed: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "requirements.lock does not parse as pip reads it" "${TM_TMP}/out" "N03: not refused as unparseable"
+    tm_assert_grep "requirements.lock starts with a byte-order mark" "${TM_TMP}/out" "N03: the BOM was not named"
+    _sbom_copy; _nlock n04 "${TM_TMP}/sb/requirements.lock"
+    sed -i 's/^| pyasn1 | 0\.6\.4 |/| pyasn1 | 0.6 |/' "${TM_TMP}/sb/SBOM.md"
+    grep -q '^| pyasn1 | 0\.6 |' "${TM_TMP}/sb/SBOM.md" || tm_die "the N04 SBOM edit changed nothing"
+    _sbom_run
+    tm_assert_rc 1 "$RC" "N04: an SBOM row of 0.6 for the 0.6.4 pip installs passed: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "pyasn1             SBOM.md says 0.6        requirements.lock says 0.6.4" "${TM_TMP}/out" "N04: the version pip reads (0.6.4) was not the one compared"
+    # N04 with the SBOM row left TRUE (0.6.4) is green here — the SBOM is
+    # right; the split entry is the lock gate's refusal (above).
+    _sbom_copy; _nlock n04 "${TM_TMP}/sb/requirements.lock"; _sbom_run
+    tm_assert_rc 0 "$RC" "N04 with a true SBOM row went red: $(cat "${TM_TMP}/out")"
+    # N03 with blinker's row left TRUE: still RED, the lock itself is refused.
+    for x in $N_CASES; do
+        [ "$x" = n04 ] && continue
+        _sbom_copy; _nlock "$x" "${TM_TMP}/sb/requirements.lock"; _sbom_run
+        tm_assert_rc 1 "$RC" "${x}: the SBOM check passed it: $(cat "${TM_TMP}/out")"
+        tm_assert_grep "    $(_nwhy "$x")" "${TM_TMP}/out" "${x}: not refused for the right reason"
+    done
+    # A CRLF lock is read, entry for entry, as the LF one.
+    _sbom_copy; _nlock crlf "${TM_TMP}/sb/requirements.lock"; _sbom_run
+    tm_assert_rc 0 "$RC" "a CRLF copy of the real lock went red: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "(8 transitive packages agree with requirements.lock)" "${TM_TMP}/out" "the CRLF lock lost transitive entries"
+    _sbom_copy; rm -f "${TM_TMP}/sb/tools/lib/lockparse.py"; _sbom_run
+    tm_assert_rc 3 "$RC" "the SBOM check ran without the lock parser: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "lockparse.py is missing" "${TM_TMP}/out" "the missing parser was not named"
+}
+tm_case "n03-n04-the-sbom-check-reads-the-lock-as-pip-does" none n_sbom_reads_the_lock_as_pip_does
+
+# The other consumers of the parser refuse the same bytes: --check-set, SCA and
+# the command line (exit 2, "cannot read").
+n_consumers_refuse() {
+    _fake_resolver; _copy; _nlock n01 "${TM_TMP}/c/requirements.lock"; _check_set "${TM_TMP}/c"
+    tm_assert_rc 1 "$RC" "N01: --check-set compared a lock pip decodes differently: $(cat "${TM_TMP}/cs-out")"
+    tm_assert_grep "FAIL: requirements.lock line 1: a coding declaration (PEP 263)" "${TM_TMP}/cs-out" "N01: --check-set did not say why"
+    _copy; _nlock n01 "${TM_TMP}/c/requirements.lock"
+    _sca_tree "${TM_TMP}/c/requirements.lock"; _sca_run
+    tm_assert_rc 3 "$RC" "N01: SCA passed a lock from which pip installs pyasn1 0.4.8: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "does not parse as pip reads it" "${TM_TMP}/out" "N01: SCA did not say why"
+    grep -Eq '^  pyasn1 +0\.6\.4 ' "${TM_TMP}/out" && _tm_afail "N01: SCA still queried the 0.6.4 pip does not install"
+    _copy; _nlock n02 "${TM_TMP}/c/requirements.lock"
+    RC=0; "$(tm_python)" "${TM_REPO_ROOT}/tools/lib/lockparse.py" "${TM_TMP}/c/requirements.lock" > "${TM_TMP}/out" 2>"${TM_TMP}/err" || RC=$?
+    tm_assert_rc 2 "$RC" "N02 through the command line"
+    [ -s "${TM_TMP}/out" ] && _tm_afail "N02: entries were printed for a refused lock: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "a coding declaration (PEP 263)" "${TM_TMP}/err" "N02: the refusal was not on stderr"
+}
+tm_case "n01-n02-every-consumer-refuses-a-coding-line" none n_consumers_refuse
+
+# The generator never writes a lock that breaks the rule, and refuses to: its
+# real render() (hashes stubbed, no network) is plain ASCII the parser accepts,
+# and lock_bytes() refuses the round-11 header's em dash.
+n_generator_writes_ascii() {
+    TMPDIR="${TM_TMP}" "$(tm_python)" - "${TM_REPO_ROOT}/tools/gen-requirements-lock.py" > "${TM_TMP}/out" 2>&1 <<'PY' || _tm_afail "the generator: $(cat "${TM_TMP}/out")"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gen", sys.argv[1]); g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+g.wheel_hashes = lambda n, v: ["%064x" % 1, "%064x" % 2]
+text = g.render([("blinker", "1.9.0"), ("cffi", "2.1.1")])
+data, probs = g.lock_bytes(text)
+assert probs == [], probs
+assert max(data) < 0x80 and data == text.encode("ascii"), "not plain ASCII"
+bad = text.replace(" - GENERATED", " — GENERATED", 1)
+assert bad != text, "the em-dash fixture changed nothing"
+data, probs = g.lock_bytes(bad)
+assert probs and "byte 0xe2 is not ASCII" in probs[0], probs
+split = text.replace("cffi==2.1.1 \\", "cffi==2.1\\\n.1 \\", 1)
+assert split != text, "the split fixture changed nothing"
+probs = g.lock_bytes(split)[1]
+assert any("cffi==2.1.1 is not written whole" in p for p in probs), probs
+# main() itself: refuses to write a lock lock_bytes() refuses, writes the bytes otherwise.
+import os, tempfile
+g.LOCK = os.path.join(tempfile.mkdtemp(), "requirements.lock")
+g.resolve = lambda: [("blinker", "1.9.0"), ("cffi", "2.1.1")]
+sys.argv = ["gen-requirements-lock.py"]
+real_render = g.render
+g.render = lambda pins: real_render(pins).replace(" - GENERATED", " \u2014 GENERATED", 1)
+try:
+    g.main(); rc = 0
+except SystemExit as e:
+    rc = e.code
+assert rc == 1 and not os.path.exists(g.LOCK), "main() wrote a lock with a non-ASCII byte (rc %r)" % rc
+g.render = real_render
+g.main()
+assert open(g.LOCK, "rb").read() == text.encode("ascii"), "main() did not write the rendered lock"
+print("generator OK")
+PY
+    tm_assert_grep "generator OK" "${TM_TMP}/out" "the generator check did not finish"
+}
+tm_case "the-generator-writes-only-plain-ascii" none n_generator_writes_ascii
+
+# pip's OWN reader on the fixtures' raw BYTES (pip._internal.req.req_file reads
+# the file and decodes it with auto_decode — BOM, coding line, locale): what pip
+# would install from each, against lockparse. The hazard is real (pip reads
+# pyasn1 0.4.8 from N01 and N02, blinker from N03, 0.6.4 from N04) and the
+# parser refuses N01-N03 outright; on N04 it reads pip's 0.6.4.
+n_pip_oracle_raw_bytes() {
+    local x
+    mkdir -p "${TM_TMP}/nraw"
+    for x in n01 n02 n03 n04 bom utf16 coding2 coding3 crlf; do _nlock "$x" "${TM_TMP}/nraw/${x}.lock"; done
+    cp "${TM_REPO_ROOT}/requirements.lock" "${TM_TMP}/nraw/real.lock"
+    "$(tm_python)" - "${TM_REPO_ROOT}/tools/lib" "${TM_TMP}/nraw" > "${TM_TMP}/out" 2>&1 <<'PY' || _tm_afail "pip and the parser: $(cat "${TM_TMP}/out")"
+import os, sys
+sys.path.insert(0, sys.argv[1]); import lockparse
+from pip._internal.req.req_file import parse_requirements
+from pip._vendor.packaging.requirements import Requirement
+want = {  # what pip reads from the raw bytes, for the packages the fixture is about
+    "n01": {"pyasn1": "0.4.8"}, "n02": {"pyasn1": "0.4.8"}, "n03": {"blinker": "1.9.0"},
+    "n04": {"pyasn1": "0.6.4"}, "bom": {"blinker": "1.9.0"}, "utf16": {"pyasn1": "0.6.4"},
+    "coding2": {"pyasn1": "0.6.4"}, "coding3": {"pyasn1": "0.6.4"}, "crlf": {"pyasn1": "0.6.4"}, "real": {"pyasn1": "0.6.4"},
+}
+accepted = {"n04", "crlf", "coding3", "real"}           # the bytes the parser reads (n04 is refused by layout)
+bad = 0
+for fn in sorted(os.listdir(sys.argv[2])):
+    x = fn[:-5]; path = os.path.join(sys.argv[2], fn)
+    pip = {}
+    for pr in parse_requirements(path, session=None):
+        r = Requirement(pr.requirement); (spec,) = list(r.specifier)
+        pip[lockparse.norm(r.name)] = spec.version
+    try:
+        ents, errs = lockparse.parse(lockparse.read(path))
+        ours = {e["key"]: e["version"] for e in ents}; verdict = "read"
+    except lockparse.LockEncodingError as e:
+        ours, errs, verdict = None, e.problems, "REFUSED"
+    ok = all(pip.get(k) == v for k, v in want[x].items())
+    if x in accepted:
+        ok = ok and ours == pip and not errs
+    else:
+        ok = ok and verdict == "REFUSED"
+    print("%-8s pip reads %s  lockparse %s  %s" % (x, " ".join("%s==%s" % (k, pip.get(k)) for k in want[x]), verdict, "OK" if ok else "WRONG"))
+    bad += not ok
+sys.exit(1 if bad else 0)
+PY
+    tm_assert_grep "n01      pip reads pyasn1==0.4.8  lockparse REFUSED  OK" "${TM_TMP}/out" "N01 was not measured against pip"
+    tm_assert_grep "n02      pip reads pyasn1==0.4.8  lockparse REFUSED  OK" "${TM_TMP}/out" "N02 was not measured against pip"
+    tm_assert_grep "n04      pip reads pyasn1==0.6.4  lockparse read  OK" "${TM_TMP}/out" "N04 was not measured against pip"
+}
+tm_case "n01-n04-pip-reads-the-raw-bytes-the-parser-refuses" none n_pip_oracle_raw_bytes
 
 tm_finish

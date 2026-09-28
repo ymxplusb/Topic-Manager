@@ -278,6 +278,22 @@ Adversary and security-review findings, all fixed on this branch before release:
 - The lock gate reads the completeness verdict and its count instead of relying on exit 0.
   The resolver now times out after 600 s and reports "could not verify".
 
+### Round 12 (gatekeeper, 2026-09-28)
+
+- **`requirements.lock` must be plain ASCII.** pip does not read the lock as UTF-8: it
+  honours a byte-order mark and a `# -*- coding: ... -*-` line in the first two lines. A
+  lock declaring `coding: latin-1` (or `utf-7`) could make pip read an entry that every gate
+  saw inside a comment: all gates passed and SCA reported pyasn1 0.6.4 clean while pip
+  installed 0.4.8. The shared parser now refuses any byte of 0x80 or above, a byte-order
+  mark, a coding line, a line break other than LF (CRLF is still accepted) and any control
+  character other than TAB. So the lock gate, the completeness check, SCA and the SBOM
+  check all refuse such a lock. The generator writes only ASCII (its header no longer has
+  an em dash) and will not write a lock these rules refuse.
+- **The SBOM check reads the lock through the same parser.** It had its own column-0
+  pattern, which missed an entry behind a byte-order mark and read a version split across a
+  continuation line (`pyasn1==0.6\` then `.4`) as `0.6`. In both cases a wrong SBOM row
+  passed. The lock gate also refuses an entry whose `name==version` is split across lines.
+
 ### Known limitations
 
 - **FIPS module boundary**: the `cryptography` and `confluent-kafka` wheels bundle their own
