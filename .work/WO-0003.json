@@ -758,6 +758,52 @@
     "linux_full": "same container with the CI TEST_SETUP (sudo nodejs jq curl + pip -r requirements.txt): tests/run.sh --strict 286 passed, 0 failed, 0 skipped, exit 0. (Without the TEST_SETUP pip step, t20 fails 4 cases on 'No module named yaml' - environment, not this change.)"
    },
    "not_done": "No .gitlab-ci.yml change (James's ruling; v1.2.0 / REG-0007). Not pushed, not tagged."
+  },
+  "round11": {
+   "date": "2026-09-28",
+   "trigger": "gatekeeper round-10 re-gate: B1/B2 closed; NOT CONFIRMED on N1 (blocking) - the lock is parsed by more than one set of rules (X20, X21). Non-blocking TM-RL-002/-004/-005 in the same pass.",
+   "root_cause": {
+    "N1": "requirements.lock had three readers with three rule sets. Round 10 moved the gate to pip's rules but gen-requirements-lock.py lock_set() (--check-set) and sca-check.sh kept raw column-0 regexes. A comment ending in a backslash makes pip join the next entry into the comment: pip and the gate lose it while the column-0 readers still count it (X20: cffi gone, --check-set 'covers', gate PASS 14 releases). An indented entry is read by pip but not by a column-0 regex (X21: pip installs pyasn1 0.4.8, --check-set and SCA see the swallowed 0.6.4). The round-10 claim that lock_set() was 'not affected' was false: it was the second parser.",
+    "TM-RL-004": "the gate split requirement lines on any whitespace (\\s+); pip splits on the space character only, so a TAB before --hash is one malformed requirement to pip.",
+    "TM-RL-005": "the gate accepted --check-set's exit 0 without reading its verdict or count; resolve() had no timeout.",
+    "TM-RL-002": "sca skipped any line its regex did not match (indented entries) and its only floor was '> 0 transitive pins'; it also skipped a lock entry whenever requirements.txt had the same NAME, so it queried requirements.txt's version rather than the one pip installs."
+   },
+   "files_changed": [
+    "tools/lib/lockparse.py (NEW): the one parser of requirements.lock - pip's join_lines/ignore_comments/break_args_options verbatim in behaviour; accepts only name==version + --hash=sha256:<64 hex>; errors for duplicates, no hash, malformed hash, any other option, any non-pin line. layout_problems(): stricter than pip - refuses an entry-shaped line pip does not read, an indented entry, and CR/VT/FF/Unicode line breaks, so column-0 readers see pip's view. CLI for bash consumers: name==version lines + '#entries N'; exit 1 parse error, 2 unreadable/usage.",
+    "tools/check-requirements-lock.sh: structure check imports lockparse (parse + layout_problems) instead of its own copy of pip's rules; after --check-set exit 0, requires the verdict line and that its package count equals the lock's entry count (else exit 3 / exit 1).",
+    "tools/gen-requirements-lock.py: lock_set() is lockparse.parse (a lock with parse errors is exit 1, never a partial set); lock read before resolving; resolver timeout 600 s (TM_LOCK_RESOLVE_TIMEOUT overrides, used by t25) -> 'could not resolve', exit 3.",
+    "tools/sca-check.sh: lock entries come from lockparse.py's CLI; every entry queried at the version pip installs; a direct pin skipped only when requirements.txt queried the same normalised name AND version; handled count must equal '#entries N' (and > 0), a parser failure/missing parser/unexpected line is exit 3. bash-3 compatible (no assoc arrays); cygpath for Windows python.",
+    "tests/t25-requirements-lock.sh: 9 new cases (see new_cases).",
+    ".claude/project.yml: requirements-lock note (round 11; --check-set now compares the set pip reads - makes the ~319 claim true; verdict/count check; timeout) and sca note (round 11, count = parser count, live measurement); sca verified date.",
+    "CHANGELOG.md: [1.1.0] Round 11 section."
+   ],
+   "new_cases": [
+    "x20-x21-check-set-sees-exactly-what-pip-installs: REAL generator --check-set against a stand-in pip module (PYTHONPATH) that reports the real resolved set: real lock 15 GREEN; X20 -> MISSING cffi==2.1.1 exit 1; X21 -> MISSING pyasn1==0.6.4 + NOT in resolved pyasn1==0.4.8 exit 1.",
+    "x20-x21-the-gate-refuses-a-lock-pip-reads-differently: full gate, real generator, fake PyPI (incl. the real pyasn1 0.4.8 wheel hash): X20 and X21 exit 1 and named; the same harness on the real lock GREEN.",
+    "a-tab-before-hash-is-refused-as-pip-refuses-it (TM-RL-004).",
+    "the-lock-parser-agrees-with-pips-own-parser: lockparse vs pip._internal.req.req_file.parse_requirements on 9 shapes (real, X20, X21, TAB, TAB between hashes, column-0 comment, trailing backslash, glued #, hash split across a continuation): identical name==version sets; lockparse errors wherever pip refuses.",
+    "the-lock-parser-refuses-what-a-consumer-could-misread: duplicate, no hash, --config-settings option, lone CR and FF line breaks (named with line number); --check-set refuses a TAB lock.",
+    "lockparse-cli-exit-codes: 0 + '#entries 15'; 1 with nothing on stdout; 2 non-UTF-8 (file named); 2 usage.",
+    "the-gate-reads-the-completeness-verdict-and-the-resolver-times-out (TM-RL-005): no verdict -> 3; '(14 packages)' vs 15 entries -> 1; hanging resolver with a 2 s timeout -> 3 'timed out'.",
+    "sca-queries-the-version-pip-installs: stand-in curl as OSV/PyPI; real lock 15 of 15 clean, each direct pin queried once (also with requirements.txt spelt in lower case); X21 -> pyasn1 0.4.8 VULNERABLE exit 1 and 0.6.4 never queried; X20 -> 14 of 14, cffi not queried; lock Flask 3.1.2 under requirements.txt 3.1.3 -> Flask 3.1.2 queried, exit 1.",
+    "sca-refuses-a-lock-it-cannot-read-in-full (TM-RL-002): TAB lock -> 3; parser hands 1 of 15 -> 3; non name==version parser line -> 3; '#entries 0' -> 3; parser exit 1 with output -> 3; parser missing -> 3."
+   ],
+   "amendments": [],
+   "consumers_addressed": "3/3 named readers (gate, gen --check-set/lock_set and --check via the gate, sca) now use tools/lib/lockparse.py. Two column-0 readers remain OUTSIDE scope and were NOT edited: tools/check-sbom-consistency.sh:180 (SBOM transitive rows vs lock) and install/upgrade-full.sh:1919-1922 (direct-pin grep before pip install). They are not re-pointed at the parser (sbom would need its t25 fixture to carry tools/lib; upgrade-full runs on the target from the bundle, where tools/lib is not guaranteed). Instead the gate's layout_problems() refuses any lock whose column-0 view differs from pip's, so on a lock that passes the gate those readers see exactly pip's entries. Deferred, not hidden: moving both onto lockparse is a v1.2.0 candidate.",
+   "deferred": [],
+   "self_check": "bash -n on every tools/*.sh and t25; py_compile lockparse.py + gen-requirements-lock.py; project.yml parses (PyYAML, in the container); git diff re-read.",
+   "live": "2026-09-28, python:3.12-bookworm on the Linux host, live PyPI + OSV: real lock gate PASS 15 releases exit 0; SCA 15 of 15, all pins clean. X20: gate exit 1 (cffi line swallowed). X21: gate exit 1 (0.4.8 not at column 0; 0.6.4 and swallowed line named); SCA exit 1, pyasn1 0.4.8 VULNERABLE (GHSA-8ppf-4f7h-5ppj, GHSA-hm4w-wwcw-mr6r, GHSA-jr27-m4p2-rc6r, GHSA-m4p7-r5rc-7g4j, PYSEC-2026-2263/3455/3456/3457); real pip --dry-run --require-hashes on the X21 lock would install pyasn1-0.4.8 (from line 297).",
+   "mutation_controls": {
+    "method": "python:3.12-bookworm on the Linux host, tree shipped as git bundle; each control on a private copy (/m/<id>) of the tree, never the tree itself; anchor must match exactly once and the file hash must change or the control ABORTS; __pycache__ cleared, PYTHONDONTWRITEBYTECODE=1; full t25 per control, 10 in parallel; tree sha256 compared before/after the run (UNCHANGED). Mechanical AST operators exhaustive over tools/lib/lockparse.py (comparison flip, and/or, not dropped, guard->False/True, int constant +1, return/yield value -> None: 93 mutants P01-P93); 23 hand controls over every changed bash/generator line (H01-H23); 3 whole-file reverts to round 10 (R1 gate, R2 generator, R3 sca).",
+    "first_pass_survivors_closed": "H08 (lock_set ignores parse errors), H17 (sca ignores parser exit 1), H20 (sca name not lower-cased), P07 (continuation join adds a space), P39/P44/P46 (non-hash option accepted/crashes), P42 (duplicates accepted), P49/P51 (no-hash message never asserted offline), P59/P61 (CR/FF layout check), P77-P85 (CLI exit codes), P58 (line number) - closed by the-lock-parser-refuses-what-a-consumer-could-misread, lockparse-cli-exit-codes, the splithash differential shape and the sca additions; each re-run RED.",
+    "final": "119 run, 109 RED, 10 SURVIVED - all documented equivalents: H10 default timeout 600->601 (not observable without a 10-minute hang); H13 sca guard without the '-z LEXPECT' disjunct (empty LEXPECT makes '-ne' compare with 0, still refused); H22 sca missing-parser exit dropped (python then fails, refused by the next guard with the message already printed); P19 final flush 'if buf' -> True (joins an empty buffer to an empty line, dropped); P28/P45/P54/P67 message truncation lengths; P62 early return in layout_problems (the later checks add more FAILs, same verdict); P90 return 0 -> None (sys.exit(None) is 0).",
+    "results_R": "R1 gate@round10 RED (4 cases), R2 generator@round10 RED (3), R3 sca@round10 RED (2)."
+   },
+   "test_runs": {
+    "linux_t25": "27 passed, 0 failed, 0 skipped",
+    "linux_full": "python:3.12-bookworm on 192.168.202.81 with the CI TEST_SETUP, git bundle, git safe.directory set in the container: tests/run.sh --strict 295 passed, 0 failed, 0 skipped, exit 0."
+   },
+   "not_done": "check-sbom-consistency.sh and upgrade-full.sh still read the lock at column 0 (outside scope; made safe by the gate's layout rule, see consumers_addressed). No .gitlab-ci.yml change. Not pushed, not tagged."
   }
  },
  "decisions": [

@@ -259,6 +259,25 @@ Adversary and security-review findings, all fixed on this branch before release:
   and stops on any failure) and when the gate is run by hand (2026-09-28: PASS, 15 releases).
   v1.2.0 adds a `--require-online` CI step.
 
+### Round 11 (gatekeeper, 2026-09-28)
+
+- **One reader of `requirements.lock`, and it is pip's.** Round 10 made the lock gate read the
+  lock as pip does, but the completeness check (`gen-requirements-lock.py --check-set`) and
+  SCA (`tools/sca-check.sh`) still matched raw column-0 lines. Two locks exploited the gap:
+  a `# regenerated \` comment on blinker's hash line made pip and the gate lose `cffi` while
+  `--check-set` still counted it (gate "PASS — 14 releases", pip then refuses to install); and
+  an entry hidden behind such a comment with an indented `pyasn1==0.4.8` below it passed the
+  gate with 15 releases while SCA reported "pyasn1 0.6.4 CLEAN" and pip installed 0.4.8 (four
+  CVEs). All three now use `tools/lib/lockparse.py`, which follows pip's own rules
+  (continuations, comments, splitting on spaces only), and a t25 case compares it with pip's own
+  parser. SCA queries every lock entry at the version pip installs and its count must match
+  the parser's. The gate also refuses a lock laid out so that a reader looking only at
+  column 0 would see different entries from pip (a hidden entry, an indented entry, a
+  line break that pip honours and grep does not); the generator never writes one.
+- A TAB between a version and `--hash` is refused, as pip refuses it.
+- The lock gate reads the completeness verdict and its count instead of relying on exit 0.
+  The resolver now times out after 600 s and reports "could not verify".
+
 ### Known limitations
 
 - **FIPS module boundary**: the `cryptography` and `confluent-kafka` wheels bundle their own

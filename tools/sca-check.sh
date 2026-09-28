@@ -2,8 +2,9 @@
 # =============================================================================
 # sca-check.sh — Software Composition Analysis gate
 #
-# Queries OSV.dev for every pin in requirements.txt and for the frontend Vue
-# pin, and exits non-zero if any pinned version carries a known advisory.
+# Queries OSV.dev for every pin in requirements.txt, every entry pip installs
+# from requirements.lock (read by tools/lib/lockparse.py, pip's rules) and the
+# frontend Vue pin, and exits non-zero if any carries a known advisory.
 #
 # Why this exists: the repo's other four gates are syntax-only. A mutation
 # control on 2026-08-30 (builder M16) put cryptography==44.0.2 back into
@@ -147,6 +148,8 @@ query_osv() {  # query_osv <ecosystem> <name> <version>
 
 echo "── Python pins (requirements.txt) ───────────────────────────────"
 PINS=0
+QUERIED=""      # "normalised-name==version" per line, already queried (bash 3 has no assoc arrays)
+lk_norm() { tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/[-_.]+/-/g'; }
 while IFS= read -r line; do
     line="${line%%#*}"
     line="$(tr -d '[:space:]' <<<"$line")"
@@ -156,6 +159,7 @@ while IFS= read -r line; do
         VULN=$((VULN+1)); continue
     fi
     query_osv PyPI "${line%%==*}" "${line##*==}"
+    QUERIED+="$(lk_norm "${line%%==*}")==${line##*==}"$'\n'
     PINS=$((PINS+1))
 done < "$REQ"
 
@@ -165,22 +169,37 @@ if [[ $PINS -eq 0 ]]; then
 fi
 
 # Round 2: the TRANSITIVE dependencies too. requirements.lock carries every
-# package the installers actually install (Jinja2, MarkupSafe, cffi, ...);
-# a vulnerable dependency of a dependency was invisible while only the seven
-# direct pins were queried.
-if true; then     # the lock's presence was required at the top
-    echo
-    echo "── Transitive pins (requirements.lock) ──────────────────────────"
-    LPINS=0
-    while IFS= read -r line; do
-        [[ "$line" =~ ^([A-Za-z0-9._-]+)==([^[:space:]\\]+) ]] || continue
-        n="${BASH_REMATCH[1]}"; v="${BASH_REMATCH[2]}"
-        grep -qiE "^${n}==" "$REQ" && continue      # already queried above
-        query_osv PyPI "$n" "$v"
-        LPINS=$((LPINS+1))
-    done < <(tr -d '\r' < "$LOCK")
-    [[ $LPINS -gt 0 ]] || { echo "${RED}sca-check: requirements.lock parsed to no transitive pins — refusing to pass.${NC}" >&2; exit 3; }
+# package the installers actually install (Jinja2, MarkupSafe, cffi, ...).
+# Round 11 (gatekeeper N1, TM-RL-002): the lock is read by tools/lib/lockparse.py
+# — pip's rules, the same parser as the lock gate — never by a column-0 regex
+# here. That regex queried an entry a comment had hidden from pip (pyasn1
+# 0.6.4, CLEAN) and skipped the indented one pip installs (pyasn1 0.4.8, four
+# CVEs). Every entry is queried at the version PIP installs; a direct pin is
+# skipped only when requirements.txt already queried that SAME version. The
+# count of entries handled must equal the parser's count, not merely be > 0.
+echo
+echo "── Locked packages (requirements.lock — what pip installs) ──────"
+LOCKPARSE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/lockparse.py"
+[[ -f "$LOCKPARSE" ]] || { echo "${RED}sca-check: ${LOCKPARSE} is missing — cannot read the lock; REFUSING to pass.${NC}" >&2; exit 3; }
+LOCK_ENTRIES="$("$PY" "$(cygpath -m "$LOCKPARSE" 2>/dev/null || printf '%s' "$LOCKPARSE")" "$(cygpath -m "$LOCK" 2>/dev/null || printf '%s' "$LOCK")")" || {
+    echo "${RED}sca-check: requirements.lock does not parse as pip reads it (see above) — REFUSING to pass.${NC}" >&2; exit 3; }
+LOCK_ENTRIES="$(tr -d '\r' <<<"$LOCK_ENTRIES")"
+LEXPECT=""; LSEEN=0
+while IFS= read -r nv; do
+    if [[ "$nv" =~ ^#entries\ ([0-9]+)$ ]]; then LEXPECT="${BASH_REMATCH[1]}"; continue; fi
+    if [[ ! "$nv" =~ ^([A-Za-z0-9._-]+)==([^[:space:]]+)$ ]]; then
+        echo "${RED}sca-check: unexpected line from the lock parser: ${nv:0:60} — REFUSING to pass.${NC}" >&2; exit 3
+    fi
+    n="${BASH_REMATCH[1]}"; v="${BASH_REMATCH[2]}"
+    LSEEN=$((LSEEN+1))
+    grep -Fqx -- "$(lk_norm "$n")==${v}" <<<"$QUERIED" && continue     # same version queried above
+    query_osv PyPI "$n" "$v"
+done <<<"$LOCK_ENTRIES"
+if [[ -z "$LEXPECT" || "$LSEEN" -ne "$LEXPECT" || "$LSEEN" -eq 0 ]]; then
+    echo "${RED}sca-check: handled ${LSEEN} lock entries but the parser read ${LEXPECT:-none} — refusing to pass.${NC}" >&2
+    exit 3
 fi
+echo "  ${LSEEN} of ${LEXPECT} requirements.lock entries checked at the version pip installs"
 
 echo
 echo "── Frontend pin (install/upgrade-full.sh) ───────────────────────"

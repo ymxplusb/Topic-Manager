@@ -35,11 +35,17 @@ import sys
 import tempfile
 import urllib.request
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib'))
+import lockparse  # noqa: E402  (the ONE reader of requirements.lock, pip's rules)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if '--root' in sys.argv:          # the tree to read (tools/check-requirements-lock.sh --root)
     ROOT = sys.argv[sys.argv.index('--root') + 1]
 REQ = os.path.join(ROOT, 'requirements.txt')
 LOCK = os.path.join(ROOT, 'requirements.lock')
+# A resolution that hangs (a stalled index, a proxy that never answers) is a
+# "could not verify", not a gate that never returns (round 11, TM-RL-005).
+RESOLVE_TIMEOUT = int(os.environ.get('TM_LOCK_RESOLVE_TIMEOUT') or 600)
 PLATFORMS = ['manylinux_2_34_x86_64', 'manylinux_2_28_x86_64',
              'manylinux_2_17_x86_64', 'manylinux2014_x86_64']
 
@@ -53,7 +59,7 @@ def resolve():
                '--target', os.path.join(tmp, 't'), '-r', REQ]
         for p in PLATFORMS:
             cmd += ['--platform', p]
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, timeout=RESOLVE_TIMEOUT)
         data = json.load(open(report, encoding='utf-8'))
     return sorted(((i['metadata']['name'], i['metadata']['version']) for i in data['install']),
                   key=lambda nv: nv[0].lower())
@@ -91,15 +97,18 @@ def render(pins):
 
 
 def lock_set():
-    """The name==version set requirements.lock carries (names normalised)."""
-    import re
-    text = open(LOCK, encoding='utf-8').read().replace('\r\n', '\n')
-    out = set()
-    for line in text.splitlines():
-        m = re.match(r'^([A-Za-z0-9._-]+)==([^\s\\]+)', line)
-        if m:
-            out.add((re.sub(r'[-_.]+', '-', m.group(1)).lower(), m.group(2)))
-    return out
+    """The name==version set pip would install from requirements.lock (names
+    normalised), read by tools/lib/lockparse.py — the same parser as the gate
+    and sca-check.sh. Round 11 (gatekeeper N1): this used to match raw
+    column-0 lines, so it counted an entry a comment had hidden from pip and
+    missed an indented entry pip installs. A lock pip would refuse is an
+    error here too (SystemExit 1), never a partial set."""
+    entries, errors = lockparse.parse(lockparse.read(LOCK))
+    if errors:
+        for e in errors:
+            print('FAIL: %s' % e)
+        sys.exit(1)
+    return {(e['key'], e['version']) for e in entries}
 
 
 def main():
@@ -115,13 +124,12 @@ def main():
         # Round 8 (gatekeeper): does the lock cover the WHOLE resolved set?
         # Compares name==version only (not the wheel-hash lists, which grow
         # when PyPI adds a wheel for an existing version). Needs PyPI.
-        import re
+        have = lock_set()
         try:
-            want = {(re.sub(r'[-_.]+', '-', n).lower(), v) for n, v in resolve()}
+            want = {(lockparse.norm(n), v) for n, v in resolve()}
         except Exception as e:  # no network, pip failure: cannot say
             print('could not resolve requirements.txt: %s' % e)
             sys.exit(3)
-        have = lock_set()
         missing, extra = sorted(want - have), sorted(have - want)
         for n, v in missing:
             print('MISSING from requirements.lock: %s==%s (resolved from requirements.txt)' % (n, v))

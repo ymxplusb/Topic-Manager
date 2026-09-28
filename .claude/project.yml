@@ -265,9 +265,16 @@ gates:
       reading that as current produced six false failures on the first run.
   - name: sca
     cmd: "bash tools/sca-check.sh"
-    verified: 2026-09-26
+    verified: 2026-09-28
     requires_network: "api.osv.dev"
     note: >-
+      ROUND 11 (gatekeeper N1, TM-RL-002): requirements.lock is read by
+      tools/lib/lockparse.py (pip's rules, the lock gate's parser); every
+      entry is queried at the version PIP installs (a direct pin is skipped
+      only when requirements.txt already queried that same version), and
+      the entries handled must equal the parser's count (was: "> 0"). A lock
+      the parser refuses is exit 3. Measured live 2026-09-28: real lock 15 of
+      15, all clean; X21 lock -> pyasn1 0.4.8 VULNERABLE, exit 1.
       ROUND 8: OSV answers are parsed as JSON and ANY vulns entry is a
       finding, whatever its ID prefix (a prefix allowlist reported unknown
       prefixes CLEAN); a missing or unreadable requirements.lock is exit 3.
@@ -318,7 +325,10 @@ gates:
     note: >-
       ROUND 9 (gatekeeper B2): with PyPI reachable it (1) runs
       gen-requirements-lock.py --check-set (the resolved name==version set
-      must equal the lock's) and (2) fetches https://pypi.org/pypi/<n>/<v>/json
+      must equal the set PIP reads from the lock — round 11, below — and the
+      gate checks its verdict line and that its count equals the lock's
+      entry count, not just exit 0; the resolver times out at 600 s -> exit 3)
+      and (2) fetches https://pypi.org/pypi/<n>/<v>/json
       for every locked release: every lock hash must be one PyPI published for
       that exact release, and ALL published target wheel hashes are required
       (at least one per package): cp312 or cp3x abi3 (x <= 12) manylinux
@@ -342,6 +352,23 @@ gates:
       ending in "# comment": a bad hash there passed as "PASS — 14 releases" on
       a 15-entry lock while pip still honoured it. t25 covers a commented bad
       hash (blinker one-line; cffi's last --hash line) RED, commented good GREEN.
+      ROUND 11 (gatekeeper N1): tools/lib/lockparse.py is the ONLY parser of
+      requirements.lock, by pip's req_file rules (continuations, comments,
+      split on SPACE only, so a TAB before --hash is refused as pip refuses
+      it). The gate, gen-requirements-lock.py (--check-set/lock_set) and
+      sca-check.sh all import or run it; none keeps a regex of its own.
+      Round 10's --check-set and SCA matched raw column-0 lines: X20 (a
+      comment ending in a backslash hid cffi from pip and the gate, while
+      --check-set still counted it) passed as "PASS — 14 releases"; X21 (the
+      real pyasn1==0.6.4 swallowed, an indented pyasn1==0.4.8 below) passed
+      the gate and SCA said "pyasn1 0.6.4 CLEAN" while pip installed 0.4.8.
+      The gate also refuses a lock whose column-0 view differs from pip's (an
+      entry-shaped line pip does not read, an indented entry, a CR/FF/Unicode
+      line break), so the remaining column-0 readers (check-sbom-consistency,
+      upgrade-full.sh's pin grep) see what pip sees on any lock that passes.
+      SCA queries every lock entry at the version pip installs and its
+      handled count must equal the parser's. t25 compares lockparse with
+      pip's own parser (pip._internal.req.req_file) on nine lock shapes.
       WHERE THE REAL LOCK IS CHECKED AGAINST LIVE PyPI IN v1.1.0 (James,
       round 10): only (a) prepare-offline.sh, which runs this gate and dies on
       any non-zero exit (prepare-offline.sh:63), and (b) running this gate by
