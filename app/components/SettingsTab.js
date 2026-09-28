@@ -280,7 +280,7 @@ const SettingsTab = {
         downloadPpsm() {
             const rows = [
                 ['Jarvis Topic Manager — Ports, Protocols and Services Management (PPSM)', '', '', '', '', ''],
-                ['Version', '1.1.0', '', '', '', ''],
+                ['Version', '1.1.1', '', '', '', ''],
                 ['Copyright', '(c) 2025-2026 James Rodman', '', '', '', ''],
                 ['Scope', 'Every port, protocol and service the Topic Manager host listens on or initiates. Ports marked operator-defined come from configuration.', '', '', '', ''],
                 ['Generated', new Date().toISOString().split('T')[0], '', '', '', ''],

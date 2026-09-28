@@ -1,6 +1,6 @@
 # Jarvis Topic Manager — Installation Guide
 
-**Version:** 1.1.0
+**Version:** 1.1.1
 **Applies to:** a FRESH install on a clean Ubuntu Server 24.04 LTS host — including a
 STIG-hardened host with FIPS mode enabled — online or air-gapped.
 
