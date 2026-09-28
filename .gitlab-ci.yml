@@ -29,7 +29,7 @@ variables:
   # An empty TEST_COMMAND would mean the job is ABSENT from the pipeline
   # rather than present and skipping. Its exit code is the job verdict; the
   # publish job waits on it.
-  TEST_SETUP: "apt-get update -qq && apt-get install -y -qq --no-install-recommends sudo nodejs jq curl && pip install --quiet -r requirements.txt"
+  TEST_SETUP: "apt-get update -qq && apt-get install -y -qq --no-install-recommends sudo nodejs jq curl nginx && pip install --quiet -r requirements.txt"
   # REG-0007 (v1.2.0): the lock's completeness is verified ONLINE at release
   # time. The test lane stubs the network for it (t25), so the gate runs here
   # first with --require-online: offline, or with a closure it cannot verify,
