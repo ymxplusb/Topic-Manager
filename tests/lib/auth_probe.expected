@@ -62,6 +62,20 @@
    search DC=example,DC=org (sAMAccountName=carol) memberOf,displayName,sAMAccountName,mail,distinguishedName
    unbind carol@example.org
    -> (False, 'Not a member of required group: CN=Kafka-Admins,CN=Users,DC=example,DC=org')
+== direct-absent-attributes
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind erin@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=erin) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind erin@example.org
+   -> (True, {'username': 'erin', 'display_name': 'erin', 'email': '', 'upn': 'erin@example.org'})
+== direct-absent-attributes-group
+   tls validate=2 ca=None
+   server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
+   bind erin@example.org auth=SIMPLE auto_bind=True
+   search DC=example,DC=org (sAMAccountName=erin) memberOf,displayName,sAMAccountName,mail,distinguishedName
+   unbind erin@example.org
+   -> (False, 'Not a member of required group: CN=Kafka-Admins,CN=Users,DC=example,DC=org')
 == netbios-form
    tls validate=2 ca=None
    server ldaps://dc.example.org:636 use_ssl=True tls=FakeTls
@@ -167,12 +181,16 @@
    unbind bob@example.org
    -> (True, {'username': 'bob', 'display_name': 'Bob B', 'email': 'bob@example.org', 'upn': 'bob@example.org'})
 == not-configured
+   log ERROR Sign-in refused: config.yaml auth.ldap_server missing, a <placeholder>, or (ldap_server) not an ldaps:// URL
    -> (False, 'Sign-in is unavailable. Contact the administrator.')
 == plain-ldap-refused
+   log ERROR Sign-in refused: config.yaml auth.ldap_server missing, a <placeholder>, or (ldap_server) not an ldaps:// URL
    -> (False, 'Sign-in is unavailable. Contact the administrator.')
 == auth-not-a-mapping
+   log ERROR Sign-in refused: config.yaml auth.ldap_server, auth.ldap_base_dn, auth.ldap_domain missing, a <placeholder>, or (ldap_server) not an ldaps:// URL
    -> (False, 'Sign-in is unavailable. Contact the administrator.')
 == auth-none
+   log ERROR Sign-in refused: config.yaml auth.ldap_server, auth.ldap_base_dn, auth.ldap_domain missing, a <placeholder>, or (ldap_server) not an ldaps:// URL
    -> (False, 'Sign-in is unavailable. Contact the administrator.')
 missing complete -> []
 missing server-placeholder -> ['ldap_server']

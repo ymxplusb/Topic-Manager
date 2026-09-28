@@ -52,6 +52,32 @@
    store| clusters:
    store| - id: legacy
    store|   bootstrap_servers: b1.example.com:9092
+== legacy-non-ascii-name
+   return 0
+   out: migrate-clusters: moved 1 cluster profile(s) out of config.yaml into <D>/clusters.d/clusters.yaml
+   out: migrate-clusters: removed the clusters: block from <D>/config.yaml
+   config| # operator comment kept
+   config| server:
+   config|   port: 8443
+   config| # clusters: moved to <D>/clusters.d/clusters.yaml in v1.0.4.
+   config| # The application owns that file and writes it through the Cluster
+   config| # Builder in Settings. This file stays root-owned and read-only to the
+   config| # service, so a cluster edit can never reach secret_key or
+   config| # ldap_bind_password. Do not add a clusters: block back here — it would
+   config| # be ignored, and two files claiming to hold the cluster list is exactly
+   config| # the shadowing the split exists to prevent.
+   config| 
+   config| # tail comment kept
+   config| session:
+   config|   timeout_minutes: 15
+   store| # Jarvis Topic Manager — cluster profiles
+   store| # Moved out of config.yaml by the v1.0.4 migration.
+   store| # Written by the Cluster Builder; hand edits are picked up without a
+   store| # restart, because every worker re-reads on inode/size/mtime change.
+   store| clusters:
+   store| - id: eu
+   store|   name: Zürich — Nord
+   store|   bootstrap_servers: b2.example.com:9092
 == legacy-at-end-of-file
    return 0
    out: migrate-clusters: moved 1 cluster profile(s) out of config.yaml into <D>/clusters.d/clusters.yaml

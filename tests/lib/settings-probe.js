@@ -12,6 +12,7 @@
 //   scenarios:  load-401  load-network  load-ok  save-before-load
 //               rail  rail-search  group-default  group-saved-valid
 //               group-saved-invalid  group-storage-throws  group-select
+//               decode
 //
 // Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 // =============================================================================
@@ -154,6 +155,19 @@ async function main() {
             inst.railQuery = q;
             emit('match.' + q.replace(/ /g, '_'), inst.railGroups.filter(function (g) {
                 return inst.railMatch(g); }).map(function (g) { return g.id; }).join(','));
+        });
+
+    } else if (scenario === 'decode') {
+        // v1.1.1: the rail decodes entities in card titles through
+        // settingsDecodeEntities (a top-level function, so a property of the
+        // vm global). The template only uses entities it knows, so the rail
+        // cases cannot tell an own-property lookup from "any name" or from a
+        // lookup that also sees Object.prototype. These inputs can.
+        const d = sandbox.settingsDecodeEntities;
+        [['named', 'A &amp; B'], ['numeric', 'it&#39;s'], ['hex', '&#x41;&#X42;'],
+         ['unknown', 'x &bogus; y'], ['prototype', '&constructor; &toString; &hasOwnProperty;'],
+         ['mixed', '&lt;b&gt; &mdash; &nope;']].forEach(function (c) {
+            emit('decode.' + c[0], JSON.stringify(d(c[1])));
         });
 
     } else if (scenario.indexOf('group-') === 0) {

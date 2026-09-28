@@ -26,9 +26,18 @@ from ldap3.core.exceptions import LDAPBindError, LDAPSocketOpenError
 
 from tm import auth
 
-logging.disable(logging.CRITICAL)
-
 CALLS = []
+
+
+class _ToCalls(logging.Handler):
+    """The administrator's log line is part of the behaviour: record it."""
+    def emit(self, record):
+        CALLS.append('log %s %s' % (record.levelname, record.getMessage()))
+
+
+_log = logging.getLogger('tm.auth')
+_log.addHandler(_ToCalls())
+_log.propagate = False
 
 
 class Attr:
@@ -58,6 +67,7 @@ PASSWORDS = {
     'bob@example.org': 'bob-pw',
     'carol@example.org': 'carol-pw',
     'dave@example.org': 'dave-pw',     # binds, but has no directory entry
+    'erin@example.org': 'erin-pw',
     'a*(b)@example.org': 'odd-pw',
 }
 ENTRIES = {
@@ -68,8 +78,27 @@ ENTRIES = {
     'bob': Entry(dn='CN=Bob,DC=example,DC=org', member_of=['CN=Staff,DC=example,DC=org'],
                  display='Bob B', mail='bob@example.org'),
     'carol': Entry(),     # no dn, no groups, no display name, no mail
+    'erin': None,         # built below: attributes that are absent outright
     'a\\2a\\28b\\29': Entry(dn='CN=Odd,DC=example,DC=org', display='Odd'),
 }
+
+
+class Absent:
+    """An attribute the code must not read: falsy, and anything else fails."""
+    def __bool__(self):
+        return False
+
+    def __str__(self):
+        return '<ABSENT READ>'
+
+    def __getattr__(self, name):
+        raise AttributeError('absent attribute read: %s' % name)
+
+
+_erin = Entry()
+_erin.distinguishedName = _erin.memberOf = _erin.displayName = _erin.mail = Absent()
+ENTRIES['erin'] = _erin
+
 # A principal whose bind fails with a transport error, not a bad password.
 BROKEN = {'down@example.org'}
 
@@ -131,6 +160,8 @@ SCENARIOS = [
     ('direct-bound-but-not-found', cfg(), 'dave', 'dave-pw'),
     ('direct-empty-attributes', cfg(), 'carol', 'carol-pw'),
     ('direct-empty-attributes-group', cfg(required_group=GROUP), 'carol', 'carol-pw'),
+    ('direct-absent-attributes', cfg(), 'erin', 'erin-pw'),
+    ('direct-absent-attributes-group', cfg(required_group=GROUP), 'erin', 'erin-pw'),
     ('netbios-form', cfg(), 'EXAMPLE\\alice', 'alice-pw'),
     ('upn-form', cfg(), 'alice@elsewhere.org', 'alice-pw'),
     ('filter-escaped', cfg(), 'a*(b)', 'odd-pw'),

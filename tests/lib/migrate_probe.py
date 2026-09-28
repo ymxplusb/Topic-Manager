@@ -27,6 +27,9 @@ CONFIG_HEAD = '# operator comment kept\nserver:\n  port: 8443\n'
 CONFIG_TAIL = '# tail comment kept\nsession:\n  timeout_minutes: 15\n'
 LEGACY = ('clusters:\n  - id: "legacy"\n    bootstrap_servers: "b1.example.com:9092"\n'
           '# indented-free comment ends the block\n')
+# A profile name outside ASCII: the moved store must keep it readable.
+LEGACY_UNICODE = ('clusters:\n  - id: "eu"\n    name: "Z\u00fcrich \u2014 Nord"\n'
+                  '    bootstrap_servers: "b2.example.com:9092"\n')
 STORE_ONE = 'clusters:\n  - id: current\n    bootstrap_servers: b9.example.com:9092\n'
 
 # name, config.yaml text (None = no file), clusters.yaml text (None = none),
@@ -37,6 +40,7 @@ STATES = [
     ('config-empty', '', None, True),
     ('fresh-host', CONFIG_HEAD + CONFIG_TAIL, None, True),
     ('legacy-only', CONFIG_HEAD + LEGACY + CONFIG_TAIL, None, True),
+    ('legacy-non-ascii-name', CONFIG_HEAD + LEGACY_UNICODE + CONFIG_TAIL, None, True),
     ('legacy-at-end-of-file', CONFIG_HEAD + LEGACY, None, True),
     ('store-and-stale-legacy', CONFIG_HEAD + LEGACY + CONFIG_TAIL, STORE_ONE, True),
     ('store-only', CONFIG_HEAD + CONFIG_TAIL, STORE_ONE, True),
