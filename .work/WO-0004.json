@@ -180,6 +180,24 @@
       "date": "2026-09-26",
       "id": "redirect-ufw",
       "ruling": "Turning the HTTP redirect off also removes the ufw 80 rule; PPSM follows the live state."
+    },
+    {
+      "by": "James",
+      "date": "2026-09-29",
+      "id": "host-settings-authz",
+      "ruling": "KEEP: host settings / apply / audit retention stay open to every signed-in user (all users are Kafka-Admins by design). CWE-862 noted by sec-review; revisit with roles/PIV (v1.4.0)."
+    },
+    {
+      "by": "James",
+      "date": "2026-09-29",
+      "id": "gunicorn-unix-socket",
+      "ruling": "FIX IN v1.2.0: bind gunicorn to a unix socket (0660, group www-data); nginx proxies to it; installer/upgrade/rollback/PPSM updated; closes the loopback rate-limit and X-Forwarded-For bypass (adversary F-05, sec-review #6)."
+    },
+    {
+      "by": "James",
+      "date": "2026-09-28",
+      "id": "qc-host-declared",
+      "ruling": "tm-qc 192.168.202.92 declared as this project's QC host in .claude/project.yml (3cfdedb)."
     }
   ],
   "builder_backend": {
@@ -376,5 +394,13 @@
         "lockparse 28k pip differential fuzz (round 12) not re-run; parse() was checked old-vs-new on 100k lock texts instead"
       ]
     }
-  ]
+  ],
+  "clean_room": {
+    "date": "2026-09-29",
+    "target": "tm-qc from v110-installed",
+    "build": "3cfdedb",
+    "upgrade": "PASS 1.1.0->1.2.0 exit 0 (audit 1: 3 warnings; backup 0, 48-record baseline)",
+    "stig": "209/8 before and after, same 8 rules",
+    "verdict": "FAIL (docs): 11 documentation defects"
+  }
 }
