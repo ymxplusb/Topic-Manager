@@ -268,6 +268,20 @@ if d.get("new_duplicated_lines_density") and float(d["new_duplicated_lines_densi
 if d.get("new_security_hotspots") not in (None, "0"): warn.append("new_security_hotspots=%s (each needs a review on the estate server before the tag)" % d["new_security_hotspots"])
 print("sonar-local: also: " + ", ".join("%s=%s" % kv for kv in sorted(d.items())))
 for w in warn: print("sonar-local: WARN (the estate gate holds this too): " + w)' <<<"$extra"
+# Name every open vulnerability, old or new: the estate gate fails on
+# vulnerabilities > 0 overall, and one resolved on the estate server (a false
+# positive, say) is open again on a throwaway one — the operator needs to see
+# which, and whether it is the one already resolved there.
+vulns="$(api GET "issues/search?componentKeys=${PROJECT_KEY}&types=VULNERABILITY&resolved=false&ps=100")" || vulns='{}'
+python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+for i in d.get("issues", []):
+    print("  VULN %-12s %s:%s  %s" % (i["rule"].split(":")[-1], i["component"].split(":", 1)[-1],
+                                     i.get("line", "-"), i["message"]))' <<<"$vulns"
 gate="$(api GET "qualitygates/project_status?projectKey=${PROJECT_KEY}" | python3 -c '
 import json, sys
 p = json.load(sys.stdin)["projectStatus"]
