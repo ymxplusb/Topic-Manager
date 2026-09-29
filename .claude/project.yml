@@ -452,11 +452,25 @@ gates:
       network with no published port, and CI's own scanner image
       (sonar-scanner-cli:11, the digest ci-templates v1.5.3 pins) with CI's
       exact -D parameters (sources=., sourceEncoding, projectVersion,
-      qualitygate.wait); default Sonar way profiles and the default
+      qualitygate.wait); default Sonar way PROFILES and the default
       previous-version new-code period, the same comparison the estate's
-      server makes at the tag. NEVER uploads to sonar.int: host.url is the
-      throwaway container, and every container and the network are removed
-      on exit. Each ref's tracked tree is committed afresh into a scratch
+      server makes at the tag. The GATE is a copy of the estate's "Jarvis
+      Standard" (seven conditions, pinned in JARVIS_GATE, round 5) made the
+      project's gate before the scans; every condition is evaluated
+      (evaluate_gate): the three new-code ones plus bugs, vulnerabilities and
+      reliability_rating decide the exit; two KNOWN DIFFERENCES are printed
+      whenever they apply, never silently: python S4502 at tm/app.py is a
+      vulnerability there and a reviewed hotspot on the estate, and overall
+      security_hotspots_reviewed is estate review state a throwaway server
+      cannot have (a NEW hotspot is held by new_security_hotspots_reviewed).
+      A condition the server did not evaluate although its metric has a
+      value, or a run judged by another gate, is exit 2. NEVER uploads to
+      sonar.int: host.url is the throwaway container, and every container,
+      every (labelled, named) volume and the network are removed on exit; a
+      server that dies while starting fails at once (exit 2, with its log
+      tail), and a docker disk at >= 90% is refused before anything starts
+      (round 5: each run used to leak ~800 MB of anonymous volumes on the
+      GitLab server, which reached 90%). Each ref's tracked tree is committed afresh into a scratch
       repository just before its scan, so "new" is exactly "changed since the
       base": scanned against its real history it reported new_violations=0 on
       the tree the gatekeeper's run found 19 in (SonarQube dates new lines by
@@ -502,8 +516,13 @@ unavailable_gates:
       install/, tools/, tests/, nginx/, systemd/, config/ and the rest, 142
       indexed files at v1.2.0 (101 at v1.1.1). The properties file said
       sonar.sources=tm,app/components until v1.2.0 and now says "." with the
-      reason. Quality gate: Sonar way, new_violations > 0 fails, new code =
-      since the previous version. The same scan runs BEFORE the tag as the
+      reason. Quality gate: "Jarvis Standard" (NOT "Sonar way", which is only
+      the server default; corrected 2026-09-29, WO-0004 round 5, read from
+      api/qualitygates/get_by_project + show): new_violations > 0,
+      new_duplicated_lines_density > 3, new_security_hotspots_reviewed < 100,
+      bugs > 0, vulnerabilities > 0, security_hotspots_reviewed < 100,
+      reliability_rating > 1; new code = previous version (inherited
+      PREVIOUS_VERSION). The same scan runs BEFORE the tag as the
       sonar-local gate (gates:). NEVER cite a Sonar pass without saying which
       of the two ran and on which commit.
       SUPERSEDED 2026-09-09: the CI template's Sonar job scans on every tag

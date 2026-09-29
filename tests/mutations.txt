@@ -2786,3 +2786,340 @@ TARGET|upgrade
 EQUIV|no
 ANCHOR|step() { STEP=$((STEP + 1)); echo "  ${STEP}. $*"; }
 REPLACE|step() { STEP=$((STEP + 2)); echo "  ${STEP}. $*"; }
+
+# ─── round 5: a rollback retires what the newer release added (R1, R2) ─────
+--- M338
+DESC|R2: a rollback to a TCP release never retires the socket unit
+TESTS|t44-backend-socket.sh
+EQUIV|no
+ANCHOR|    elif [[ -e "${OWNED_UNIT_DIR}/topic-manager.socket" || -L "${OWNED_UNIT_DIR}/topic-manager.socket" ]]; then
+REPLACE|    elif false; then
+
+--- M339
+DESC|R2: the socket unit's listen paths are never read (socket_unit_paths returns nothing)
+TESTS|t44-backend-socket.sh t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    sed -n -E 's/^[[:space:]]*Listen(Stream|Datagram|SequentialPacket)[[:space:]]*=[[:space:]]*(\/[^[:space:]]+)[[:space:]]*$/\2/p' "$1" 2>/dev/null
+REPLACE|    :
+
+--- M340
+DESC|R2: the socket paths are collected for service units instead of socket units
+TESTS|t44-backend-socket.sh t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    [[ "$u" == *.socket && -f "$f" ]] && mapfile -t socks < <(socket_unit_paths "$f")
+REPLACE|    [[ "$u" == *.service && -f "$f" ]] && mapfile -t socks < <(socket_unit_paths "$f")
+
+--- M341
+DESC|R1: a retired unit is not stopped and disabled
+TESTS|t44-backend-socket.sh t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    systemctl disable --now "$u" >/dev/null 2>&1 || true
+
+--- M342
+DESC|R1: a retired unit's file is left in place
+TESTS|t44-backend-socket.sh t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    rm -f -- "$f"
+ANCHOR|    shopt -s nullglob
+REPLACE|    shopt -s nullglob
+
+--- M343
+DESC|R1: a retired unit's enablement links are left in place
+TESTS|t44-backend-socket.sh t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    for l in "${OWNED_UNIT_DIR}"/*.wants/"$u" "${OWNED_UNIT_DIR}"/*.requires/"$u"; do rm -f -- "$l"; done
+REPLACE|    :
+
+--- M344
+DESC|R2: the stale socket file is kept (guard inverted)
+TESTS|t44-backend-socket.sh t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        [[ -S "$s" ]] && rm -f -- "$s"
+REPLACE|        [[ ! -S "$s" ]] && rm -f -- "$s"
+
+--- M345
+DESC|R2: the emptied socket directory is kept
+TESTS|t44-backend-socket.sh
+EQUIV|no
+ANCHOR|        rmdir -- "$(dirname "$s")" 2>/dev/null || true
+REPLACE|        :
+
+--- M346
+DESC|R1: the inventory takes directories in the unit dir (the operator drop-in) as units
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            [[ -d "$p" && ! -L "$p" ]] && continue
+REPLACE|            :
+
+--- M347
+DESC|R1: the root-helper tree is never inventoried (guard inverted)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if [[ -d "$OWNED_LIBEXEC_DIR" && ! -L "$OWNED_LIBEXEC_DIR" ]]; then
+REPLACE|        if [[ ! -d "$OWNED_LIBEXEC_DIR" && ! -L "$OWNED_LIBEXEC_DIR" ]]; then
+
+--- M348
+DESC|R1: the inventory omits polkit rules
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                 "${OWNED_UNIT_DIR}"/*.requires/"${SERVICE}"* "${OWNED_POLKIT_DIR}"/*"${SERVICE}"*; do
+REPLACE|                 "${OWNED_UNIT_DIR}"/*.requires/"${SERVICE}"*; do
+
+--- M349
+DESC|R1: Phase 4 records an EMPTY inventory
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    owned_inventory > "${BD}/manifest/owned-artefacts.list"
+REPLACE|    : > "${BD}/manifest/owned-artefacts.list"
+
+--- M350
+DESC|R1: the restore point holds no copy of a recorded file
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            mkdir -p -- "$(dirname "$d")"; cp -a -- "$p" "$d"
+REPLACE|            mkdir -p -- "$(dirname "$d")"
+
+--- M351
+DESC|R1: a restore point without the inventory is read as one with an empty inventory
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ ! -f "$list" ]]; then
+REPLACE|    if [[ -f "$list" ]]; then
+
+--- M352
+DESC|R1: the legacy branch falls through into the inventory path
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        warn "  Retire any the restored release does not ship: sudo systemctl disable --now <unit>; delete the file; sudo systemctl daemon-reload"
+ANCHOR|        return 0
+REPLACE|        warn "  Retire any the restored release does not ship: sudo systemctl disable --now <unit>; delete the file; sudo systemctl daemon-reload"
+
+--- M353
+DESC|R1: what the restore point held is treated as added (the 'had' check dropped)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        [[ -n "${had[$p]+x}" ]] && continue
+REPLACE|        :
+
+--- M354
+DESC|R1: an enablement link is sent to retire_unit as if it were a unit
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            "${OWNED_UNIT_DIR}"/*/*) added_other+=("$p") ;;          # an enablement link
+REPLACE|            "${OWNED_UNIT_DIR}"/*/*) added_units+=("$p") ;;          # an enablement link
+
+--- M355
+DESC|R1: no added unit is retired
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    for p in "${added_units[@]}"; do retire_unit "$p"; done
+REPLACE|    :
+
+--- M356
+DESC|R1: added helpers and rules are not deleted
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if [[ -d "$p" && ! -L "$p" ]]; then rm -rf -- "$p"; else rm -f -- "$p"; fi
+REPLACE|        :
+
+--- M357
+DESC|R1: recorded files are not put back from the restore point
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            rm -rf -- "$p"; cp -a -- "$src" "$p"
+REPLACE|            :
+
+--- M358
+DESC|R1: no daemon-reload after the units are retired
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    systemctl daemon-reload >/dev/null 2>&1 || true
+ANCHOR|    info "Host units, rules and helpers restored to the restore point's inventory (${#added_units[@]} unit(s) retired)"
+REPLACE|    info "Host units, rules and helpers restored to the restore point's inventory (${#added_units[@]} unit(s) retired)"
+
+--- M359
+DESC|R1: restore_from_backup (--restore and the rollback) never uses the inventory
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    restore_owned_artefacts "$BD"
+REPLACE|    :
+
+--- M360
+DESC|R1: Phase 4 takes no inventory
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|backup_owned_artefacts "$BACKUP_DIR"
+REPLACE|:
+
+--- M361
+DESC|R1: the libexec guard is written as test && find again (pipefail aborts Phase 4 on a 1.1.x host)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if [[ -d "$OWNED_LIBEXEC_DIR" && ! -L "$OWNED_LIBEXEC_DIR" ]]; then
+ANCHOR|            find "$OWNED_LIBEXEC_DIR" -print0
+ANCHOR|        fi
+REPLACE|        [[ -d "$OWNED_LIBEXEC_DIR" && ! -L "$OWNED_LIBEXEC_DIR" ]] && find "$OWNED_LIBEXEC_DIR" -print0
+
+# ─── round 5: sonar-local is the estate gate and leaves nothing ─────────────
+--- M362
+DESC|sonar-local removes containers without their volumes again (rm -f, no -v)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    "${DOCKER[@]}" rm -f -v "$SRV" "${TAG}-scan" >/dev/null 2>&1
+REPLACE|    "${DOCKER[@]}" rm -f "$SRV" "${TAG}-scan" >/dev/null 2>&1
+
+--- M363
+DESC|sonar-local never removes its labelled volumes
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|        "${DOCKER[@]}" volume rm -f "$v" >/dev/null 2>&1
+REPLACE|        :
+
+--- M364
+DESC|sonar-local creates its volumes without the run's label (cleanup cannot find them)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    "${DOCKER[@]}" volume create --label "$VOL_LABEL" "${TAG}-vol${n}" >/dev/null || die2 "docker volume create failed"
+REPLACE|    "${DOCKER[@]}" volume create "${TAG}-vol${n}" >/dev/null || die2 "docker volume create failed"
+
+--- M365
+DESC|sonar-local leaves its network
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    "${DOCKER[@]}" network rm "$NET" >/dev/null 2>&1
+REPLACE|    :
+
+--- M366
+DESC|sonar-local polls a dead server for the whole timeout (liveness guard inverted)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    if [[ "$running" != true ]]; then
+REPLACE|    if [[ "$running" == true ]]; then
+
+--- M367
+DESC|sonar-local accepts a disk AT the limit (>= flipped to >)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|if (( dpct >= DISK_MAX_PCT )); then
+REPLACE|if (( dpct > DISK_MAX_PCT )); then
+
+--- M368
+DESC|sonar-local's disk limit bumped 90 -> 91
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|DISK_MAX_PCT=90                    # refuse a docker host at or above this use of its data disk
+REPLACE|DISK_MAX_PCT=91                    # refuse a docker host at or above this use of its data disk
+
+--- M369
+DESC|sonar-local drops a gate condition (new_duplicated_lines_density)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|  "new_duplicated_lines_density GT 3"
+REPLACE|
+
+--- M370
+DESC|sonar-local never makes the gate copy the project's gate (Sonar way decides again)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|api POST "qualitygates/set_as_default?name=${qname}" >/dev/null || die2 "could not make the gate copy the default"
+REPLACE|:
+
+--- M371
+DESC|evaluate_gate: every vulnerability is treated as the known S4502 difference
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|            return any(rule == k[0] and path == k[1] for k in known)
+REPLACE|            return True
+
+--- M372
+DESC|evaluate_gate: the known difference matches on the rule alone (any file)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|            return any(rule == k[0] and path == k[1] for k in known)
+REPLACE|            return any(rule == k[0] for k in known)
+
+--- M373
+DESC|evaluate_gate: a vulnerability count the list cannot account for is not checked
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|        if len(vulns) != int(float(actual)):
+REPLACE|        if False:
+
+--- M374
+DESC|evaluate_gate: overall hotspot review decides the run (the known difference dropped)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    if metric == "security_hotspots_reviewed":
+REPLACE|    if metric == "no_such_metric":
+
+--- M375
+DESC|evaluate_gate: a condition not evaluated although it has a value is let through
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|        if measures.get(metric) not in (None, ""):
+REPLACE|        if False:
+
+--- M376
+DESC|evaluate_gate: a run judged by another gate is accepted
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|if got_gate != gate_name:
+REPLACE|if False:
+
+--- M377
+DESC|evaluate_gate: a failing condition exits 0
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    say("FAIL: %s - the tag's Sonar gate would fail on these" % ", ".join(fail)); sys.exit(1)
+REPLACE|    say("FAIL: %s - the tag's Sonar gate would fail on these" % ", ".join(fail)); sys.exit(0)
+
+--- M378
+DESC|evaluate_gate: an unevaluable condition exits 0
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    say("COULD NOT RUN: condition(s) not evaluable: %s" % ", ".join(unknown)); sys.exit(2)
+REPLACE|    say("COULD NOT RUN: condition(s) not evaluable: %s" % ", ".join(unknown)); sys.exit(0)
+
+--- M379
+DESC|evaluate_gate: an ERROR condition is read as OK (status comparison flipped)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    if st == "OK":
+REPLACE|    if st != "OK":
+
+--- M380
+DESC|sonar-local's verdict exit code is discarded
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|evaluate_gate "$WORK" "$GATE_NAME" "${head_sha:0:12} vs ${BASE_REF}"
+ANCHOR|exit $?
+REPLACE|evaluate_gate "$WORK" "$GATE_NAME" "${head_sha:0:12} vs ${BASE_REF}"
+REPLACE|exit 0
+
+# ─── round 5: version-surfaces does not say OK after a date FAIL ────────────
+--- M381
+DESC|check-version-surfaces prints "none going backwards" after a date FAIL again
+TESTS|t22-version-surfaces.sh
+TARGET|surfaces
+EQUIV|no
+ANCHOR|elif _backwards:
+REPLACE|elif False:

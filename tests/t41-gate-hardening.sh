@@ -457,10 +457,10 @@ g_sonar_local_shape() {
     grep -nE 'sonar\.int|https?://[a-z0-9.-]+\.(com|org|net)' "$S" | grep -v '^[0-9]*:#' \
         && _tm_afail "sonar-local names a server other than its own throwaway container"
     local srvrun
-    srvrun="$(grep -A3 -E '^"\$\{DOCKER\[@\]\}" run -d --rm --name "\$SRV"' "$S")"
+    srvrun="$(grep -A3 -E '^"\$\{DOCKER\[@\]\}" run -d --name "\$SRV"' "$S")"
     [ -n "$srvrun" ] || _tm_afail "the server's docker run line moved"
     grep -qE '(^|[[:space:]])-p[[:space:]]' <<<"$srvrun" && _tm_afail "the throwaway SonarQube publishes a port"
-    grep -q 'new_violations' "$S" || _tm_afail "the verdict is not new_violations"
+    grep -q '"new_violations GT 0"' "$S" || _tm_afail "new_violations is not a gate condition"
     grep -qx '    stage_tree "$1"' "$S" \
         || _tm_afail "the scan reads the real history: every commit predates the throwaway base analysis, so nothing would be new"
     grep -q '^trap cleanup EXIT$' "$S" || _tm_afail "containers are not removed on every exit"

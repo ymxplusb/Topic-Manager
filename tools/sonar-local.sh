@@ -9,12 +9,14 @@
 #
 # WHY. The tag pipeline's scan job (ci-templates v1.5.3, build-test-publish.yml)
 # runs sonar-scanner over the WHOLE tree (-Dsonar.sources=.) against the
-# estate's SonarQube, whose quality gate fails the release on ANY new issue
-# (new_violations > 0, new code = since the previous version). v1.1.0 found
+# estate's SonarQube, whose quality gate ("Jarvis Standard") fails the
+# release on ANY new issue (new_violations > 0, new code = since the previous
+# version) and on duplication, hotspot review, bugs, vulnerabilities and
+# reliability too. v1.1.0 found
 # that out at its tag; v1.2.0's gatekeeper found 19 new issues the same way,
 # after the fact. This runs the same scanner, with the same parameters, the
-# same Sonar way profiles and the same new-code definition, before there is a
-# tag to fail:
+# same Sonar way profiles, the same new-code definition and a copy of the
+# estate's quality gate, before there is a tag to fail:
 #
 #   1. a private docker network, and sonarqube:26.9.0.129388-community on it
 #      with NO published port (nothing outside the network can reach it, and
@@ -30,18 +32,26 @@
 #      sourceEncoding, host.url, token, qualitygate.wait) over a git
 #      checkout of each ref; the repository's own sonar-project.properties
 #      (its exclusions) is read from that ref's tree, as in CI;
-#   5. new_violations and the new issues themselves are read back, printed
-#      rule by rule, and decide the exit code;
-#   6. every container and the network are removed on every exit path.
+#   5. the project is held to a copy of the estate's gate, "Jarvis Standard"
+#      (JARVIS_GATE below, read from the estate server 2026-09-29), and EVERY
+#      condition is evaluated: the three new-code ones (new_violations,
+#      new_duplicated_lines_density, new_security_hotspots_reviewed) and
+#      bugs, vulnerabilities and reliability_rating decide the exit code; the
+#      two things a throwaway server cannot know are said, not hidden
+#      (KNOWN DIFFERENCES, below);
+#   6. every container, every volume and the network are removed on every
+#      exit path; a server that dies while starting fails the run at once, and
+#      a docker host whose disk is 90% full is refused before anything starts.
 #
 # NEVER UPLOADS ANYWHERE ELSE. sonar.host.url is always the throwaway
 # container's name on the private network; SONAR_HOST_URL and SONAR_TOKEN
 # from the environment are never passed in (docker run passes only what -e
 # names).
 #
-# Exit: 0 = no new issue; 1 = new issues (listed); 2 = could not run (no
-# docker, a ref that does not exist, the server never came up, a scan or a
-# query failed). 2 is NOT a pass.
+# Exit: 0 = every gate condition passes; 1 = a condition fails (issues
+# listed); 2 = could not run (no docker, a full docker disk, a ref that does
+# not exist, the server died or never came up, a scan or a query failed, a
+# gate condition that could not be read). 2 is NOT a pass.
 #
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 # =============================================================================
@@ -59,7 +69,34 @@ REMOTE=""
 SSH_KEY=""
 BUNDLE=""
 AUTH=""
-UP_TIMEOUT_S=600
+UP_TIMEOUT_S="${TM_SONAR_UP_TIMEOUT_S:-600}"   # the suite shortens it (t46)
+DISK_MAX_PCT=90                    # refuse a docker host at or above this use of its data disk
+
+# THE ESTATE GATE, as the estate server defines it (api/qualitygates/show,
+# name "Jarvis Standard", the gate project topic-manager is assigned; read
+# 2026-09-29, SonarQube 26.9.0.129388). NOT "Sonar way": that is the server
+# default, and this project is not on it. <metric> <op> <error>; new code =
+# previous version (the project inherits PREVIOUS_VERSION).
+JARVIS_GATE=(
+  "new_violations GT 0"
+  "new_duplicated_lines_density GT 3"
+  "new_security_hotspots_reviewed LT 100"
+  "bugs GT 0"
+  "vulnerabilities GT 0"
+  "reliability_rating GT 1"
+  "security_hotspots_reviewed LT 100"
+)
+# KNOWN DIFFERENCES between this throwaway server and the estate's, each named
+# in the output whenever it applies — never silently:
+#   * vulnerabilities: python S4502 at tm/app.py ("disabling CSRF protection",
+#     pre-existing since v1.0.x) is a VULNERABILITY here and a reviewed
+#     security hotspot on the estate server, whose vulnerabilities is 0. Any
+#     OTHER open vulnerability fails the run.
+#   * security_hotspots_reviewed (overall): hotspot reviews are the estate
+#     server's state; a throwaway server has none, so every pre-existing
+#     hotspot is "unreviewed" here. Reported, not the verdict. A NEW hotspot
+#     is held by new_security_hotspots_reviewed, which IS the verdict.
+KNOWN_VULN_DIFFERENCES=("S4502 tm/app.py")
 
 die2() { echo "sonar-local: COULD NOT RUN: $*" >&2; exit 2; }
 say()  { echo "sonar-local: $*"; }
@@ -115,18 +152,109 @@ if [[ -n "$REMOTE" ]]; then
     exit "$rc"
 fi
 
+# evaluate_gate <dir> <gate-name> <label> — the exit code, from the four API
+# answers saved in <dir> (v-gate, v-status, v-measures, v-vulns .json). Every
+# condition in JARVIS_GATE must be ACCOUNTED FOR: evaluated by the server, or
+# absent from both the gate status and the measures (nothing new to measure).
+# A condition the server did not evaluate although its metric has a value
+# means the gate here is not the gate declared: exit 2, never a pass.
+evaluate_gate() {   # evaluate_gate <dir> <gate-name> <label>
+    python3 - "$1" "$2" "$3" "${JARVIS_GATE[@]}" -- "${KNOWN_VULN_DIFFERENCES[@]}" <<'PYGATE'
+import json, sys
+d, gate_name, label = sys.argv[1:4]
+rest = sys.argv[4:]
+sep = rest.index("--")
+conds = [c.split() for c in rest[:sep]]
+known = [k.split(None, 1) for k in rest[sep + 1:]]
+load = lambda n: json.load(open("%s/v-%s.json" % (d, n)))
+say = lambda m: print("sonar-local: " + m)
+try:
+    got_gate = load("gate")["qualityGate"]["name"]
+    status = load("status")["projectStatus"]
+    measures = {m["metric"]: m.get("period", {}).get("value", m.get("value"))
+                for m in load("measures")["component"]["measures"]}
+    vulns = load("vulns").get("issues", [])
+except Exception as e:
+    say("COULD NOT RUN: unreadable gate answer (%s)" % e); sys.exit(2)
+if got_gate != gate_name:
+    say("COULD NOT RUN: the project is on gate %r, not %r" % (got_gate, gate_name)); sys.exit(2)
+by_metric = {c.get("metricKey"): c for c in status.get("conditions", [])}
+fail, unknown = [], []
+for metric, op, err in conds:
+    c = by_metric.get(metric)
+    if c is None:
+        if measures.get(metric) not in (None, ""):
+            unknown.append(metric)
+            say("  %-32s %s %s  NOT EVALUATED although it has a value (%s)" % (metric, op, err, measures[metric]))
+        else:
+            say("  %-32s %s %s  no value (nothing new to measure): OK" % (metric, op, err))
+        continue
+    actual, st = c.get("actualValue", "?"), c.get("status", "?")
+    if st == "OK":
+        say("  %-32s %s %s  actual %s: OK" % (metric, op, err, actual)); continue
+    if metric == "vulnerabilities":
+        def is_known(i):
+            rule = i["rule"].split(":")[-1]; path = i["component"].split(":", 1)[-1]
+            return any(rule == k[0] and path == k[1] for k in known)
+        other = [i for i in vulns if not is_known(i)]
+        for i in vulns:
+            say("    VULN %s %s:%s  %s%s" % (i["rule"].split(":")[-1], i["component"].split(":", 1)[-1],
+                i.get("line", "-"), i["message"], "  [KNOWN DIFFERENCE: a reviewed hotspot on the estate server]" if is_known(i) else ""))
+        if len(vulns) != int(float(actual)):
+            unknown.append(metric)
+            say("  %-32s %s %s  actual %s but %d listed: cannot attribute" % (metric, op, err, actual, len(vulns)))
+        elif other:
+            fail.append(metric); say("  %-32s %s %s  actual %s: FAIL" % (metric, op, err, actual))
+        else:
+            say("  %-32s %s %s  actual %s: OK on the estate (every one is a KNOWN DIFFERENCE, listed above)" % (metric, op, err, actual))
+        continue
+    if metric == "security_hotspots_reviewed":
+        say("  %-32s %s %s  actual %s here: KNOWN DIFFERENCE, not the verdict (reviews are the estate server's state; new hotspots are held by new_security_hotspots_reviewed)" % (metric, op, err, actual))
+        continue
+    fail.append(metric); say("  %-32s %s %s  actual %s: FAIL" % (metric, op, err, actual))
+say("HEAD %s: new_violations=%s (all issues %s); gate %s" % (label, measures.get("new_violations", "?"),
+    measures.get("violations", "?"), gate_name))
+if unknown:
+    say("COULD NOT RUN: condition(s) not evaluable: %s" % ", ".join(unknown)); sys.exit(2)
+if fail:
+    say("FAIL: %s - the tag's Sonar gate would fail on these" % ", ".join(fail)); sys.exit(1)
+say("PASS: every condition of the estate gate holds (%d conditions)" % len(conds))
+sys.exit(0)
+PYGATE
+}
+
 # ─── local run (a Linux host with docker) ────────────────────────────────────
 command -v git >/dev/null 2>&1 || die2 "git is not installed"
 if docker info >/dev/null 2>&1; then DOCKER=(docker)
 elif sudo -n docker info >/dev/null 2>&1; then DOCKER=(sudo -n docker)
 else die2 "docker is not usable here (tried docker and sudo -n docker)"; fi
 
+# A FULL DOCKER DISK. The server needs ~800 MB of volumes per run, and the
+# usual docker host here is the GitLab server: at 90% it is refused before
+# anything is pulled or started, with the numbers, not after a 600 s wait.
+droot="$("${DOCKER[@]}" info -f '{{.DockerRootDir}}' 2>/dev/null)"
+[[ -n "$droot" ]] || die2 "docker did not report its data directory"
+dpct="$(df -P "$droot" 2>/dev/null | awk 'NR == 2 { sub("%", "", $5); print $5 }')"
+[[ "$dpct" =~ ^[0-9]+$ ]] || die2 "could not measure the disk holding ${droot}"
+if (( dpct >= DISK_MAX_PCT )); then
+    die2 "the docker disk (${droot}) is ${dpct}% full (limit ${DISK_MAX_PCT}%). Free space first: sudo docker volume ls; sudo docker system df"
+fi
+
 WORK="$(mktemp -d /tmp/tm-sonar-work.XXXXXX)" || die2 "mktemp failed"
 TAG="tm-sonar-$$-$RANDOM"
 NET="${TAG}-net"; SRV="${TAG}-srv"
+VOL_LABEL="tm-sonar-local=${TAG}"
 cleanup() {
-    "${DOCKER[@]}" rm -f "$SRV" "${TAG}-scan" >/dev/null 2>&1
+    # -v: the containers' anonymous volumes too. Without it every run left
+    # the server's ~800 MB behind (four VOLUMEs in the image).
+    "${DOCKER[@]}" rm -f -v "$SRV" "${TAG}-scan" >/dev/null 2>&1
+    local v left
+    for v in $("${DOCKER[@]}" volume ls -q --filter "label=${VOL_LABEL}" 2>/dev/null); do
+        "${DOCKER[@]}" volume rm -f "$v" >/dev/null 2>&1
+    done
     "${DOCKER[@]}" network rm "$NET" >/dev/null 2>&1
+    left="$("${DOCKER[@]}" volume ls -q --filter "label=${VOL_LABEL}" 2>/dev/null)"
+    [[ -z "$left" ]] || echo "sonar-local: WARNING: volumes left behind: ${left//$'\n'/ } (sudo docker volume rm them)" >&2
     # The scanner wrote as this user; nothing here is root's.
     rm -rf "$WORK" "${tmpb:-}"
 }
@@ -147,8 +275,20 @@ head_ver="$(git -C "$WORK/src" show "${head_sha}:VERSION" 2>/dev/null | tr -d '[
 
 say "server ${SQ_IMAGE%%@*} (pinned), scanner ${SCANNER_IMAGE%%@*} (pinned), base ${BASE_REF} ${base_sha:0:12} as ${base_ver}, head ${head_sha:0:12} as ${head_ver}"
 "${DOCKER[@]}" network create --internal=false "$NET" >/dev/null || die2 "docker network create failed"
-# No -p: the server is reachable ONLY on the private network.
-"${DOCKER[@]}" run -d --rm --name "$SRV" --network "$NET" \
+# Every VOLUME the image declares becomes a NAMED volume carrying this run's
+# label, so cleanup can find and remove each one by label, whatever the image
+# declares and however the run ends.
+"${DOCKER[@]}" image inspect "$SQ_IMAGE" >/dev/null 2>&1 || "${DOCKER[@]}" pull -q "$SQ_IMAGE" >/dev/null \
+    || die2 "could not pull ${SQ_IMAGE}"
+vol_args=(); n=0
+for vpath in $("${DOCKER[@]}" image inspect -f '{{range $k, $v := .Config.Volumes}}{{$k}} {{end}}' "$SQ_IMAGE"); do
+    n=$((n + 1))
+    "${DOCKER[@]}" volume create --label "$VOL_LABEL" "${TAG}-vol${n}" >/dev/null || die2 "docker volume create failed"
+    vol_args+=(-v "${TAG}-vol${n}:${vpath}")
+done
+# No -p: the server is reachable ONLY on the private network. No --rm: a
+# server that dies while starting must still be there to read its logs from.
+"${DOCKER[@]}" run -d --name "$SRV" --network "$NET" "${vol_args[@]}" \
     -e SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true -e SONAR_TELEMETRY_ENABLE=false \
     "$SQ_IMAGE" >/dev/null || die2 "could not start ${SQ_IMAGE}"
 
@@ -160,6 +300,13 @@ api() {   # api <method> <path?query> [user:pass] — through the server contain
 say "waiting for SonarQube (up to ${UP_TIMEOUT_S}s) ..."
 up=""
 for ((i = 0; i < UP_TIMEOUT_S; i += 5)); do
+    # A server that has DIED will never answer: say so now, with its last
+    # words, instead of polling a corpse for the whole timeout.
+    running="$("${DOCKER[@]}" inspect -f '{{.State.Running}}' "$SRV" 2>/dev/null || true)"
+    if [[ "$running" != true ]]; then
+        "${DOCKER[@]}" logs --tail 25 "$SRV" 2>&1 | sed 's/^/    /' >&2
+        die2 "the SonarQube container stopped while starting (state: ${running:-gone}; exit $("${DOCKER[@]}" inspect -f '{{.State.ExitCode}}' "$SRV" 2>/dev/null || echo '?'))"
+    fi
     st="$("${DOCKER[@]}" exec "$SRV" curl -s http://localhost:9000/api/system/status 2>/dev/null || true)"
     case "$st" in *'"status":"UP"'*) up=1; break ;; esac
     sleep 5
@@ -173,6 +320,17 @@ AUTH="admin:${PW}"
 TOKEN="$(api POST "user_tokens/generate?name=sonar-local-$$" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])' 2>/dev/null)"
 [[ -n "$TOKEN" ]] || die2 "could not generate a scanner token"
 AUTH="${TOKEN}:"
+
+# The estate's gate, condition for condition, made this project's gate here.
+GATE_NAME="Jarvis Standard (sonar-local copy)"
+qname="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$GATE_NAME")"
+api POST "qualitygates/create?name=${qname}" >/dev/null || die2 "could not create the gate copy"
+for c in "${JARVIS_GATE[@]}"; do
+    read -r cm cop cerr <<<"$c"
+    api POST "qualitygates/create_condition?gateName=${qname}&metric=${cm}&op=${cop}&error=${cerr}" >/dev/null \
+        || die2 "could not add the gate condition ${c}"
+done
+api POST "qualitygates/set_as_default?name=${qname}" >/dev/null || die2 "could not make the gate copy the default"
 
 # WHAT "NEW" MEANS, AND WHY THE SCANNED REPOSITORY IS REWRITTEN. SonarQube
 # decides new code LINE BY LINE from `git blame`: a line is new when its commit
@@ -229,15 +387,7 @@ scan() {   # scan <sha> <projectVersion>
 scan "$base_sha" "$base_ver"
 scan "$head_sha" "$head_ver"
 
-m="$(api GET "measures/component?component=${PROJECT_KEY}&metricKeys=new_violations,violations")" \
-    || die2 "could not read the measures"
-read -r new_v total_v < <(python3 -c '
-import json, sys
-d = json.load(sys.stdin)["component"]["measures"]
-get = lambda k: next((x.get("period", {}).get("value", x.get("value")) for x in d if x["metric"] == k), None)
-print(get("new_violations"), get("violations"))' <<<"$m")
-[[ "$new_v" =~ ^[0-9]+$ ]] || die2 "new_violations was not reported (${m:0:200})"
-
+# ─── the verdict ─────────────────────────────────────────────────────────────
 issues="$(api GET "issues/search?componentKeys=${PROJECT_KEY}&inNewCodePeriod=true&resolved=false&ps=500")" \
     || die2 "could not read the new issues"
 python3 -c '
@@ -247,50 +397,12 @@ for i in sorted(d.get("issues", []), key=lambda i: (i["component"], i.get("line"
     print("  NEW  %-12s %s:%s  %s" % (i["rule"].split(":")[-1], i["component"].split(":", 1)[-1],
                                       i.get("line", "-"), i["message"]))' <<<"$issues"
 
-# The verdict is new_violations (the condition that stopped v1.1.0). The rest
-# is REPORTED so nothing is hidden: this server's own Sonar way gate fails on
-# coverage (no report is ever sent, here or in CI), and the estate's gate
-# (measured 2026-09-28) also holds bugs, vulnerabilities, reliability, new
-# duplication and hotspot review — a NEW security hotspot needs a human review
-# on the estate's server before the tag, so it is named here as a WARN.
-extra="$(api GET "measures/component?component=${PROJECT_KEY}&metricKeys=bugs,vulnerabilities,reliability_rating,new_duplicated_lines_density,new_security_hotspots")" || extra='{}'
-python3 -c '
-import json, sys
-try:
-    d = {x["metric"]: x.get("period", {}).get("value", x.get("value")) for x in json.load(sys.stdin)["component"]["measures"]}
-except Exception:
-    d = {}
-warn = []
-if d.get("bugs") not in (None, "0"): warn.append("bugs=%s" % d["bugs"])
-if d.get("vulnerabilities") not in (None, "0"): warn.append("vulnerabilities=%s" % d["vulnerabilities"])
-if d.get("reliability_rating") not in (None, "1.0", "1"): warn.append("reliability_rating=%s" % d["reliability_rating"])
-if d.get("new_duplicated_lines_density") and float(d["new_duplicated_lines_density"]) > 3: warn.append("new_duplicated_lines_density=%s%%" % d["new_duplicated_lines_density"])
-if d.get("new_security_hotspots") not in (None, "0"): warn.append("new_security_hotspots=%s (each needs a review on the estate server before the tag)" % d["new_security_hotspots"])
-print("sonar-local: also: " + ", ".join("%s=%s" % kv for kv in sorted(d.items())))
-for w in warn: print("sonar-local: WARN (the estate gate holds this too): " + w)' <<<"$extra"
-# Name every open vulnerability, old or new: the estate gate fails on
-# vulnerabilities > 0 overall, and one resolved on the estate server (a false
-# positive, say) is open again on a throwaway one — the operator needs to see
-# which, and whether it is the one already resolved there.
-vulns="$(api GET "issues/search?componentKeys=${PROJECT_KEY}&types=VULNERABILITY&resolved=false&ps=100")" || vulns='{}'
-python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    d = {}
-for i in d.get("issues", []):
-    print("  VULN %-12s %s:%s  %s" % (i["rule"].split(":")[-1], i["component"].split(":", 1)[-1],
-                                     i.get("line", "-"), i["message"]))' <<<"$vulns"
-gate="$(api GET "qualitygates/project_status?projectKey=${PROJECT_KEY}" | python3 -c '
-import json, sys
-p = json.load(sys.stdin)["projectStatus"]
-bad = [c["metricKey"] for c in p.get("conditions", []) if c.get("status") == "ERROR"]
-print(p["status"] + (" (conditions failing on this throwaway Sonar way gate: " + ", ".join(bad) + ")" if bad else ""))' 2>/dev/null || echo '?')"
-say "HEAD ${head_sha:0:12} vs ${BASE_REF}: new_violations=${new_v} (all issues ${total_v}); quality gate ${gate}"
-if [[ "$new_v" -gt 0 ]]; then
-    say "FAIL: ${new_v} new issue(s) - the tag's Sonar gate would fail on these"
-    exit 1
-fi
-say "PASS: 0 new issues"
-exit 0
+metrics="$(for c in "${JARVIS_GATE[@]}"; do printf '%s,' "${c%% *}"; done)violations"
+{
+    api GET "qualitygates/get_by_project?project=${PROJECT_KEY}" > "$WORK/v-gate.json" \
+    && api GET "qualitygates/project_status?projectKey=${PROJECT_KEY}" > "$WORK/v-status.json" \
+    && api GET "measures/component?component=${PROJECT_KEY}&metricKeys=${metrics}" > "$WORK/v-measures.json" \
+    && api GET "issues/search?componentKeys=${PROJECT_KEY}&types=VULNERABILITY&resolved=false&ps=100" > "$WORK/v-vulns.json"
+} || die2 "could not read the gate status, measures or vulnerabilities"
+evaluate_gate "$WORK" "$GATE_NAME" "${head_sha:0:12} vs ${BASE_REF}"
+exit $?

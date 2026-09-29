@@ -17,7 +17,7 @@ set -uo pipefail
 
 tm_header "tm/VERSION and every other surface agree with VERSION"
 
-GATE="${TM_REPO_ROOT}/tools/check-version-surfaces.sh"
+GATE="${TM_VERSION_SURFACES:-${TM_REPO_ROOT}/tools/check-version-surfaces.sh}"
 [ -f "$GATE" ] || tm_die "tools/check-version-surfaces.sh is missing"
 
 v_agree() {
@@ -101,6 +101,10 @@ v_changelog_dates_backwards() {
     bash "$GATE" --root "${TM_TMP}/copy" > "${TM_TMP}/out" 2>&1 \
         && _tm_afail "a CHANGELOG section dated before the older section below it passed"
     tm_assert_grep "is dated 2000-01-01, BEFORE the older" "${TM_TMP}/out" "the gate failed, but not on the changelog order"
+    # Round 5 (gatekeeper): the summary line said "OK ... none going
+    # backwards" right under that FAIL.
+    tm_assert_nogrep "none going backwards" "${TM_TMP}/out" "the gate printed OK 'none going backwards' after a date FAIL"
+    tm_assert_grep "section dates go backwards" "${TM_TMP}/out" "the summary does not say the dates go backwards"
 }
 tm_case "a-changelog-dated-before-its-predecessor-is-caught" none v_changelog_dates_backwards
 

@@ -44,6 +44,8 @@ declare -A TARGET_PATH=(
   [helper]="${TM_REPO_ROOT}/install/libexec/tm-apply"
   [site]="${TM_REPO_ROOT}/nginx/topic-manager.conf"
   [loginview]="${TM_REPO_ROOT}/app/components/LoginView.js"
+  [sonar]="${TM_REPO_ROOT}/tools/sonar-local.sh"
+  [surfaces]="${TM_REPO_ROOT}/tools/check-version-surfaces.sh"
 )
 declare -A TARGET_ENV=(
   [upgrade]="TM_UPGRADE_SH"
@@ -52,6 +54,8 @@ declare -A TARGET_ENV=(
   [helper]="TM_APPLY_HELPER"
   [site]="TM_NGINX_SITE"
   [loginview]="TM_LOGINVIEW_JS"
+  [sonar]="TM_SONAR_LOCAL"
+  [surfaces]="TM_VERSION_SURFACES"
 )
 # v1.2.0: a Python module is named TARGET|py:<module> (tm/<module>.py). The
 # harness copies the whole tm/ package into the scratch directory, mutates the
