@@ -206,6 +206,86 @@
       "disposition": "fixed in v1.2.0 (release/v1.2.0)",
       "status": "fixed-unreleased",
       "fixed": "release/v1.2.0 (commit recorded in WO-0004 builder round 3): Audit trail section documents each, keyed to the real strings; test: t39 troubleshooting-is-keyed-to-the-real-strings (5 new pairs)"
+    },
+    {
+      "id": "REG-0020",
+      "date": "2026-09-29",
+      "source": "sec-review TM-SEC-001 (CWE-862)",
+      "severity": "High",
+      "finding": "host settings, Apply to host, TLS upload and restart are open to every authenticated user; no separate host-administrator authorisation",
+      "where": "tm/routes.py (PUT /api/settings admin keys, /api/system/apply/*, /api/system/tls/cert, /api/service/restart)",
+      "disposition": "RULING by James 2026-09-29 (WO-0004 decisions host-settings-authz): KEEP for v1.2.0; every member of required_group is a Kafka admin by design; revisit with roles / PIV in v1.4.0",
+      "status": "accepted"
+    },
+    {
+      "id": "REG-0021",
+      "date": "2026-09-29",
+      "source": "WO-0004 builder round 4 (sec-review d1be145, adversary, clean-room tm-qc 2026-09-29)",
+      "severity": "Low",
+      "finding": "the offline bundle carries 373 lockstep siblings (520 .debs, 187 MB), among them libc6-dev, python3-dev, slapd and krb5-kdc; install/README.md said \"no compiler and no -dev headers\"",
+      "where": "prepare-offline.sh (sibling expansion), install/README.md",
+      "disposition": "round 4 CORRECTED THE CLAIM (measured contents; apt never installs a sibling that is not already installed). Trimming deferred: a sibling is needed exactly when the TARGET has it installed, which the build host cannot know, and the round-4 lockstep failure came from carrying too few; a trim needs a target inventory input or a proof offline upgrade from a trimmed bundle on the QC host",
+      "status": "open"
+    },
+    {
+      "id": "REG-0022",
+      "date": "2026-09-29",
+      "source": "sec-review TM-SEC-011 (CWE-295), second half",
+      "severity": "Low",
+      "finding": "TLS upload: TLS-server purpose (extendedKeyUsage serverAuth) is checked only when a chain is supplied (openssl verify -purpose sslserver); a no-chain clientAuth-only leaf passes",
+      "where": "tm/tls_check.py _checked_chain",
+      "disposition": "deferred (outside the round-4 brief). The hostname half was answered in round 4: a certificate not naming the configured server_name is installed with a WARNING in the apply result (see REG-0026)",
+      "status": "open"
+    },
+    {
+      "id": "REG-0023",
+      "date": "2026-09-29",
+      "source": "sec-review TM-SEC-008 (CWE-362)",
+      "severity": "Medium",
+      "finding": "concurrent cluster-profile writes from different gunicorn workers can lose one update (read-modify-write without a lock; the atomic rename only prevents truncation)",
+      "where": "tm/routes.py cluster create/update/delete, tm/clusters.py _persist",
+      "disposition": "deferred (outside the round-4 brief): an inter-process lock (fcntl on clusters.d) across reload-validate-replace, or a revision compare-and-swap with 409",
+      "status": "open"
+    },
+    {
+      "id": "REG-0024",
+      "date": "2026-09-29",
+      "source": "sec-review TM-SEC-007 (CWE-770), second half",
+      "severity": "Low",
+      "finding": "GET /api/audit/export materialises the whole audit table (fetchall + StringIO) for any authenticated user; up to audit_max_rows (default 5,000,000)",
+      "where": "tm/audit.py export_audit_csv, tm/routes.py export_audit",
+      "disposition": "deferred: stream the CSV in bounded chunks. The paged list (per_page 1..500, page >= 1) was fixed in round 4",
+      "status": "open"
+    },
+    {
+      "id": "REG-0025",
+      "date": "2026-09-29",
+      "source": "sec-review TM-SEC-003 (CWE-307), remainder",
+      "severity": "Low",
+      "finding": "sign-in rate limiting exists only in nginx (per client address); there is no application-level limiter keyed by identity across the four workers",
+      "where": "nginx/topic-manager.conf, tm/routes.py login",
+      "disposition": "the bypass is CLOSED in round 4 (gunicorn listens only on a 0660 topic-manager:www-data Unix socket, so nothing but nginx reaches it); a per-identity limiter is deferred",
+      "status": "open"
+    },
+    {
+      "id": "REG-0026",
+      "date": "2026-09-29",
+      "source": "sec-review TM-SEC-011 (CWE-295), first half; brief A11",
+      "severity": "Low",
+      "finding": "a TLS upload is not checked against the server name",
+      "where": "tm/tls_check.py validate(server_name=), install/libexec/tm-apply plan_tls/configured_server_name",
+      "disposition": "DECIDED by the builder, round 4, for owner confirmation: WARN, not refuse. The root helper reads the first server_name of the installed nginx site and, when no SAN covers it (RFC 6125; IP SANs as addresses), the apply result carries \"the certificate does not name this server (<name>) ... will refuse it\". Refusing would block installing a certificate for a new name before DNS and server_name move, or on a host reached by address",
+      "status": "decided-warn"
+    },
+    {
+      "id": "REG-0027",
+      "date": "2026-09-29",
+      "source": "WO-0004 builder round 4 (sec-review d1be145, adversary, clean-room tm-qc 2026-09-29)",
+      "severity": "Medium",
+      "finding": "the 1.1.x -> 1.2.0 OFFLINE upgrade on the STIG+FIPS QC host has not been re-run since round 4 changed the listener to a systemd socket unit (topic-manager.socket), the upgrade stop/start/rollback of it, and install.sh --packages-only",
+      "where": "install/upgrade-full.sh, install.sh, systemd/topic-manager.socket",
+      "disposition": "owed by the assure lane on tm-qc (the builder was told not to touch it): upgrade from v110-installed, --packages-only for rsyslog-openssl, and a --restore to 1.1.x proving the socket unit is removed and TCP 5001 serves again. Tested here only by t44 (real gunicorn with systemd-style socket activation, unit/nginx/installer structure, relocated restore_socket_unit) and t38/t11",
+      "status": "open"
     }
   ]
 }

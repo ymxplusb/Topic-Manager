@@ -393,6 +393,55 @@
         "CHANGELOG 1.2.0 is dated 2026-09-27, above 1.1.1 dated 2026-09-28: release date is surface-sweep's",
         "lockparse 28k pip differential fuzz (round 12) not re-run; parse() was checked old-vs-new on 100k lock texts instead"
       ]
+    },
+    {
+      "by": "builder (round 4: sec-review + adversary + James rulings + Sonar + clean-room docs)",
+      "date": "2026-09-29",
+      "worktree": "/Users/jamesrodman/Scripts/topic-manager-v120, branch release/v1.2.0 (base afb602e)",
+      "commits": [
+        "519b84d security (v1.2.0 round 4): close the sec-review and adversary findings",
+        "fefe8fe gates, hygiene, docs (v1.2.0 round 4): sonar-local, frontend loads, changelog order, clean-room defects",
+        "78a72c9 tests (v1.2.0 round 4): mutation records M302-M337; first Linux run fixes",
+        "4fe9782 tests (v1.2.0 round 4): close the three mutation survivors",
+        "e1da06b audit (v1.2.0 round 4): two comments that still asserted the record reached syslog",
+        "e7fa8a7 tools (v1.2.0 round 4): sonar-local names every open vulnerability"
+      ],
+      "root_cause": "(A1) valid_host trusted ipaddress, which takes an IPv6 scope id as free text, and matched names with $ (newline-tolerant); the root helper re-ran the SAME function as its only barrier. (A2) CSRF refused only Sec-Fetch-Site: cross-site, only in require_auth; same-site, no-metadata browsers and a multipart form (the TLS upload) passed. (A3) safe_install_dir checked -L then resolved the path again in install -d, only on the last component, while the service still ran. (A4) write_failed ignored syslog_send's return and the routes asserted delivery. (A5) any ufw status failure was read as 'inactive'. (A6) session identity was the typed name, compared case-sensitively. (A7) apply results were audited only inside GET /system/apply. (A8) ufw_verify reported 'closed' from the rule, not the port. (A9) per_page unvalidated (LIMIT -1 = all); redirect built from $host; login returned the directory's reason. (A10) gunicorn bound 127.0.0.1:5001, reachable by any local process, whose X-Forwarded-For ProxyFix believed. (A11) no name check on uploads. (B) 19 new Sonar issues because the CI scan reads the whole tree (sources=.) and nothing ran that scan before the tag. (C/D) a regex HTML reader, an unordered changelog, and docs written from the developer's host, not a stock build host.",
+      "files_changed": [
+        "tm/settings_schema.py (host rule), install/libexec/tm-apply (sink_guard, ufw fail-closed + true detail, DONE marker, configured_server_name)",
+        "tm/routes.py (before_request CSRF, generic login, per_page/page, truthful audit-failure texts, Sonar), app/main.js (X-TM-Request fetch wrapper)",
+        "install.sh (stop_for_reinstall before directories, descriptor safe_install_dir, socket unit, apply-audit path, install_required_packages + --packages-only), install/upgrade-full.sh (same safe_install_dir, socket unit install/stop/start/backup/restore_socket_unit, apply-audit path, SELF rollback paths, numbered checklist, rsyslog-openssl hint)",
+        "tm/audit.py (write_failed returns delivery; AuditUnavailable.syslog_delivered; S8572), tm/auth.py + tm/models.py (lower-case identity + migration), tm/app.py + tm/apply.py + tm/audit_retention.py (unattended apply audit)",
+        "tm/tls_check.py (names_host, server_name warning, S1481), tm/hoststatus.py, tm/service_control.py, tools/gen-requirements-lock.py (Sonar)",
+        "NEW systemd/topic-manager.socket, systemd/topic-manager-apply-audit.path/.service; systemd/topic-manager.service (Requires socket, --bind unix, --umask 0o117); nginx/topic-manager.conf (upstream unix:), nginx/topic-manager-http.conf ($server_name)",
+        "NEW tools/sonar-local.sh; tools/check-frontend-syntax.sh (html.parser), tools/check-version-surfaces.sh (changelog order), tools/check-ppsm-consistency.sh (socket row, host rows, no 5001), tools/check-config-example.sh (no server.host/port), tools/check-heredocs.sh (PYSID); prepare-offline.sh (tool preflight, lock exit codes); sonar-project.properties (sources=.)",
+        "PPSM.csv + SettingsTab downloadPpsm (socket row, postfix 25, chrony 323, rsyslog UDP), config/config.yaml.example (no host/port), README.md, docs/INSTALL.md, install/README.md, TROUBLESHOOTING.md, CHANGELOG.md (1.2.0 dated 2026-09-29 + round-4 section)",
+        "tests: NEW t43-web-tier-round4, t44-backend-socket; t11, t13, t19, t20, t22, t31, t32, t34, t35, t36, t37, t38, t39, t40, t41, lib/apply_fixture.sh; mutations.txt M302-M337",
+        ".claude/project.yml (sonar-local gate, real Sonar scope, PPSM gate note); .work/REGISTER.json REG-0020..0027"
+      ],
+      "amendments": [
+        "All files outside scout.scope were named by the round-4 brief itself (coordinator-directed): tm/auth.py (A6), app/main.js (A2 frontend), tools/* and sonar-project.properties (B/C), new systemd units (A7, A10), .claude/project.yml (gate), CHANGELOG (surface).",
+        "Not in the brief, required by it: install/upgrade-full.sh safe_install_dir (the SAME TOCTOU as install.sh, a sibling consumer); config/config.yaml.example + tools/check-config-example.sh + t20/t41 fixtures (server.host/port described the gone TCP listener); tools/check-heredocs.sh (the new PYSID heredocs); PPSM gate (socket row replaces the pinned 5001 row)."
+      ],
+      "decisions_made": [
+        "A10: the socket is created by systemd (topic-manager.socket, 0660 topic-manager:www-data, socket activation), NOT by gunicorn under a RuntimeDirectory: gunicorn 26.2.0 sock.py UnixSocket.bind chowns its own socket to its uid/gid, so it can never be group www-data without widening a group membership. --bind unix: + --umask 0o117 remain as the fail-closed fallback (t44). Rollback to 1.1.x removes the unit (else the restored TCP gunicorn would be handed the socket via LISTEN_FDS instead of binding 5001). ProxyFix unchanged at x_for=1.",
+        "A6: str.lower(), not casefold(): casefold maps sharp-s to 'ss' and would bind as a different account.",
+        "A11: WARN, not refuse (REG-0026, for owner confirmation).",
+        "A7: a .path unit on a final-only marker (/run/topic-manager-apply/finished), not the directory: the 'running' write would start the audit early and a verdict landing during that run is merged into it and lost; plus start-time and daily-prune catch-up.",
+        "D8: claim corrected, bundle not trimmed (REG-0021).",
+        "D6: install.sh --packages-only (the tested offline apt policy) rather than a second apt path in the upgrade."
+      ],
+      "sonar_local": "tools/sonar-local.sh --remote claude_admin@192.168.202.81, SonarQube 26.9.0.129388-community (sha256:4905574a...) + sonar-scanner-cli:11 (CI's digest), Sonar way defaults, base v1.1.1 (89f8c53) -> HEAD. Proven RED on 519b84d: new_violations=2 (S8572 audit.py:98, audit_retention.py:222), exit 1. FINAL on e7fa8a7: new_violations=0, exit 0; 142 files indexed (101 at base). Reported, not the verdict: this server's Sonar way gate fails new_coverage (no coverage report is sent here or in CI); vulnerabilities=1 = S4502 tm/app.py:46 'disabling CSRF protection' (pre-existing, the hotspot already reviewed on the estate server; round 4's before_request is the CSRF defence). First version scanned the real history and reported a FALSE 0 on the tree with 19 (SonarQube dates new lines by git blame): fixed by committing each tree afresh.",
+      "mutation_controls": "tests/mutate.sh M302-M337 on Linux (python:3.12-bookworm, CI TEST_SETUP, bundle of 78a72c9): 36 run, 33 killed, 3 SURVIVED -> findings, closed: M302 + M303 (the IP rule's two layers cover each other's inputs; t31 each-layer-of-the-ip-rule-holds-alone removes one layer at a time) and M317 (t34 left fail.ufw from the first pass, so 'garble' never ran). Re-run on 4fe9782: M302, M303, M316, M317 all RED. Manual (cp to /m, anchor exactly once): J1 main.js header removed RED (t43), J2 redirect $host RED (t36 x2), J3 --umask removed RED (t44), J4 SocketMode 0666 RED (t44), J5 frontend gate quoted-only RED (t41), J6 changelog order check off RED (t22), J7 no-5001 rule off RED (t19), J8 sonar-local real history RED (t41). Total 44 controls, 44 killed after the fixes, 0 equivalents.",
+      "suite": "Linux, python:3.12-bookworm on 192.168.202.81, git-bundle clone, CI TEST_SETUP, every declared gate but sonar-local (run separately above) and CI TEST_COMMAND (check-requirements-lock --require-online && tests/run.sh --strict): see suite_final.",
+      "suite_final": "e7fa8a7 (final code HEAD): check-requirements-lock --require-online PASS (15 releases hash-verified against live PyPI); tests/run.sh --strict 448 passed, 0 failed, 0 skipped, exit 0; declared gates python-syntax, shell-syntax, frontend-syntax, config-example, heredoc-python, sbom-consistency, sca (OSV live), ppsm-consistency, pipefail-consumers, env-neutral, version-surfaces, requirements-lock all exit 0; sonar-local exit 0 (0 new vs v1.1.1). Earlier runs: fefe8fe 439/5 (env-neutral link-local examples, t20 anchors, TROUBLESHOOTING wording, t44 comment grep: all fixed in 78a72c9), 78a72c9 447/0, e1da06b 448/0.",
+      "self_check": "py_compile tm/*.py + tm-apply parse; bash -n every shell file (tests/t14 fails only under macOS bash 3.2, pre-existing, green on Linux); node --check main.js/SettingsTab; check-heredocs 11; git diff re-read (two stale comments found and fixed in e1da06b).",
+      "not_done": [
+        "REG-0027: the STIG+FIPS offline 1.1.x -> 1.2.0 upgrade, --packages-only and a --restore to 1.1.x have NOT been re-run on tm-qc since the socket change (told not to touch tm-qc); owed by the assure lane",
+        "REG-0020 (authz, James KEEP), REG-0021 (bundle trim), REG-0022 (EKU without chain), REG-0023 (cluster write race), REG-0024 (CSV export streaming), REG-0025 (app-level login limiter) deferred",
+        "authenticated DAST re-scan (coordinator's dast.next) not done",
+        "top-level status left to the coordinator"
+      ]
     }
   ],
   "clean_room": {
@@ -402,5 +451,16 @@
     "upgrade": "PASS 1.1.0->1.2.0 exit 0 (audit 1: 3 warnings; backup 0, 48-record baseline)",
     "stig": "209/8 before and after, same 8 rules",
     "verdict": "FAIL (docs): 11 documentation defects"
-  }
+  },
+  "dast": [
+    {
+      "date": "2026-09-29",
+      "target": "tm-qc https://192.168.202.92/ (v1.2.0 @ 3cfdedb, pre-round-4)",
+      "tool": "ZAP 2.17.0 spider + active scan, bar Medium",
+      "surface": "24 URLs, UNAUTHENTICATED (login page + static assets only; no API route behind sign-in was attacked)",
+      "result": "High 0 / Medium 6 / Low 0 / Info 82",
+      "mediums": "CSP script-src unsafe-eval + style-src unsafe-inline x3 URLs = existing REG-0001/REG-0002 (deferred to precompile release); no new tickets",
+      "next": "re-scan after round 4 WITH an authenticated context (needs a test AD account)"
+    }
+  ]
 }
