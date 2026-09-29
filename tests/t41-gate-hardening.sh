@@ -461,6 +461,8 @@ g_sonar_local_shape() {
     [ -n "$srvrun" ] || _tm_afail "the server's docker run line moved"
     grep -qE '(^|[[:space:]])-p[[:space:]]' <<<"$srvrun" && _tm_afail "the throwaway SonarQube publishes a port"
     grep -q 'new_violations' "$S" || _tm_afail "the verdict is not new_violations"
+    grep -qx '    stage_tree "$1"' "$S" \
+        || _tm_afail "the scan reads the real history: every commit predates the throwaway base analysis, so nothing would be new"
     grep -q '^trap cleanup EXIT$' "$S" || _tm_afail "containers are not removed on every exit"
     true
 }

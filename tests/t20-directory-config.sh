@@ -171,9 +171,13 @@ d_install_checks_before_any_change() {
     local check first=999999 n pat
     check="$(grep -n 'LDAP_MISSING="$(ldap_config_missing' "$INSTALL_SH" | sed -n 1p | cut -d: -f1)"
     tm_assert_nonempty "$check" "install.sh no longer checks an existing config.yaml for the directory keys"
-    for pat in '^    DEBIAN_FRONTEND=noninteractive apt-get update' '^    apt_install_from_bundle ' \
+    # v1.2.0 round 4: the package install is a function (install.sh
+    # --packages-only calls it and EXITS before this check, changing nothing
+    # else), and the reinstall stop is stop_for_reinstall — their CALLS in the
+    # normal flow are the mutating steps.
+    for pat in '^install_required_packages$' \
                '^    useradd ' '^safe_install_dir ' '^"\$PYTHON" -m venv' '^rsync -a --delete' \
-               '^    systemctl stop '; do
+               '^stop_for_reinstall$'; do
         n="$(grep -nE "$pat" "$INSTALL_SH" | sed -n 1p | cut -d: -f1)"
         tm_assert_nonempty "$n" "anchor for a mutating step not found: ${pat}"
         [ "$n" -lt "$first" ] && first="$n"
@@ -377,7 +381,8 @@ tm_case "install-writes-a-complete-neutral-config" none c_config_written
 
 
 # Round 8 (gatekeeper): tools/check-config-example.sh passed `port:` with no
-# value. A required key must carry one.
+# value. A required key must carry one. (v1.2.0 round 4: server.port is gone —
+# gunicorn has a Unix socket — so a required key that remains is emptied.)
 c_example_required_values() {
     local r="${TM_TMP}/cx"
     mkdir -p "$r/tools" "$r/config"
@@ -385,11 +390,11 @@ c_example_required_values() {
     cp "${TM_REPO_ROOT}"/config/config.yaml.example "${TM_REPO_ROOT}"/config/clusters.yaml.example "$r/config/"
     bash "$r/tools/check-config-example.sh" > "${TM_TMP}/out" 2>&1 \
         || _tm_afail "the unmodified example fails: $(cat "${TM_TMP}/out")"
-    sed -i 's/^  port: [0-9][0-9]*$/  port:/' "$r/config/config.yaml.example"
+    sed -i 's/^  timeout_minutes: [0-9][0-9]*$/  timeout_minutes:/' "$r/config/config.yaml.example"
     cmp -s "${TM_REPO_ROOT}/config/config.yaml.example" "$r/config/config.yaml.example" && tm_die "the fixture changed nothing"
     bash "$r/tools/check-config-example.sh" > "${TM_TMP}/out" 2>&1 \
-        && _tm_afail "server.port with NO value passed the config-example gate"
-    tm_assert_grep "server.port (present but EMPTY)" "${TM_TMP}/out" "the empty key was not named"
+        && _tm_afail "session.timeout_minutes with NO value passed the config-example gate"
+    tm_assert_grep "session.timeout_minutes (present but EMPTY)" "${TM_TMP}/out" "the empty key was not named"
     cp "${TM_REPO_ROOT}/config/config.yaml.example" "$r/config/"
     sed -i 's/^  ldap_domain: .*$/  ldap_domain: ""/' "$r/config/config.yaml.example"
     bash "$r/tools/check-config-example.sh" > "${TM_TMP}/out" 2>&1 \

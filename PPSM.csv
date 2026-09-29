@@ -9,7 +9,7 @@
 "Web","HTTP","80","TCP","Inbound","Redirect to HTTPS only (301). No content is served on this port. Enabled by applied http_redirect_enabled."
 "Admin","SSH","22","TCP","Inbound","Operating-system administration of the host (key-based). Not used by the application."
 "--- INTERNAL (loopback and local sockets; not reachable off the host) ---",,,,,
-"App","gunicorn (Flask)","N/A (Unix socket)","Unix stream","Local","nginx to the application backend over the Unix socket /run/topic-manager/gunicorn.sock, 0660 topic-manager:www-data, created by systemd (topic-manager.socket). No TCP port; before v1.2.0 this was 127.0.0.1:5001."
+"App","gunicorn (Flask)","N/A (Unix socket)","Unix stream","Local","nginx to the application backend over the Unix socket /run/topic-manager/gunicorn.sock, 0660 topic-manager:www-data, created by systemd (topic-manager.socket). No TCP port (before v1.2.0: TCP 5001 on the loopback)."
 "App","systemd-resolved","53","UDP/TCP","Loopback","Local stub resolver (127.0.0.53). Host service, not part of the application."
 "Host","Postfix (MTA)","25","TCP","Loopback","Host mail transfer agent where one is installed (a STIG baseline installs Postfix for audit alerts). Loopback only under that baseline (inet_interfaces = loopback-only). Not used by the application."
 "Host","chrony (chronyc control)","323","UDP","Loopback","chronyd command port for chronyc, bound to 127.0.0.1 and ::1 by chrony. Host time service, present when chrony is the time daemon."

@@ -165,10 +165,10 @@ ok = [('syslog_host','logs.example.org'),('syslog_host','192.0.2.7'),('syslog_ho
       ('audit_retention_days','30'),('audit_retention_days','3650'),('audit_max_rows','10000'),
       ('audit_max_rows','50000000'),('audit_warn_pct','50'),('audit_warn_pct','95'),
       ('http_redirect_enabled','true'),
-      ('syslog_host','fe80::1'),('syslog_host','::ffff:192.0.2.1'),('syslog_host','x'*63 + '.example.org'),
+      ('syslog_host','2001:db8::2'),('syslog_host','::ffff:192.0.2.1'),('syslog_host','x'*63 + '.example.org'),
       ('ntp_servers','2001:db8::1,ntp.example.org')]
-bad = [('syslog_host','fe80::1%a\nb'),('syslog_host','fe80::1%eth0'),('ntp_servers','fe80::1%a\nb'),
-       ('ntp_servers','ntp.example.org,fe80::1%lo'),('syslog_host','logs.example.org.'),
+bad = [('syslog_host','2001:db8::1%a\nb'),('syslog_host','2001:db8::1%eth0'),('ntp_servers','2001:db8::1%a\nb'),
+       ('ntp_servers','ntp.example.org,2001:db8::1%lo'),('syslog_host','logs.example.org.'),
        ('syslog_host','a..b'),('syslog_host','a-.b'),('syslog_host','x'*64 + '.org'),
        ('syslog_host','1.2.3'),('syslog_host','256.1.1.1'),('syslog_host','a.1'),('syslog_port','\u0661\u0662'),
        ('syslog_app_id','tm\nx'),('syslog_host','a\nb'),('syslog_host','a;b'),('syslog_host','a{b}'),('syslog_host','a"b'),

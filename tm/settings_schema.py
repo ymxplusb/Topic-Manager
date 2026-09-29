@@ -79,8 +79,8 @@ SYSLOG_PROTOCOLS = ('udp', 'tcp', 'tls')
 #: newline, which is exactly the character this rule exists to keep out.
 _LABEL_RE = re.compile(r'[A-Za-z\d](?:[A-Za-z\d-]{0,61}[A-Za-z\d])?', re.ASCII)
 #: The only characters an IP literal may be written with here. No '%': an
-#: IPv6 scope id ("fe80::1%eth0") is free text to ipaddress — it accepted
-#: "fe80::1%a\nb", and the newline then reached rsyslog and chrony as root.
+#: IPv6 scope id ("2001:db8::1%eth0") is free text to ipaddress — it accepted
+#: "2001:db8::1%a\nb", and the newline then reached rsyslog and chrony as root.
 _IP_CHARS_RE = re.compile(r'[\dA-Fa-f:.]{2,45}', re.ASCII)
 _APP_ID_RE = re.compile(r'[\w.-]{1,48}', re.ASCII)
 _INT_RE = re.compile(r'\d{1,9}', re.ASCII)

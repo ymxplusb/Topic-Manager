@@ -47,8 +47,10 @@ a_one_path_everywhere() {
     grep -qE "^[[:space:]]+--bind unix:${SOCK} \\\\$" "$SVCU" || _tm_afail "the service's --bind is not the socket path"
     grep -qE "^[[:space:]]+server unix:${SOCK};" "$SITE" || _tm_afail "nginx does not proxy to the socket"
     local hits
-    hits="$(grep -rnE '127\.0\.0\.1:5001|:5001\b|--bind 127' "${TM_REPO_ROOT}/systemd" "${TM_REPO_ROOT}/nginx" \
-        "${TM_REPO_ROOT}/PPSM.csv" "${TM_REPO_ROOT}/config" "${TM_REPO_ROOT}/app" 2>/dev/null || true)"
+    # Comments may tell the history ("until v1.2.0 ... 127.0.0.1:5001"); no
+    # directive, row or value may name it.
+    hits="$(grep -rnE '127\.0\.0\.1:5001|:5001\b|--bind 127|,"5001",' "${TM_REPO_ROOT}/systemd" "${TM_REPO_ROOT}/nginx" \
+        "${TM_REPO_ROOT}/PPSM.csv" "${TM_REPO_ROOT}/config" 2>/dev/null | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)"
     [ -z "$hits" ] || _tm_afail "something still names the old TCP listener: ${hits}"
 }
 tm_case "one-socket-path-in-the-units-nginx-and-no-5001" none a_one_path_everywhere

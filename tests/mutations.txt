@@ -2487,3 +2487,302 @@ TARGET|py:tls_check
 EQUIV|no
 ANCHOR|        if not self_signed and (not ci['sig'] or _WEAK_SIG.search(ci['sig'])):
 REPLACE|        if False:
+
+# ─── v1.2.0 round 4 (WO-0004): sec-review, adversary, clean-room ────────────
+--- M302
+DESC|A1: an IPv6 scope id is accepted again (the CWE-74/93 injection)
+TESTS|t31-settings-keys.sh t34-apply-helper.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    return getattr(addr, 'scope_id', None) is None
+REPLACE|    return True
+
+--- M303
+DESC|A1: an IP literal is no longer held to [0-9A-Fa-f:.] before it is parsed
+TESTS|t31-settings-keys.sh t34-apply-helper.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    if not _IP_CHARS_RE.fullmatch(value):
+ANCHOR|        return False
+REPLACE|    if False:
+REPLACE|        return False
+
+--- M304
+DESC|A1: a name whose last label is all digits (a malformed IPv4) is a host name
+TESTS|t31-settings-keys.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    return all(_LABEL_RE.fullmatch(label) for label in labels) and not labels[-1].isdigit()
+REPLACE|    return all(_LABEL_RE.fullmatch(label) for label in labels)
+
+--- M305
+DESC|A1: the root helper relies on the shared schema alone (its own sink rule is not called)
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        sink_guard(values)
+REPLACE|        pass
+
+--- M306
+DESC|A1: the helper's own host rule admits any character
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|_SINK_HOST = re.compile(r'[A-Za-z0-9:][A-Za-z0-9.:-]{0,252}')
+REPLACE|_SINK_HOST = re.compile(r'(?s).{1,253}')
+
+--- M307
+DESC|A2: X-TM-Request is honoured even when the browser says cross-site
+TESTS|t43-web-tier-round4.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if fetch_site is None and request.headers.get(CSRF_HEADER) == '1':
+REPLACE|    if request.headers.get(CSRF_HEADER) == '1':
+
+--- M308
+DESC|A2: the CSRF rule is off for every method
+TESTS|t43-web-tier-round4.sh t35-apply-routes.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if request.method in _SAFE_METHODS:
+REPLACE|    if True:
+
+--- M309
+DESC|A2: only an explicit cross-site marker is refused (the pre-round-4 rule)
+TESTS|t43-web-tier-round4.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if fetch_site == 'same-origin':
+REPLACE|    if fetch_site != 'cross-site':
+
+--- M310
+DESC|A3: a symlink in ANY parent directory is followed again (only the last component checked)
+TESTS|t11-safe-install-dir.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if last or parent.st_uid != 0 or parent.st_mode & 0o022:
+REPLACE|        if last:
+
+--- M311
+DESC|A3: the same, in the upgrade's copy
+TESTS|t11-safe-install-dir.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|        if last or parent.st_uid != 0 or parent.st_mode & 0o022:
+REPLACE|        if last:
+
+--- M312
+DESC|A3: components are opened without O_NOFOLLOW (the swap window is back)
+TESTS|t11-safe-install-dir.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    flags = D | os.O_NOFOLLOW
+REPLACE|    flags = D
+
+--- M313
+DESC|A3: a reinstall no longer stops the service before the directory work
+TESTS|t11-safe-install-dir.sh
+TARGET|install
+EQUIV|no
+ANCHOR|stop_for_reinstall
+REPLACE|:
+
+--- M314
+DESC|A4: write_failed claims syslog took a record it refused
+TESTS|t43-web-tier-round4.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    delivered = syslog_send(msg, SEV_CRIT)
+REPLACE|    delivered = syslog_send(msg, SEV_CRIT) or True
+
+--- M315
+DESC|A4: the answer says "sent to the host syslog" whatever happened
+TESTS|t43-web-tier-round4.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if getattr(exc, 'syslog_delivered', False):
+REPLACE|    if True:
+
+--- M316
+DESC|A5: a failed ufw status is "inactive" again
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    rc, out = run(ctx, 'ufw', ['status'])
+ANCHOR|    if rc != 0:
+ANCHOR|        raise ApplyError('firewall', 'ufw status failed (exit %d): %s. The firewall state is '
+ANCHOR|                         'unknown, so nothing was changed' % (rc, _tail(out, 2)))
+REPLACE|    rc, out = run(ctx, 'ufw', ['status'])
+REPLACE|    if rc != 0:
+REPLACE|        return {'active': False, 'installed': True, 'port80': False, 'others': []}
+
+--- M317
+DESC|A5: an unparseable ufw status is taken as inactive
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    if not status:
+ANCHOR|        raise ApplyError('firewall', 'ufw status gave no "Status: active|inactive" line: %s. '
+ANCHOR|                         'The firewall state is unknown, so nothing was changed' % _tail(out, 2))
+REPLACE|    if not status:
+REPLACE|        return {'active': False, 'installed': True, 'port80': False, 'others': []}
+
+--- M318
+DESC|A8: "ufw 80/tcp closed" while another rule still admits port 80
+TESTS|t34-apply-helper.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    elif st['others']:
+REPLACE|    elif False:
+
+--- M319
+DESC|A6: session rows are keyed by the name as typed
+TESTS|t43-web-tier-round4.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|    return str(username).lower()
+REPLACE|    return str(username)
+
+--- M320
+DESC|A6: the sign-in name is not lower-cased
+TESTS|t43-web-tier-round4.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|    return username.lower()
+REPLACE|    return username
+
+--- M321
+DESC|A6: existing mixed-case session rows are not migrated
+TESTS|t43-web-tier-round4.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|    _fold_session_users(cur)
+REPLACE|    pass
+
+--- M322
+DESC|A7: a finished apply is not audited at service start
+TESTS|t43-web-tier-round4.sh
+TARGET|py:app
+EQUIV|no
+ANCHOR|    apply_mod.audit_all_results(cfg)
+REPLACE|    pass
+
+--- M323
+DESC|A7: `python -m tm.apply audit` (the path unit's command) records nothing
+TESTS|t43-web-tier-round4.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|        done = audit_all_results(cfg)
+REPLACE|        done = []
+
+--- M324
+DESC|A7: the helper never writes the final-verdict marker the path unit watches
+TESTS|t43-web-tier-round4.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|                                   'finished_at': doc['finished_at']}, name=DONE_MARKER)
+REPLACE|                                   'finished_at': doc['finished_at']}, name=None)
+
+--- M325
+DESC|A9: per_page is unbounded again (SQLite reads LIMIT -1 as all rows)
+TESTS|t43-web-tier-round4.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if not 1 <= per_page <= AUDIT_PAGE_MAX:
+REPLACE|    if False:
+
+--- M326
+DESC|A9: page 0 / negative pages are served
+TESTS|t43-web-tier-round4.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if page < 1:
+REPLACE|    if False:
+
+--- M327
+DESC|A9: a failed sign-in returns the directory's own reason (account existence)
+TESTS|t43-web-tier-round4.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        return jsonify({'error': LOGIN_FAILED_MESSAGE}), 401
+REPLACE|        return jsonify({'error': result}), 401
+
+--- M328
+DESC|A10: nginx proxies to 127.0.0.1:5001 again
+TESTS|t44-backend-socket.sh
+TARGET|site
+EQUIV|no
+ANCHOR|    server unix:/run/topic-manager/gunicorn.sock;
+REPLACE|    server 127.0.0.1:5001;
+
+--- M329
+DESC|A10: a rollback to a TCP release leaves the socket unit enabled
+TESTS|t44-backend-socket.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|        systemctl disable --now topic-manager.socket >/dev/null 2>&1 || true
+REPLACE|        :
+
+--- M330
+DESC|A10: Phase 7 leaves the socket listening while the application is replaced
+TESTS|t44-backend-socket.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|systemctl stop "${SERVICE}.socket" 2>/dev/null || true
+REPLACE|:
+
+--- M331
+DESC|A11: a certificate that does not name the server is not warned about
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|    if server_name and not names_host(leaf['sans'], server_name):
+REPLACE|    if False:
+
+--- M332
+DESC|A11: a wildcard matches a bare registrable name (*.org covers example.org)
+TESTS|t37-tls-upload.sh
+TARGET|py:tls_check
+EQUIV|no
+ANCHOR|    return bool(head) and tail == san[2:] and '.' in tail
+REPLACE|    return bool(head) and tail == san[2:]
+
+--- M333
+DESC|A11: the helper does not read the configured server name
+TESTS|t37-tls-upload.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    server_name = configured_server_name(ctx)
+REPLACE|    server_name = None
+
+--- M334
+DESC|D2: a missing build tool is not named (the run goes on to the lock gate)
+TESTS|t39-docs-v120.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|[[ -z "$MISSING_TOOLS" ]] || die "This build host is missing:${MISSING_TOOLS}
+REPLACE|[[ -z "" ]] || die "This build host is missing:${MISSING_TOOLS}
+
+--- M335
+DESC|D2: an unverifiable lock (exit 3) is reported as a WRONG lock again
+TESTS|t39-docs-v120.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|    0) ;;
+REPLACE|    0|3) ;;
+
+--- M336
+DESC|D6: --packages-only goes on into the full install
+TESTS|t39-docs-v120.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    exit 0
+REPLACE|    :
+
+--- M337
+DESC|D10: the checklist is numbered by fixed literals again
+TESTS|t39-docs-v120.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|step() { STEP=$((STEP + 1)); echo "  ${STEP}. $*"; }
+REPLACE|step() { STEP=$((STEP + 2)); echo "  ${STEP}. $*"; }

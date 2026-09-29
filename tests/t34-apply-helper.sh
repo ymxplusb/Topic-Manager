@@ -90,13 +90,13 @@ tm_case "an-inactive-ufw-is-never-changed" "$REQ" a_ufw_inactive
 # ─── round 4 (sec-review HIGH CWE-74/93): the host values reach three root
 # writers — rsyslog (30-topic-manager.conf), chrony (sources.d) and
 # systemd-timesyncd (the drop-in). An IPv6 scope id is free text to Python's
-# ipaddress, so "fe80::1%a\nb" used to pass valid_host() and its newline was
+# ipaddress, so "2001:db8::1%a\nb" used to pass valid_host() and its newline was
 # rendered as SYNTAX into each of them, as root.
 # Syntax in every one of rsyslog, chrony and timesyncd: a newline, a space,
 # a scope id, an option-shaped leading '-'.
 _R4_SYNTAX=(
-    'fe80::1%a\nb'
-    'fe80::1%eth0'
+    '2001:db8::1%a\nb'
+    '2001:db8::1%eth0'
     'logs.example.org\nforward'
     'logs example.org'
     '-logs.example.org'
@@ -169,7 +169,7 @@ a_helper_rule_holds_without_the_schema() {
     cp "$(tm_py_root)/tm/settings_schema.py" "$(tm_py_root)/tm/tls_check.py" "$weak/"
     printf '\n\ndef valid_host(value):\n    return isinstance(value, str) and bool(value)\n' >> "$weak/settings_schema.py"
     # Prove the copy IS weak, or the case proves nothing.
-    PYTHONDONTWRITEBYTECODE=1 python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import settings_schema as s; sys.exit(0 if s.normalise('syslog_host', 'fe80::1%a\nb') else 1)" "$weak" \
+    PYTHONDONTWRITEBYTECODE=1 python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import settings_schema as s; sys.exit(0 if s.normalise('syslog_host', '2001:db8::1%a\nb') else 1)" "$weak" \
         || _tm_afail "the weakened schema copy still refuses a scope id: the case would pass for the wrong reason"
     FX_LIB="$weak" _r4_every_writer_refuses "its own character rule, independent of the shared schema" \
         "the helper's own rule" "" "${_R4_SYNTAX[@]}"

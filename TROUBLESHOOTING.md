@@ -1157,10 +1157,12 @@ rule admits port 80 any more.
 ### `ufw status failed (exit N): ...` or `ufw status gave no "Status: active|inactive" line` (failed, step `firewall`)
 
 The helper could not read the firewall, so it did not guess: an unreadable ufw used to be
-treated as "inactive", which skipped the firewall step and reported success. Nothing on the
-host was changed. Run `sudo ufw status` and fix what it reports, then apply again. A host
-with no ufw installed at all is not an error (`ufw is not installed: no firewall rule was
-changed`).
+treated as "inactive", which skipped the firewall step and reported success. The message ends
+`The firewall state is unknown, so nothing was changed` — and nothing on the host was. Run
+`sudo ufw status` and fix what it reports, then apply again.
+
+A host with no ufw installed at all is not an error; the result says
+`ufw is not installed: no firewall rule was changed`.
 
 ### `staging file <domain>.json is not owned by topic-manager; refused` (or `is a symlink`, `has 2 links`, `readable or writable by others`)
 

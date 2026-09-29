@@ -49,4 +49,21 @@ p_identical_protocol_edit() {
 }
 tm_case "an-identical-protocol-edit-in-both-copies-goes-red" node p_identical_protocol_edit
 
+# v1.2.0 round 4: gunicorn has no TCP port. A 5001 row put back in BOTH copies
+# agrees perfectly, and would tell an auditor a port is open that is not.
+p_5001_row_goes_red() {
+    sed 's#^"App","systemd-resolved"#"App","gunicorn (Flask)","5001","TCP","Loopback","x"\n"App","systemd-resolved"#' \
+        "${TM_REPO_ROOT}/PPSM.csv" > "${TM_TMP}/PPSM.csv"
+    sed "s#^\(                \)\['App', 'systemd-resolved'#\1['App', 'gunicorn (Flask)', '5001', 'TCP', 'Loopback', 'x'],\n\1['App', 'systemd-resolved'#" \
+        "${TM_REPO_ROOT}/app/components/SettingsTab.js" > "${TM_TMP}/SettingsTab.js"
+    cmp -s "${TM_REPO_ROOT}/PPSM.csv" "${TM_TMP}/PPSM.csv" && tm_die "the CSV fixture changed nothing"
+    cmp -s "${TM_REPO_ROOT}/app/components/SettingsTab.js" "${TM_TMP}/SettingsTab.js" && tm_die "the JS fixture changed nothing"
+    PPSM_STATIC="${TM_TMP}/PPSM.csv" PPSM_SETTINGS="${TM_TMP}/SettingsTab.js" bash "$GATE" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "a 5001 row added identically to both copies passed"
+    tm_assert_grep "a 5001 row is listed" "${TM_TMP}/out" "the gate failed, but not on the 5001 row"
+    grep -q "disagree" "${TM_TMP}/out" && _tm_afail "the fixture made the copies disagree, so the case proves nothing about the 5001 rule"
+    true
+}
+tm_case "a-5001-row-in-both-copies-goes-red" node p_5001_row_goes_red
+
 tm_finish

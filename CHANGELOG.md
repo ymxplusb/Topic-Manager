@@ -75,7 +75,7 @@ Database SRG V4R5 applied to SQLite.)
 ### Security review, round 4 (sec-review, adversary, clean-room; WO-0004)
 
 - Host values rendered by the root helper: IP literals only from `[0-9A-Fa-f:.]` with no IPv6
-  scope id (`fe80::1%a\nb` reached rsyslog, chrony and timesyncd), strict RFC 1123 names, and
+  scope id (`2001:db8::1%a\nb` reached rsyslog, chrony and timesyncd), strict RFC 1123 names, and
   the helper's own independent character rule at the sinks.
 - CSRF: `Sec-Fetch-Site: same-origin` or `X-TM-Request: 1` on every state-changing request.
 - `install.sh` stops the service, its socket and the timers before touching a directory, and

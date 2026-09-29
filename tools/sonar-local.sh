@@ -247,7 +247,32 @@ for i in sorted(d.get("issues", []), key=lambda i: (i["component"], i.get("line"
     print("  NEW  %-12s %s:%s  %s" % (i["rule"].split(":")[-1], i["component"].split(":", 1)[-1],
                                       i.get("line", "-"), i["message"]))' <<<"$issues"
 
-gate="$(api GET "qualitygates/project_status?projectKey=${PROJECT_KEY}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["projectStatus"]["status"])' 2>/dev/null || echo '?')"
+# The verdict is new_violations (the condition that stopped v1.1.0). The rest
+# is REPORTED so nothing is hidden: this server's own Sonar way gate fails on
+# coverage (no report is ever sent, here or in CI), and the estate's gate
+# (measured 2026-09-28) also holds bugs, vulnerabilities, reliability, new
+# duplication and hotspot review — a NEW security hotspot needs a human review
+# on the estate's server before the tag, so it is named here as a WARN.
+extra="$(api GET "measures/component?component=${PROJECT_KEY}&metricKeys=bugs,vulnerabilities,reliability_rating,new_duplicated_lines_density,new_security_hotspots")" || extra='{}'
+python3 -c '
+import json, sys
+try:
+    d = {x["metric"]: x.get("period", {}).get("value", x.get("value")) for x in json.load(sys.stdin)["component"]["measures"]}
+except Exception:
+    d = {}
+warn = []
+if d.get("bugs") not in (None, "0"): warn.append("bugs=%s" % d["bugs"])
+if d.get("vulnerabilities") not in (None, "0"): warn.append("vulnerabilities=%s" % d["vulnerabilities"])
+if d.get("reliability_rating") not in (None, "1.0", "1"): warn.append("reliability_rating=%s" % d["reliability_rating"])
+if d.get("new_duplicated_lines_density") and float(d["new_duplicated_lines_density"]) > 3: warn.append("new_duplicated_lines_density=%s%%" % d["new_duplicated_lines_density"])
+if d.get("new_security_hotspots") not in (None, "0"): warn.append("new_security_hotspots=%s (each needs a review on the estate server before the tag)" % d["new_security_hotspots"])
+print("sonar-local: also: " + ", ".join("%s=%s" % kv for kv in sorted(d.items())))
+for w in warn: print("sonar-local: WARN (the estate gate holds this too): " + w)' <<<"$extra"
+gate="$(api GET "qualitygates/project_status?projectKey=${PROJECT_KEY}" | python3 -c '
+import json, sys
+p = json.load(sys.stdin)["projectStatus"]
+bad = [c["metricKey"] for c in p.get("conditions", []) if c.get("status") == "ERROR"]
+print(p["status"] + (" (conditions failing on this throwaway Sonar way gate: " + ", ".join(bad) + ")" if bad else ""))' 2>/dev/null || echo '?')"
 say "HEAD ${head_sha:0:12} vs ${BASE_REF}: new_violations=${new_v} (all issues ${total_v}); quality gate ${gate}"
 if [[ "$new_v" -gt 0 ]]; then
     say "FAIL: ${new_v} new issue(s) - the tag's Sonar gate would fail on these"
