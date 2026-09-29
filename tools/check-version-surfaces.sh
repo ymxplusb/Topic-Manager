@@ -73,6 +73,20 @@ for rel, rx, what in SURFACES:
     else:
         print("  OK   %-32s %s" % (rel, what))
 
+# CHANGELOG dates run newest first and never go BACKWARDS (round 4): 1.2.0 was
+# dated 2026-09-27, the day BEFORE the 1.1.1 section below it, because 1.2.0
+# was cut first and 1.1.1 merged in later. A release note that says it came
+# out before the release it supersedes is a false statement about history.
+_heads = re.findall(r"^## \[([^\]]+)\] — (\d{4}-\d{2}-\d{2})\b", read("CHANGELOG.md") or "", re.M)
+for (newer, d_new), (older, d_old) in zip(_heads, _heads[1:]):
+    if d_new < d_old:
+        print("FAIL: %-32s [%s] is dated %s, BEFORE the older [%s] (%s)" % ("CHANGELOG.md", newer, d_new, older, d_old))
+        fail += 1
+if len(_heads) < 2:
+    print("FAIL: %-32s fewer than two dated sections could be read" % "CHANGELOG.md"); fail += 1
+else:
+    print("  OK   %-32s %d section dates, newest first, none going backwards" % ("CHANGELOG.md", len(_heads)))
+
 # Cache-bust tokens: every ?v= in the shipped frontend is ONE value, derived
 # from VERSION, so a browser can never mix two releases' files.
 # Round 8 (gatekeeper): removing one token passed, and so did a non-numeric

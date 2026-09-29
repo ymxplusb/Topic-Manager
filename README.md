@@ -94,7 +94,7 @@ controller, base DN and domain when `config.yaml` omitted them.
 
 The script, in order:
 - Sets `umask 0022` for its own run (a STIG host's 077 would leave the venv and the frontend unreadable) and gives every sensitive file its mode explicitly
-- Installs any missing runtime package — `python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl rsyslog rsyslog-openssl` — from apt online, or from the bundle's `.deb`s offline (only packages the host does not already have are asked for; an installed dependency may be upgraded to the bundled build, never downgraded, and a FIPS package is never replaced). No compiler and no `-dev` headers: every Python dependency is a binary wheel (`pip --only-binary :all:`)
+- Installs any missing runtime package — `python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl rsyslog rsyslog-openssl` — from apt online, or from the bundle's `.deb`s offline (only packages the host does not already have are asked for; an installed dependency may be upgraded to the bundled build, never downgraded, and a FIPS package is never replaced). It asks for no compiler and no `-dev` headers (the offline bundle carries some as lockstep siblings, which apt never installs unless one is already installed): every Python dependency is a binary wheel (`pip --only-binary :all:`)
 - Installs Vue.js **3.5.43**, verified by SHA-256 before it is served (online: fetched from the CDN; offline: taken from the bundle's `lib/`). The version and hash are read from `install/upgrade-full.sh`, the same pin the upgrade and `prepare-offline.sh` use, and a file that does not match is refused — so a fresh install and an upgraded host serve byte-identical Vue
 - Creates the `topic-manager` system user and `/opt/topic-manager/` (`data/` **0700**), `/var/www/topic-manager/`, `/etc/topic-manager/`
 - Creates `/etc/topic-manager/clusters.d/` (owned by `topic-manager`) and `/opt/topic-manager/data/cluster-certs/` (mode 0700) — the only two directories the application may write outside its own data and log directories. `/etc/topic-manager` itself stays `root:topic-manager 0750`; see [Cluster profiles](#cluster-profiles) for why that split is not arbitrary
@@ -755,25 +755,54 @@ sudo bash install/upgrade-full.sh --restore 20260830-141205
 
 The bundle is built on a machine that **has** a network, then carried to the target. The path below is not optional — the upgrade script reads the bundle from exactly one location.
 
-On the internet-connected machine, with this repo checked out:
+On the internet-connected machine (Ubuntu 24.04, same architecture as the target; the
+build-host prerequisites and the checkout before a release is tagged are in
+[docs/INSTALL.md](docs/INSTALL.md) section 5a), with this repo checked out:
 ```bash
 bash prepare-offline.sh --bundle
 # Downloads the wheels for every pin in requirements.txt, verifies each one is
 # present, downloads Vue and checks it against the SHA-256 that
 # install/upgrade-full.sh will check on the target, then writes
-# topic-manager-offline-<version>.tar.gz one directory above the repo.
+# topic-manager-offline-<version>.tar.gz and its .sha256 one directory above the repo.
+sha256sum ../topic-manager-offline-<version>.tar.gz   # record this value OUT OF BAND
 ```
 
-Transfer it, then on the air-gapped host:
+Carry the bundle **and** its `.sha256` across. On the air-gapped host, check the bundle before
+root unpacks a byte of it — against the `.sha256` that travelled with it **and** against the
+value recorded out of band (the release record, or read off the build host by a second person).
+The travelling `.sha256` proves the copy is intact; only the out-of-band value proves it is
+the bundle that was built:
 ```bash
+sha256sum -c topic-manager-offline-<version>.tar.gz.sha256
+sha256sum topic-manager-offline-<version>.tar.gz      # must equal the out-of-band value
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/offline-src
 # Straight into the root-owned destination. --strip-components=1 drops the
 # repo-checkout directory the tarball wraps everything in, so nothing is ever
 # staged in /tmp, where the directory root reads from would be created by
 # whoever got there first.
 sudo tar xzf topic-manager-offline-<version>.tar.gz   -C /var/lib/topic-manager/offline-src --strip-components=1
+```
 
+Then the same three steps as online, each with `--offline` and by the staged script's
+**absolute** path (the upgrade reads the bundle from that one place; a relative
+`install/upgrade-full.sh` only works from inside it):
+```bash
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --audit-only --offline
+#   exit 0 = clear; 1 = WARNINGS only (proceed when each is a change this release makes on
+#   purpose); 2 = BLOCKERS: stop
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --backup-only --offline
+#   a verified restore point: "Baseline recorded (N paths)"
 sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline
+```
+
+**A runtime package the release added.** The upgrade patches no OS package offline — there is
+no repository to reach — so a package a new release needs is not installed by it. v1.2.0 adds
+`rsyslog-openssl` (Remote syslog over **TLS** needs it; `--audit-only` warns when it is absent).
+Install it from the same bundle, through the installer's own offline package policy (the bundle
+as a private apt repository: never downgrade, never remove, never replace a FIPS package), with
+nothing else touched — no files, no configuration, no service:
+```bash
+sudo bash /var/lib/topic-manager/offline-src/install.sh --packages-only
 ```
 
 - **`/var/lib/topic-manager/offline-src` is fixed.** The script does not search for the bundle and will stop with `Offline source not found` if it is anywhere else.
@@ -802,9 +831,12 @@ Run it on an Ubuntu 24.04 machine of the target's architecture. The bundle is bu
 --bundle` deletes it if anything internal or site-specific got in.
 
 On the air-gapped host — root runs `install.sh`, so the tree it runs from is
-created root-owned first and the bundle is unpacked straight into it:
+created root-owned first and the bundle is unpacked straight into it. Check the bundle first,
+against its `.sha256` **and** against the value recorded out of band when it was built (see
+*Offline (air-gapped) upgrade* above):
 ```bash
 sha256sum -c topic-manager-offline-<version>.tar.gz.sha256
+sha256sum topic-manager-offline-<version>.tar.gz      # must equal the out-of-band value
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/install-src
 sudo tar xzf topic-manager-offline-<version>.tar.gz   -C /var/lib/topic-manager/install-src --strip-components=1
 sudo bash /var/lib/topic-manager/install-src/install.sh --ldap-url ... --ldap-base-dn ... --ldap-group ...
@@ -962,6 +994,9 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
 - Runs on a STIG'd, FIPS-mode Ubuntu 24.04 host. Known limitation: the `cryptography` and `confluent-kafka` wheels bundle their own OpenSSL, outside the host's validated module — see `SBOM.md` and docs/INSTALL.md section 10
 - Audit database `tm.db` 0600 in a 0700 directory, owned by the service account; `UMask=0077` on the unit
 - HTTPOnly + Secure + SameSite=Lax session cookies, signed with HMAC-SHA-256
+- Cross-site request forgery (v1.2.0): every request that changes something — sign-in and the multipart certificate upload included — must be marked as this site's own, by the browser (`Sec-Fetch-Site: same-origin`) or by the header `X-TM-Request: 1`, which the web UI adds to every such request. Anything else is refused with 403. **A script calling the API must send `X-TM-Request: 1`** on POST/PUT/DELETE
+- gunicorn has no TCP port (v1.2.0): it listens only on `/run/topic-manager/gunicorn.sock`, 0660 `topic-manager:www-data`, so no local process can bypass nginx's rate limits or choose its own `X-Forwarded-For`
+- A failed sign-in gets ONE answer whatever the reason (user unknown, wrong password, not in the group, directory error); the specific reason is in the `LOGIN_FAILED` audit row
 - Security headers on all routes: HSTS, CSP (`frame-ancestors 'none'`, `form-action 'none'`, `base-uri 'self'`), X-Content-Type-Options, Referrer-Policy
 - Server-side session store (SQLite); session tokens never leave the server in a readable form
 - Audit log with user, IP, timestamp and detail. **21 audited actions** in the database, plus one that exists only in syslog. Derived from EVERY module in `tm/*.py` with the AST (never grep — the action is the third positional argument, usually on the next line), with:

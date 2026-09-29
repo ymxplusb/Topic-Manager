@@ -417,9 +417,54 @@ g_frontend_syntax() {
     sed -i 's#</body>#<!-- <script src="/app/components/Gone.js?v=1"></script> --></body>#' "$FX/index.html"
     _run bash "$G" --root "$FX"
     tm_assert_rc 0 "$RC" "a commented-out <script> was read as a load: ${OUT}"
+    # Round 4: an UNQUOTED src= is a load the browser makes. The regex gate
+    # read only quoted values, so a missing file loaded this way passed.
+    rm -rf "${TM_TMP}/tree"; _tree index.html app
+    sed -i 's#</body>#<script src=/app/components/Gone.js?v=1></script></body>#' "$FX/index.html"
+    grep -q 'src=/app/components/Gone.js' "$FX/index.html" || tm_die "fixture did not apply"
+    _run bash "$G" --root "$FX"
+    tm_assert_rc 1 "$RC" "an unquoted load of a missing file passed: ${OUT}"
+    grep -q 'loads /app/components/Gone.js, and app/components/Gone.js does not exist' <<<"$OUT" \
+        || _tm_afail "the unquoted missing load was not named: ${OUT}"
+    # ...and an unquoted, upper-case load of a file that does not parse.
+    rm -rf "${TM_TMP}/tree"; _tree index.html app
+    printf 'const unquoted = {;\n' > "$FX/app/Unquoted.js"
+    sed -i 's#</body>#<SCRIPT SRC=/app/Unquoted.js></SCRIPT></body>#' "$FX/index.html"
+    _run bash "$G" --root "$FX"
+    tm_assert_rc 1 "$RC" "an unquoted load of a file that does not parse passed: ${OUT}"
+    grep -q 'app/Unquoted.js does not parse' <<<"$OUT" || _tm_afail "the unparseable unquoted load was not named: ${OUT}"
     _run bash "$G"; tm_assert_rc 0 "$RC" "frontend-syntax on the real tree: ${OUT}"
 }
 tm_case "reg0017-frontend-gate-derives-its-list-from-index-html" node g_frontend_syntax
+
+# ── round 4: the pre-tag Sonar gate is CI's scan, and never leaves its host ──
+# tools/sonar-local.sh needs docker and minutes, so the suite checks its shape;
+# the gate itself was proven RED on 519b84d (2 new S8572 issues, exit 1) and
+# green after the fix (WO-0004 round 4).
+g_sonar_local_shape() {
+    local S="$R/tools/sonar-local.sh"
+    tm_assert_file "$S" "there is no tools/sonar-local.sh"
+    bash -n "$S" || _tm_afail "tools/sonar-local.sh does not parse"
+    grep -qE '^SCANNER_IMAGE="sonarsource/sonar-scanner-cli:11@sha256:[0-9a-f]{64}"$' "$S" || _tm_afail "the scanner image is not digest-pinned"
+    grep -qE '^SQ_IMAGE="sonarqube:26\.9\.0\.129388-community@sha256:[0-9a-f]{64}"$' "$S" || _tm_afail "the server image is not the pinned 26.9.0.129388-community"
+    grep -qx 'SONAR_SOURCES="."                  # ci-templates SONAR_SOURCES default; this project sets no override' "$S" \
+        || _tm_afail "the scan does not read the whole tree as CI does"
+    local p
+    for p in '-Dsonar.projectKey="$PROJECT_KEY"' '-Dsonar.projectVersion="$2"' '-Dsonar.sources="$SONAR_SOURCES"' \
+             '-Dsonar.sourceEncoding=UTF-8' '-Dsonar.qualitygate.wait=true' '-Dsonar.host.url="http://${SRV}:9000"'; do
+        grep -qF -- "$p" "$S" || _tm_afail "the scanner is not given CI's ${p}"
+    done
+    grep -nE 'sonar\.int|https?://[a-z0-9.-]+\.(com|org|net)' "$S" | grep -v '^[0-9]*:#' \
+        && _tm_afail "sonar-local names a server other than its own throwaway container"
+    local srvrun
+    srvrun="$(grep -A3 -E '^"\$\{DOCKER\[@\]\}" run -d --rm --name "\$SRV"' "$S")"
+    [ -n "$srvrun" ] || _tm_afail "the server's docker run line moved"
+    grep -qE '(^|[[:space:]])-p[[:space:]]' <<<"$srvrun" && _tm_afail "the throwaway SonarQube publishes a port"
+    grep -q 'new_violations' "$S" || _tm_afail "the verdict is not new_violations"
+    grep -q '^trap cleanup EXIT$' "$S" || _tm_afail "containers are not removed on every exit"
+    true
+}
+tm_case "sonar-local-is-ci-parity-and-never-leaves-its-host" none g_sonar_local_shape
 
 g_real_tree_green() {
     _run bash "$R/tools/check-pipefail-consumers.sh"; tm_assert_rc 0 "$RC" "pipefail lint: ${OUT}"

@@ -310,7 +310,10 @@ gates:
       Runs the REAL SettingsTab.downloadPpsm() under node and requires its CSV
       to equal PPSM.csv cell for cell (the Generated date excepted), plus
       coverage (443/80/22 in; 636, Kafka operator-defined, 53, 123, 514/6514
-      planned, OCSP/CRL not used; no 389; no site tie). Proven RED on 7
+      planned, OCSP/CRL not used; no 389; no site tie). v1.2.0 round 4:
+      gunicorn is a Unix-socket row and NO row may name 5001; the host
+      services a port scan shows (postfix 25/tcp, chrony 323/udp loopback,
+      rsyslog UDP sender sockets) are pinned rows. Proven RED on 7
       one-sided drifts (incl. an apostrophe in a JS cell) and 5 consistent
       edits to both copies.
   - name: pipefail-consumers
@@ -438,6 +441,27 @@ gates:
   # TM_LOCK_OFFLINE_OK=1; t25 asserts both flag values, t41 asserts exit 1);
   # version-surfaces scans every app/ JS with comments stripped; sbom holds the
   # About dialog's infrastructure rows to SBOM.md. Reproductions in t41.
+  - name: sonar-local
+    cmd: "bash tools/sonar-local.sh --remote claude_admin@192.168.202.81 --key ~/.ssh/claude_admin   # --base v<previous release>; default v1.1.1"
+    verified: 2026-09-29
+    requires: "a Linux docker host (sudo -n docker works) with network to pull the two pinned images"
+    note: >-
+      PRE-TAG, and a real gate: exit 0 = 0 new issues, 1 = new issues
+      (listed rule by rule), 2 = could not run (NOT a pass). Runs
+      sonarqube:26.9.0.129388-community (digest-pinned) on a private docker
+      network with no published port, and CI's own scanner image
+      (sonar-scanner-cli:11, the digest ci-templates v1.5.3 pins) with CI's
+      exact -D parameters (sources=., sourceEncoding, projectVersion,
+      qualitygate.wait); default Sonar way profiles and the default
+      previous-version new-code period, the same comparison the estate's
+      server makes at the tag. NEVER uploads to sonar.int: host.url is the
+      throwaway container, and every container and the network are removed
+      on exit. Each ref's tracked tree is committed afresh into a scratch
+      repository just before its scan, so "new" is exactly "changed since the
+      base": scanned against its real history it reported new_violations=0 on
+      the tree the gatekeeper's run found 19 in (SonarQube dates new lines by
+      git blame, and every real commit predates the throwaway base analysis).
+      WO-0004 round 4; see tools/sonar-local.sh.
   - { name: repo-tests, cmd: "bash tests/run.sh", verified: 2026-09-26, note: "t00-t27 (28 files). Round 8 (gatekeeper): the runner refuses zero files, a default set that is not every tests/t*.sh, a file that reports no case, and an unknown requirement (all exit 2); --strict counts its OWN tally (TM_RESULTS_OUT is only a copy); no `| grep -q` / `| grep -m` / `| head` / awk-exit consumer at the end of a pipe in tests/ (tools/check-pipefail-consumers.sh, run by t00) after a SIGPIPE race false-failed t24 in 2 of 3 fresh remote runs. Round 2, 2026-09-26: Linux host via --remote --strict (ships git archive HEAD) 210+ pass / 0 fail, only the 'needs node' cases skip (node absent there; the workstation run covers them). Mutation controls M01-M107 (tests/mutate.sh --remote): all killed except 4 documented equivalents. Round 3, 2026-09-26 (offline apt policy): --remote --strict 229 pass / 0 fail / 20 skip (all needs node); M01-M142 --remote: 136 killed, 0 survived, 6 documented equivalents (M14, M45, M87, M103, M141, M142). Round 4: --remote --strict and M01-M167, see WO-0003 builder.round4. t23's real-apt cases need the 'apt' requirement and its prompt cases 'pty' (both Linux only; they SKIP on the workstation). Workstation-only artefact: t12's route case can fail under Git Bash (MSYS path conversion); passes on Linux and CI." }
 
 gate_verification:
@@ -470,6 +494,18 @@ unavailable_gates:
   - name: sonarqube
     status: CI
     note: >-
+      SCOPE (corrected 2026-09-29, WO-0004 round 4): the tag pipeline passes
+      -Dsonar.sources=. (ci-templates v1.5.3 SONAR_SOURCES default; this
+      project sets no override), which OVERRIDES sonar-project.properties, so
+      the release scan reads the WHOLE tracked tree minus the file's
+      exclusions (**/lib/**, **/__pycache__/**, app/styles/**) — tm/, app/,
+      install/, tools/, tests/, nginx/, systemd/, config/ and the rest, 142
+      indexed files at v1.2.0 (101 at v1.1.1). The properties file said
+      sonar.sources=tm,app/components until v1.2.0 and now says "." with the
+      reason. Quality gate: Sonar way, new_violations > 0 fails, new code =
+      since the previous version. The same scan runs BEFORE the tag as the
+      sonar-local gate (gates:). NEVER cite a Sonar pass without saying which
+      of the two ran and on which commit.
       SUPERSEDED 2026-09-09: the CI template's Sonar job scans on every tag
       (SONAR_PROJECT_KEY topic-manager in .gitlab-ci.yml). The note below is
       the pre-CI history; the dated HTML reports it mentions were removed from

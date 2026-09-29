@@ -25,11 +25,11 @@
 #      <its VERSION>: SonarQube's default new-code period is "previous
 #      version", so HEAD's new code is exactly what changed since the base —
 #      the same comparison the estate's server makes at the tag;
-#   4. the scanner is CI's own image, pinned by digest, with CI's exact
-#      -D parameters (projectKey, projectVersion, sources=., sourceEncoding,
-#      host.url, token, qualitygate.wait) and SONAR_USER_HOME inside the
-#      project directory, as the CI job sets it; the repository's own
-#      sonar-project.properties is read from each ref's tree, as in CI;
+#   4. the scanner is CI's own image, pinned by digest, run as its own user
+#      with CI's exact -D parameters (projectKey, projectVersion, sources=.,
+#      sourceEncoding, host.url, token, qualitygate.wait) over a git
+#      checkout of each ref; the repository's own sonar-project.properties
+#      (its exclusions) is read from that ref's tree, as in CI;
 #   5. new_violations and the new issues themselves are read back, printed
 #      rule by rule, and decide the exit code;
 #   6. every container and the network are removed on every exit path.
@@ -47,7 +47,8 @@
 # =============================================================================
 set -uo pipefail
 
-SQ_IMAGE="sonarqube:26.9.0.129388-community"
+# Pinned by digest as well as tag (measured on the docker host 2026-09-29).
+SQ_IMAGE="sonarqube:26.9.0.129388-community@sha256:4905574ab8584dcac1a06c01cdc43a4ce9e369723ac4a7ab1d029c1bf71e6fe9"
 # The CI scan job's image, digest-pinned exactly as ci-templates v1.5.3 pins it.
 SCANNER_IMAGE="sonarsource/sonar-scanner-cli:11@sha256:46341f2c2dc560381414e90347885f5cddc716db080adcbafc1cac13e1473094"
 PROJECT_KEY="topic-manager"        # .gitlab-ci.yml SONAR_PROJECT_KEY
@@ -144,7 +145,7 @@ head_ver="$(git -C "$WORK/src" show "${head_sha}:VERSION" 2>/dev/null | tr -d '[
 # A new-code period of "previous version" needs two different versions.
 [[ "$head_ver" != "$base_ver" ]] || head_ver="${head_ver}+${head_sha:0:12}"
 
-say "server ${SQ_IMAGE}, scanner ${SCANNER_IMAGE%%@*} (pinned), base ${BASE_REF} ${base_sha:0:12} as ${base_ver}, head ${head_sha:0:12} as ${head_ver}"
+say "server ${SQ_IMAGE%%@*} (pinned), scanner ${SCANNER_IMAGE%%@*} (pinned), base ${BASE_REF} ${base_sha:0:12} as ${base_ver}, head ${head_sha:0:12} as ${head_ver}"
 "${DOCKER[@]}" network create --internal=false "$NET" >/dev/null || die2 "docker network create failed"
 # No -p: the server is reachable ONLY on the private network.
 "${DOCKER[@]}" run -d --rm --name "$SRV" --network "$NET" \
@@ -173,13 +174,41 @@ TOKEN="$(api POST "user_tokens/generate?name=sonar-local-$$" | python3 -c 'impor
 [[ -n "$TOKEN" ]] || die2 "could not generate a scanner token"
 AUTH="${TOKEN}:"
 
+# WHAT "NEW" MEANS, AND WHY THE SCANNED REPOSITORY IS REWRITTEN. SonarQube
+# decides new code LINE BY LINE from `git blame`: a line is new when its commit
+# is dated after the new-code period began (the base analysis). Scanning the
+# real history would therefore call nothing new — every commit being checked
+# was made BEFORE this throwaway server's base analysis — and report a false 0
+# (measured 2026-09-29: new_violations=0 on the tree the estate's gate found 19
+# in). So each ref's TRACKED tree (all of it, as CI's clone has it) is
+# committed afresh into a scratch repository just before it is scanned: every
+# line the head changed is blamed to a commit made after the base analysis,
+# every line it did not change keeps the base's commit. "New" is then exactly
+# "changed since the base", whatever the commits' dates — never less than the
+# tag's scan counts.
+git init -q "$WORK/scan" && git -C "$WORK/scan" config user.name sonar-local \
+    && git -C "$WORK/scan" config user.email sonar-local@localhost || die2 "cannot create the scan repository"
+stage_tree() {   # stage_tree <sha> — the scan repository's next commit is exactly that tree
+    find "$WORK/scan" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} + || die2 "cannot clear the scan tree"
+    git -C "$WORK/src" --work-tree="$WORK/scan" checkout -q --force "$1" -- . 2>/dev/null || die2 "checkout of ${1} failed"
+    git -C "$WORK/scan" add -A && git -C "$WORK/scan" commit -q --allow-empty -m "sonar-local ${1}" \
+        || die2 "cannot commit ${1} into the scan repository"
+    sleep 2       # blame dates are whole seconds; keep them after the last analysis
+}
+
 scan() {   # scan <sha> <projectVersion>
-    git -C "$WORK/src" checkout -q --force "$1" 2>/dev/null || die2 "checkout ${1} failed"
-    git -C "$WORK/src" clean -q -ffdx 2>/dev/null
+    stage_tree "$1"
     say "scanning ${1:0:12} as ${2} ..."
+    # As CI runs it: the image's own user and working directory
+    # (SCANNER_WORKDIR_PATH=/tmp/.scannerwork, inside the container). The
+    # source is mounted READ-ONLY, so the scan cannot change what it reads and
+    # leaves nothing on this host. SONAR_USER_HOME stays the image's: CI points
+    # it into the project directory only to cache plugin jars between jobs,
+    # which no analyser reads.
+    chmod -R a+rX "$WORK/scan"
     "${DOCKER[@]}" run --rm --name "${TAG}-scan" --network "$NET" \
-        --user "$(id -u):$(id -g)" -e HOME=/tmp -e SONAR_USER_HOME=/usr/src/.sonar \
-        -v "$WORK/src:/usr/src" -w /usr/src "$SCANNER_IMAGE" \
+        -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/usr/src \
+        -v "$WORK/scan:/usr/src:ro" -w /usr/src "$SCANNER_IMAGE" \
         sonar-scanner \
         -Dsonar.projectKey="$PROJECT_KEY" \
         -Dsonar.projectVersion="$2" \

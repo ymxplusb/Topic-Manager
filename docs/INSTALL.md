@@ -37,7 +37,7 @@ the script has **measured** each point rather than assumed it:
 
 | Area | End state |
 |---|---|
-| Service | `topic-manager.service` running (gunicorn on 127.0.0.1:5001), `UMask=0077`, `NoNewPrivileges=true`, `ProtectSystem=strict`; `/api/health` answers `{"status":"ok",...}` through nginx |
+| Service | `topic-manager.service` running, `UMask=0077`, `NoNewPrivileges=true`, `ProtectSystem=strict`; gunicorn has **no TCP port** — it listens only on `/run/topic-manager/gunicorn.sock`, which `topic-manager.socket` creates `0660 topic-manager:www-data`, so nothing but nginx can reach it; `/api/health` answers `{"status":"ok",...}` through nginx |
 | Web | nginx site for `--server-name` (default `hostname -f`); HTTP 80 → 301 to HTTPS only; security headers on every location |
 | TLS | `/etc/nginx/nginx.conf` → `ssl_protocols TLSv1.2 TLSv1.3;` (backed up first, `nginx -t`, rolled back on failure). Site: TLS 1.2 ECDHE + AES-GCM + SHA-256/384 only, TLS 1.3 AES-GCM suites only, curves P-384/P-256, `ssl_session_timeout 15m`, `ssl_session_tickets off`, `server_tokens off` |
 | Certificate | yours (`--tls-cert/--tls-key`, verified as a pair), or an existing one kept, or a **self-signed ECDSA P-256** placeholder; key `0600 root:root` |
@@ -173,8 +173,37 @@ Use a **fully patched** (`apt update && apt full-upgrade`) **Ubuntu 24.04** mach
 architecture-specific), with a clone of the release. It must be at least as patched as the
 target: the bundle can only upgrade the target to versions the build host could download.
 
+**Build-host prerequisites.** A stock Ubuntu 24.04 (a server, or the `ubuntu:24.04`
+container) has none of these; install them first:
+
 ```bash
-git checkout v<version>
+sudo apt-get update && sudo apt-get install -y git python3 python3-pip curl apt-utils
+```
+
+`git` (the bundle is `git archive` of the checkout), `python3` and `python3-pip` (the lock
+gate and `pip download`), `curl` (Vue and the PyPI hash check), and `apt-utils` or `dpkg-dev`
+(the bundle's apt index). `prepare-offline.sh` names any that is missing before it downloads
+anything, rather than failing later with a network error.
+
+**Check out the release.** Once it is tagged, the tag:
+
+```bash
+git fetch --tags origin && git checkout v<version>
+```
+
+**Before it is tagged** (a release candidate, or a QC build) there is no tag to check out.
+Build from the release branch at the exact commit under review, and record that commit id
+with the bundle — it is what the bundle's `.sha256` then vouches for:
+
+```bash
+git fetch origin release/v<version>
+git checkout --detach <40-hex commit id under review>
+git rev-parse HEAD            # write this down beside the bundle's checksum
+```
+
+Then build:
+
+```bash
 bash prepare-offline.sh --bundle
 ```
 
@@ -255,7 +284,9 @@ Vue from the bundle, hash-verified.
 3. On a host with no `config.yaml`, collects the directory settings (flags, else prompts) —
    **before** anything is installed, so a missing value stops an untouched host.
 4. Installs any missing runtime package: `python3 python3-venv nginx polkitd rsync sudo curl
-   ca-certificates openssl rsyslog rsyslog-openssl`. No compiler, no `-dev` headers. Then the
+   ca-certificates openssl rsyslog rsyslog-openssl`. It asks for no compiler and no `-dev`
+   headers (the offline bundle CARRIES some as lockstep siblings; apt never installs one that
+   is not already installed — `install/README.md`). Then the
    time daemon: chrony is kept, systemd-timesyncd is kept unless `--install-chrony`, and a host
    with neither gets chrony (v1.2.0).
 5. Creates the `topic-manager` system account and the directories:
@@ -272,9 +303,12 @@ Vue from the bundle, hash-verified.
     directory settings and a new random `secret_key`, or keeps the existing one.
 11. Creates an **empty** cluster store (or migrates a legacy `clusters:` block on a reinstall).
     `config/clusters.yaml.example` is a format reference and is never imported.
-12. Installs the systemd units and the polkit rule; v1.2.0 adds the root apply helper
-    (`/usr/libexec/topic-manager/tm-apply`, `root:root`), its four one-shot units and the audit
-    prune timer. The host-setting flags are saved to `tm.db` here, as the service account.
+12. Installs the systemd units and the polkit rule; v1.2.0 adds `topic-manager.socket` (the
+    only way to reach gunicorn: `/run/topic-manager/gunicorn.sock`, 0660
+    `topic-manager:www-data`), the root apply helper (`/usr/libexec/topic-manager/tm-apply`,
+    `root:root`), its four one-shot units, the apply-result audit (`topic-manager-apply-audit.path`)
+    and the audit prune timer. A reinstall stops the service, its socket and the timers FIRST,
+    before any directory is touched. The host-setting flags are saved to `tm.db` here, as the service account.
 13. Installs the nginx site and security-header snippet, the Settings-managed nginx and
     rsyslog files where absent (rate limits, syslog: the release defaults), the `:80` redirect
     site (enabled only if the redirect setting is on), the certificate (yours, existing, or a
@@ -304,8 +338,16 @@ curl -skI https://localhost/app/main.js | grep -ic 'content-security-policy'    
 grep -E '^\s*ssl_protocols' /etc/nginx/nginx.conf
 #   ssl_protocols TLSv1.2 TLSv1.3; # managed by Topic Manager: TLS 1.2/1.3 only
 
-openssl s_client -connect localhost:443 -tls1_1 </dev/null 2>&1 | grep -c 'Cipher is (NONE)\|alert'
-#   TLS 1.1 must be refused
+# TLS 1.0 / 1.1 must be refused BY THE SERVER. Probe from a machine that is NOT in FIPS
+# mode: a FIPS client (this host, if FIPS is on) refuses TLS 1.1 ITSELF and prints
+# "no protocols available" without sending a byte — that proves nothing about the server.
+openssl s_client -connect <server-name>:443 -tls1_1 -cipher 'DEFAULT:@SECLEVEL=0' </dev/null 2>&1 \
+    | grep -E 'alert protocol version|no protocols available|Cipher is'
+#   ...:error:...:tlsv1 alert protocol version...   <- the SERVER refused (TLS alert 70): pass
+#   ...no protocols available...                    <- YOUR client refused: no result; use another client
+#   New, TLSv1.1, Cipher is ...                     <- the server ACCEPTED TLS 1.1: fail
+# The configuration half, on the host: every ssl_protocols nginx will use is TLSv1.2 TLSv1.3
+sudo nginx -T 2>/dev/null | grep -E '^[[:space:]]*ssl_protocols'
 
 sudo stat -c '%a %U %n' /opt/topic-manager/data /opt/topic-manager/data/tm.db
 #   700 topic-manager /opt/topic-manager/data
@@ -373,6 +415,12 @@ covered by the host's validated module:
   SBOM.md → *Risk acceptance*.
 - The self-signed placeholder is generated with `openssl req ... ec P-256 -sha256`, which works
   under FIPS mode.
+- **TLS 1.2 clients must offer the extended master secret (RFC 7627).** The FIPS provider
+  refuses a TLS 1.2 handshake without it: the cipher is agreed and the server then aborts
+  (alert 80, `internal_error`). Current browsers, OpenSSL 1.1.0 and later, and Java 8u161 and
+  later all send it; **LibreSSL 3.3 (macOS's `/usr/bin/openssl`) does not** — measured against
+  a FIPS host on 2026-09-29. Use TLS 1.3, or a client that sends the extension; nothing on the
+  server side can or should relax this.
 
 ---
 
@@ -395,8 +443,16 @@ nothing else is needed inbound except SSH for administration. The complete inven
 sudo bash install/upgrade-full.sh --audit-only --repo-url <your-git-url> --repo-branch v<next> --repo-commit <40-hex-sha>
 sudo bash install/upgrade-full.sh --repo-url <your-git-url> --repo-branch v<next> --repo-commit <40-hex-sha>
 
-# offline: from a bundle staged at /var/lib/topic-manager/offline-src
+# offline: from a bundle staged at /var/lib/topic-manager/offline-src (README.md ->
+# *Offline (air-gapped) upgrade* for the checksum and staging steps). Every step takes
+# --offline and is run from the staged tree, by its absolute path:
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --audit-only --offline
+#   exit 0 clear / 1 warnings only (proceed if each is a change this release makes) / 2 blockers
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --backup-only --offline
 sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline
+# a runtime package the new release needs and the air-gapped host lacks (v1.2.0:
+# rsyslog-openssl, for Remote syslog over TLS) — from the same bundle, nothing else changed:
+sudo bash /var/lib/topic-manager/offline-src/install.sh --packages-only
 ```
 
 See README.md → *Upgrading* and `install/README.md`.

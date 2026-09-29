@@ -95,7 +95,8 @@ def syslog_send(message, severity=SEV_INFO):
                   _syslog_path(), SYSLOG_SEND_TIMEOUT)
         return False
     except OSError as exc:
-        log.error('audit syslog: could not send to %s: %s', _syslog_path(), exc)
+        # With the traceback (Sonar S8572): the socket's own error is the diagnosis.
+        log.exception('audit syslog: could not send to %s: %s', _syslog_path(), exc)
         return False
 
 

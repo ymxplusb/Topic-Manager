@@ -55,6 +55,11 @@
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 # =============================================================================
 set -euo pipefail
+# This script's own ABSOLUTE path, for every "roll back with ..." line it
+# prints. A bare "upgrade-full.sh" only works from the directory it was run
+# from, which an operator following the instructions later is rarely in
+# (clean-room, 2026-09-29).
+SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
 
 # ─── tunables ────────────────────────────────────────────────────────────────
 # v1.1.0: no built-in source. This used to clone a public mirror that the
@@ -1130,7 +1135,7 @@ if [[ $LIST_BACKUPS == true ]]; then
     done
     shopt -u nullglob
     [[ $found == true ]] || echo "  (none)"
-    echo; echo "  Restore with:  sudo bash upgrade-full.sh --restore <timestamp>"
+    echo; echo "  Restore with:  sudo bash ${SELF} --restore <timestamp>"
     exit 0
 fi
 
@@ -1391,12 +1396,15 @@ done
 info "These exact values are captured in Phase 4 and re-applied in Phase 10."
 
 # v1.2.0 host settings. Reported, not blocked: the upgrade installs no OS
-# packages, and each feature fails its own apply with the package named.
+# packages offline, and each feature fails its own apply with the package
+# named. The warning says how to install it from the SAME source tree — the
+# offline bundle's packages, through install.sh's own policy (--packages-only
+# changes nothing else).
 for _pkg in rsyslog rsyslog-openssl; do
     if [[ "$(dpkg-query -W -f='${Status}' "$_pkg" 2>/dev/null || true)" == *"install ok installed"* ]]; then
         row PASS "package ${_pkg}" "installed"
     else
-        row WARN "package ${_pkg}" "absent — Settings > Remote syslog$([[ $_pkg == rsyslog-openssl ]] && echo ' over TLS') will fail to apply until it is installed"
+        row WARN "package ${_pkg}" "absent — Settings > Remote syslog$([[ $_pkg == rsyslog-openssl ]] && echo ' over TLS') will fail to apply until it is installed. Install it: sudo bash ${OFFLINE_SRC_DIR}/install.sh --packages-only (offline bundle) or sudo apt-get install ${_pkg}"
     fi
 done
 if systemctl is-active --quiet chrony 2>/dev/null; then
@@ -2437,7 +2445,7 @@ PYTHONPATH="$APP_HOME" "${VENV}/bin/python3" -m tm.migrate_clusters \
      rewrites config.yaml, so DO NOT assume either file is untouched — read the
      error above. A verified restore point exists:
        ${BACKUP_DIR}
-     Restore with: sudo bash upgrade-full.sh --restore ${TIMESTAMP}"
+     Restore with: sudo bash ${SELF} --restore ${TIMESTAMP}"
 chown "${APP_USER}:${APP_USER}" "$CLUSTERS_FILE"
 chmod 640 "$CLUSTERS_FILE"
 # Then hand the host its own recorded values back, if it had any.
@@ -2570,7 +2578,7 @@ elif [[ "$LDAP_ST" == "SKIP" ]]; then
 else
     warn "LDAP service bind was NOT healthy pre-upgrade (--force was used)."
     warn "Test an interactive login immediately; if it fails, roll back:"
-    warn "  sudo bash upgrade-full.sh --restore ${TIMESTAMP}"
+    warn "  sudo bash ${SELF} --restore ${TIMESTAMP}"
 fi
 
 # --- v1.2.0: re-apply the saved host settings. The managed files were kept
@@ -2650,17 +2658,21 @@ echo "      TROUBLESHOOTING.md -> Apply to host; re-apply from Settings once fix
 fi
 echo
 echo "${BOLD}Post-upgrade checklist:${NC}"
-echo "  1. Test an interactive AD login at https://$(hostname -f 2>/dev/null || hostname)"
-echo "  2. Hard-refresh browsers (Ctrl+Shift+R) — JS cache tokens changed"
+# Numbered as printed, so a step that does not apply leaves no gap (the fixed
+# numbers read 1, 2, 5 on a host with no AIDE and no reboot pending).
+STEP=0
+step() { STEP=$((STEP + 1)); echo "  ${STEP}. $*"; }
+step "Test an interactive AD login at https://$(hostname -f 2>/dev/null || hostname)"
+step "Hard-refresh browsers (Ctrl+Shift+R) — JS cache tokens changed"
 if systemctl is-active --quiet aide 2>/dev/null; then
-echo "  3. Re-baseline AIDE:  sudo aide --init && sudo mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db"
+step "Re-baseline AIDE:  sudo aide --init && sudo mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db"
 fi
 if [[ -f /var/run/reboot-required ]]; then
-echo "  4. ${YELLOW}REBOOT REQUIRED${NC}:  sudo shutdown -r +5 'Topic Manager post-upgrade reboot'"
+step "${YELLOW}REBOOT REQUIRED${NC}:  sudo shutdown -r +5 'Topic Manager post-upgrade reboot'"
 fi
-echo "  5. Take a fresh vCSA snapshot once the above is confirmed good"
+step "Take a fresh vCSA snapshot once the above is confirmed good"
 echo
-echo "  Rollback:  sudo bash upgrade-full.sh --restore ${TIMESTAMP}"
+echo "  Rollback:  sudo bash ${SELF} --restore ${TIMESTAMP}"
 echo
 
 # Only remove a working tree THIS run created. In --offline mode WORK_DIR is the

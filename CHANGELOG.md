@@ -5,7 +5,7 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
-## [1.2.0] — 2026-09-27
+## [1.2.0] — 2026-09-29
 
 
 **Seven STIG host settings, each set in Settings and applied to the host through one root
@@ -26,9 +26,21 @@ Database SRG V4R5 applied to SQLite.)
 - **The `:80` redirect is its own nginx site** (`/etc/nginx/sites-available/topic-manager-http`),
   enabled by a link only while Settings has it on. The upgrade enables it (the previous
   site file had the `:80` block) and never touches it again.
+- **gunicorn has no TCP port any more.** It listens only on
+  `/run/topic-manager/gunicorn.sock`, created `0660 topic-manager:www-data` by the new
+  `topic-manager.socket`; nginx proxies to it. `127.0.0.1:5001` is gone (PPSM, config example).
+  The upgrade installs, backs up and rolls back the socket unit; a rollback to 1.1.x removes it
+  and puts the TCP unit and site back.
+- **Scripts calling the API must send `X-TM-Request: 1`** on POST/PUT/DELETE (or come from a
+  browser on this origin). Anything else is refused with 403 — cross-site request forgery,
+  the multipart certificate upload included.
+- **A failed sign-in shows one message** whatever the reason; the reason is in the
+  `LOGIN_FAILED` audit row. Session identity is lower-case, so `Alice` and `alice` share one
+  concurrent-session count (existing rows are migrated).
 - **New packages:** `rsyslog` and `rsyslog-openssl` (install.sh requires them; the upgrade
   installs no packages and reports `rsyslog-openssl` as a WARN when absent — only syslog over
-  TLS needs it). `chrony` is in the offline bundle; it is installed only on a host with no
+  TLS needs it). On an air-gapped upgraded host install it from the bundle with
+  `install.sh --packages-only`, which changes nothing else. `chrony` is in the offline bundle; it is installed only on a host with no
   time daemon or with `--install-chrony`, because **installing chrony removes
   systemd-timesyncd** (they conflict). That is the one removal the installer ever allows.
 
@@ -58,6 +70,30 @@ Database SRG V4R5 applied to SQLite.)
   0600 for the helper and deleted once read; nginx serves leaf + chain; `TLS_CERT_REPLACED`.
   `GET /api/system/tls` shows the protocols, ciphers, FIPS mode and the certificate.
 - **HTTP redirect on/off** (NGNX-APP-000510): off removes the `:80` listener and ufw `80/tcp`.
+  The redirect goes to the configured `server_name`, never the client's `Host`.
+
+### Security review, round 4 (sec-review, adversary, clean-room; WO-0004)
+
+- Host values rendered by the root helper: IP literals only from `[0-9A-Fa-f:.]` with no IPv6
+  scope id (`fe80::1%a\nb` reached rsyslog, chrony and timesyncd), strict RFC 1123 names, and
+  the helper's own independent character rule at the sinks.
+- CSRF: `Sec-Fetch-Site: same-origin` or `X-TM-Request: 1` on every state-changing request.
+- `install.sh` stops the service, its socket and the timers before touching a directory, and
+  `safe_install_dir` (install and upgrade) works through `O_NOFOLLOW` descriptors.
+- A failed audit write says where the record actually went (syslog, or only the service log).
+- An unreadable `ufw status` fails the nginx apply closed; the firewall detail says when
+  another rule still admits port 80.
+- Finished applies are audited with nobody polling: `topic-manager-apply-audit.path` runs
+  `python -m tm.apply audit` on each final verdict; also at service start and by the prune.
+- `GET /api/audit` `per_page` is 1..500 and `page` ≥ 1 (400 otherwise).
+- A certificate that does not name the configured server is installed with a WARNING in the
+  apply result (decision: warn, not refuse).
+- `tools/sonar-local.sh`: the release's SonarQube scan, run before the tag on a throwaway
+  server (a declared gate). `sonar-project.properties` now states the scope CI actually scans.
+- Docs: build-host prerequisites, a checkout path before the tag, offline `--audit-only` /
+  `--backup-only` by absolute path, out-of-band checksum, a TLS 1.1 probe that proves the
+  SERVER refused, FIPS TLS 1.2 needs the extended master secret, the bundle's real contents,
+  PPSM host services (postfix 25, chrony 323, rsyslog UDP sender sockets).
 - **Apply to host**: `POST/GET /api/system/apply/<syslog|time|nginx>` and `GET
   /api/system/apply/tls`. The root helper `/usr/libexec/topic-manager/tm-apply` (system
   `python3 -I`, stdlib only, never code from `/opt/topic-manager`) re-validates, renders,

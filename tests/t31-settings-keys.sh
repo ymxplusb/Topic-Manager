@@ -170,7 +170,7 @@ ok = [('syslog_host','logs.example.org'),('syslog_host','192.0.2.7'),('syslog_ho
 bad = [('syslog_host','fe80::1%a\nb'),('syslog_host','fe80::1%eth0'),('ntp_servers','fe80::1%a\nb'),
        ('ntp_servers','ntp.example.org,fe80::1%lo'),('syslog_host','logs.example.org.'),
        ('syslog_host','a..b'),('syslog_host','a-.b'),('syslog_host','x'*64 + '.org'),
-       ('syslog_host','1.2.3'),('syslog_host','256.1.1.1'),('syslog_port','\u0661\u0662'),
+       ('syslog_host','1.2.3'),('syslog_host','256.1.1.1'),('syslog_host','a.1'),('syslog_port','\u0661\u0662'),
        ('syslog_app_id','tm\nx'),('syslog_host','a\nb'),('syslog_host','a;b'),('syslog_host','a{b}'),('syslog_host','a"b'),
        ('syslog_host','a b'),('syslog_host','-oProxy'),('syslog_host','.lead'),('syslog_host','a'*254),
        ('syslog_host','x/y'),('syslog_port','0'),('syslog_port','65536'),('syslog_port','-1'),

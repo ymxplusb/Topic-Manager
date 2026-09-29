@@ -38,6 +38,25 @@ sha256_of() {
     fi
 }
 
+# ─── build-host prerequisites, BY NAME, before anything else ────────────────
+# v1.2.0 clean-room: a stock ubuntu:24.04 build host has none of git, python3,
+# pip or curl. The first thing to trip over them was the lock gate below,
+# whose failure was reported as "PyPI unreachable / the lock disagrees" — true
+# of neither, and it sent the operator after the network. The tools are named
+# here, with the command that installs them, before anything is downloaded.
+BUILD_TOOLS="python3 pip curl tar gzip"
+[[ $CREATE_BUNDLE == true ]] && BUILD_TOOLS="git ${BUILD_TOOLS}"
+MISSING_TOOLS=""
+for t in $BUILD_TOOLS; do
+    command -v "$t" >/dev/null 2>&1 || MISSING_TOOLS="${MISSING_TOOLS} ${t}"
+done
+command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
+    || MISSING_TOOLS="${MISSING_TOOLS} sha256sum"
+[[ -z "$MISSING_TOOLS" ]] || die "This build host is missing:${MISSING_TOOLS}
+     Install them and run again; nothing has been downloaded. On Ubuntu 24.04:
+         sudo apt-get update && sudo apt-get install -y git python3 python3-pip curl
+     (the .deb part of the bundle also needs apt-utils or dpkg-dev; see docs/INSTALL.md 5a)."
+
 # A bundle comes only from `git archive` of a git work tree (round 2): refuse
 # now, before anything is downloaded, rather than after.
 if [[ $CREATE_BUNDLE == true ]] && ! git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -60,9 +79,18 @@ REQ_FILE="${SCRIPT_DIR}/requirements.txt"
 LOCK_FILE="${SCRIPT_DIR}/requirements.lock"
 [[ -f "$REQ_FILE" ]]  || die "${REQ_FILE} not found — it is the source of every Python pin."
 [[ -f "$LOCK_FILE" ]] || die "${LOCK_FILE} not found — regenerate it with tools/gen-requirements-lock.py."
-bash "${SCRIPT_DIR}/tools/check-requirements-lock.sh" \
-    || die "requirements.lock failed its gate (see above): it disagrees with requirements.txt or
-     with PyPI's published hashes, or could not be verified (PyPI unreachable). Fix or regenerate it."
+# The gate's exit code says WHICH failure it was (tools/check-requirements-lock.sh):
+# 1 = the lock is wrong, 3 = it could not be verified. Reported as that.
+LOCK_RC=0
+bash "${SCRIPT_DIR}/tools/check-requirements-lock.sh" || LOCK_RC=$?
+case "$LOCK_RC" in
+    0) ;;
+    3) die "requirements.lock could NOT BE VERIFIED: the gate could not run, or could not reach
+     pypi.org over HTTPS (its lines above say which). The lock itself was not found wrong. With
+     the tools above present, this is the network or proxy; fix it and run again." ;;
+    *) die "requirements.lock FAILED its gate (exit ${LOCK_RC}; see above): it disagrees with
+     requirements.txt or with PyPI's published hashes. Fix or regenerate it." ;;
+esac
 
 info "Downloading hash-locked Python wheels to ${PY_PKG_DIR}..."
 pip download \

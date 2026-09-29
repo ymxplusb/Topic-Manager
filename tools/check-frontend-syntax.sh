@@ -38,20 +38,28 @@ command -v "$PY" >/dev/null 2>&1 || { echo "check-frontend-syntax: no python fou
 [[ -f "$ROOT/index.html" ]] || { echo "check-frontend-syntax: no index.html under $ROOT" >&2; exit 3; }
 
 # The loads index.html makes, one repo-relative path per line, prefixed
-# "js " or "css ". Comments are removed first: a commented-out <script> is not
-# a load.
+# "js " or "css ". Read by Python's HTML PARSER, not a regex (round 4): the
+# regex took only QUOTED attribute values, so <script src=/app/x.js> — valid
+# HTML, and a load the browser makes — was invisible, and a missing or broken
+# file loaded that way stayed green. The parser reads quoted, unquoted and
+# upper-case attributes alike, and never reports a commented-out tag.
 LOADS="$("$PY" - "$ROOT/index.html" <<'PYLOADS'
-import re, sys
-src = open(sys.argv[1], encoding="utf-8").read()
-src = re.sub(r"<!--.*?-->", " ", src, flags=re.S)
-for m in re.finditer(r"<script\b[^>]*\bsrc\s*=\s*([\"'])(.*?)\1", src, re.I | re.S):
-    print("js " + m.group(2))
-for m in re.finditer(r"<link\b[^>]*>", src, re.I | re.S):
-    tag = m.group(0)
-    if re.search(r"\brel\s*=\s*([\"'])stylesheet\1", tag, re.I):
-        h = re.search(r"\bhref\s*=\s*([\"'])(.*?)\1", tag, re.I | re.S)
-        if h:
-            print("css " + h.group(2))
+import sys
+from html.parser import HTMLParser
+
+
+class Loads(HTMLParser):
+    def handle_starttag(self, tag, attrs):
+        a = {k.lower(): (v or "").strip() for k, v in attrs}
+        if tag == "script" and a.get("src"):
+            print("js " + a["src"])
+        elif tag == "link" and "stylesheet" in a.get("rel", "").lower().split() and a.get("href"):
+            print("css " + a["href"])
+
+    handle_startendtag = handle_starttag
+
+
+Loads(convert_charrefs=True).feed(open(sys.argv[1], encoding="utf-8").read())
 PYLOADS
 )" || { echo "check-frontend-syntax: could not read index.html" >&2; exit 3; }
 

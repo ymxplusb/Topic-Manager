@@ -92,4 +92,16 @@ v_token_nonnumeric() {
 }
 tm_case "a-non-numeric-cache-token-is-caught" none v_token_nonnumeric
 
+# Round 4: the newest CHANGELOG section was dated a day BEFORE the section
+# below it (1.2.0 2026-09-27 over 1.1.1 2026-09-28) and every gate was green.
+v_changelog_dates_backwards() {
+    _copy
+    sed -i '0,/^\(## \[[^]]*\] — \)[0-9-]*/s//\12000-01-01/' "${TM_TMP}/copy/CHANGELOG.md"
+    cmp -s "${TM_REPO_ROOT}/CHANGELOG.md" "${TM_TMP}/copy/CHANGELOG.md" && tm_die "the fixture changed nothing"
+    bash "$GATE" --root "${TM_TMP}/copy" > "${TM_TMP}/out" 2>&1 \
+        && _tm_afail "a CHANGELOG section dated before the older section below it passed"
+    tm_assert_grep "is dated 2000-01-01, BEFORE the older" "${TM_TMP}/out" "the gate failed, but not on the changelog order"
+}
+tm_case "a-changelog-dated-before-its-predecessor-is-caught" none v_changelog_dates_backwards
+
 tm_finish

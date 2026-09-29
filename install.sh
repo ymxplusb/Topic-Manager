@@ -39,6 +39,10 @@
 #                           chrony and systemd-timesyncd conflict: this REMOVES
 #                           systemd-timesyncd (the only removal ever allowed)
 #   --no-http-redirect      no :80 listener at all, and ufw 80/tcp stays closed
+#   --packages-only         install the missing runtime packages (online from
+#                           apt, offline from this bundle) and change NOTHING
+#                           else — for an existing deployment, e.g. to add
+#                           rsyslog-openssl on an air-gapped upgraded host
 #
 # There are NO environment defaults for the directory. On a fresh host the
 # LDAP values come from the flags above or from prompts; an existing
@@ -604,12 +608,44 @@ print(" ".join(missing))
 PYKEYS
 }
 
+# ─── runtime packages ────────────────────────────────────────────────────────
+# Runtime packages only. No compiler and no -dev headers are ASKED FOR: every
+# Python dependency is installed from a binary wheel (pip --only-binary :all:),
+# so a STIG'd host never needs a toolchain. (Offline, the bundle's closure
+# carries lockstep siblings too, some of them -dev packages; apt installs only
+# what these need — install/README.md.) polkitd is what lets the Settings
+# restart control act.
+REQUIRED_PKGS=(python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl
+               rsyslog rsyslog-openssl)
+# Captured, then tested: `dpkg-query | grep -q` could SIGPIPE dpkg-query under
+# pipefail and read an installed package as missing (REG-0004).
+pkg_installed() { [[ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true)" == *"install ok installed"* ]]; }
+install_required_packages() {
+    local p
+    MISSING_PKGS=()
+    for p in "${REQUIRED_PKGS[@]}"; do pkg_installed "$p" || MISSING_PKGS+=("$p"); done
+    info "Installing system dependencies..."
+    if [[ ${#MISSING_PKGS[@]} -eq 0 ]]; then
+        success "All required packages already installed"
+    elif [[ $ONLINE == true ]]; then
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${MISSING_PKGS[@]}"
+    else
+        apt_install_from_bundle "${SCRIPT_DIR}/install/packages/apt" "${MISSING_PKGS[@]}"
+    fi
+    for p in "${REQUIRED_PKGS[@]}"; do
+        pkg_installed "$p" || die "Required package ${p} is still not installed."
+    done
+    success "System dependencies ready"
+}
+
 # ─── options ─────────────────────────────────────────────────────────────────
 OPT_TLS_CERT=""; OPT_TLS_KEY=""; OPT_SERVER_NAME=""
 OPT_LDAP_URL=""; OPT_LDAP_BASE_DN=""; OPT_LDAP_DOMAIN=""; OPT_LDAP_GROUP=""
 OPT_LDAP_BIND_DN=""; OPT_LDAP_CA_CERT=""; NON_INTERACTIVE=false
 OPT_SYSLOG_HOST=""; OPT_SYSLOG_PORT=""; OPT_SYSLOG_PROTOCOL=""; OPT_SYSLOG_APP_ID=""
 OPT_SYSLOG_CA=""; OPT_NTP_SERVERS=""; OPT_INSTALL_CHRONY=false; OPT_HTTP_REDIRECT=""
+PACKAGES_ONLY=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --tls-cert)        shift; OPT_TLS_CERT="${1:-}" ;;
@@ -630,6 +666,7 @@ while [[ $# -gt 0 ]]; do
         --ntp-server)      shift; OPT_NTP_SERVERS="${1:-}" ;;
         --install-chrony)  OPT_INSTALL_CHRONY=true ;;
         --no-http-redirect) OPT_HTTP_REDIRECT=false ;;
+        --packages-only)   PACKAGES_ONLY=true ;;
         -h|--help)         sed -n '2,56p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *)                 die "Unknown option: $1 (try --help)" ;;
     esac
@@ -692,6 +729,21 @@ elif python3 -c "import urllib.request; urllib.request.urlopen('https://pypi.org
     ONLINE=true
 fi
 info "Install mode: $( [[ $ONLINE == true ]] && echo 'ONLINE' || echo 'OFFLINE' )"
+
+# ─── --packages-only: the runtime packages and NOTHING else (v1.2.0) ────────
+# For a host that is UPGRADED, not installed: install/upgrade-full.sh patches
+# no OS package offline (it has no repository to reach), so a package a
+# release adds — rsyslog-openssl in v1.2.0, which Remote syslog over TLS needs
+# — would never arrive on an air-gapped host (clean-room, 2026-09-29). This
+# installs the missing ones from the SAME bundle through the SAME policy as a
+# fresh install (a private apt repository; never downgrade, never remove,
+# never replace a FIPS package) and exits: no rsync, no config, no service, no
+# nginx. Safe on a live deployment, before or after the upgrade.
+if [[ $PACKAGES_ONLY == true ]]; then
+    install_required_packages
+    success "--packages-only: runtime packages present; nothing else was changed."
+    exit 0
+fi
 
 # ─── directory settings (fresh host only) ────────────────────────────────────
 # Asked for BEFORE anything is installed, so a missing answer stops the run on
@@ -780,30 +832,7 @@ if [[ $NEW_CONFIG != true ]]; then
 fi
 
 # ─── system dependencies ─────────────────────────────────────────────────────
-# Runtime packages only. No compiler and no -dev headers: every Python
-# dependency is installed from a binary wheel (pip --only-binary :all:), which
-# is also what the offline bundle carries, so a STIG'd host never needs a
-# toolchain. polkitd is what lets the Settings restart control act.
-REQUIRED_PKGS=(python3 python3-venv nginx polkitd rsync sudo curl ca-certificates openssl
-               rsyslog rsyslog-openssl)
-# Captured, then tested: `dpkg-query | grep -q` could SIGPIPE dpkg-query under
-# pipefail and read an installed package as missing (REG-0004).
-pkg_installed() { [[ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true)" == *"install ok installed"* ]]; }
-MISSING_PKGS=()
-for p in "${REQUIRED_PKGS[@]}"; do pkg_installed "$p" || MISSING_PKGS+=("$p"); done
-info "Installing system dependencies..."
-if [[ ${#MISSING_PKGS[@]} -eq 0 ]]; then
-    success "All required packages already installed"
-elif [[ $ONLINE == true ]]; then
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${MISSING_PKGS[@]}"
-else
-    apt_install_from_bundle "${SCRIPT_DIR}/install/packages/apt" "${MISSING_PKGS[@]}"
-fi
-for p in "${REQUIRED_PKGS[@]}"; do
-    pkg_installed "$p" || die "Required package ${p} is still not installed."
-done
-success "System dependencies ready"
+install_required_packages
 
 # ─── time daemon (v1.2.0) ────────────────────────────────────────────────────
 # Settings > System > Time source configures chrony or systemd-timesyncd,

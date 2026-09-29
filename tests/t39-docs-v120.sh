@@ -116,4 +116,124 @@ a_chrony_removal_is_documented() {
 }
 tm_case "installing-chrony-removes-timesyncd-is-said-out-loud" none a_chrony_removal_is_documented
 
+# ─── round 4: the clean-room's eleven documentation defects (tm-qc, 2026-09-29)
+# Someone with only the documents could not get from a stock build host to an
+# upgraded air-gapped host. Each case pins one defect to what the docs, and
+# where the defect was the CODE's message, what the code now says.
+
+_pre_copy() {   # a copy of prepare-offline.sh that can be run without touching the repo
+    local d="${TM_TMP}/po"
+    rm -rf "$d"; mkdir -p "$d/tools" "$d/bin"
+    cp "$(tm_prepare_sh)" "$d/prepare-offline.sh"
+    cp "${TM_REPO_ROOT}/VERSION" "${TM_REPO_ROOT}/requirements.txt" "${TM_REPO_ROOT}/requirements.lock" "$d/"
+    printf '#!/usr/bin/env bash\necho "check-requirements-lock: STUB"\nexit "${STUB_LOCK_RC:-0}"\n' > "$d/tools/check-requirements-lock.sh"
+    # A PATH holding ONLY the named tools (symlinks to the real ones).
+    local t
+    for t in bash env cat tr cut mkdir dirname rm ls sed grep "$@"; do
+        [ -e "$d/bin/$t" ] && continue
+        ln -s "$(command -v "$t")" "$d/bin/$t" 2>/dev/null || true
+    done
+}
+
+a_build_host_tools_are_named() {
+    _pre_copy python3 tar gzip sha256sum git        # NO pip, NO curl
+    local out rc=0
+    out="$(cd "${TM_TMP}/po" && PATH="${TM_TMP}/po/bin" bash ./prepare-offline.sh 2>&1)" || rc=$?
+    [ "$rc" -ne 0 ] || _tm_afail "prepare-offline.sh went on without pip and curl"
+    case "$out" in *"This build host is missing: pip curl"*) ;; *) _tm_afail "the missing tools were not named: ${out}" ;; esac
+    case "$out" in *PyPI*|*unreachable*|*"lock disagrees"*|*STUB*) _tm_afail "a missing TOOL was still reported as a network or lock failure: ${out}" ;; esac
+    [ -d "${TM_TMP}/po/install/packages" ] && _tm_afail "prepare-offline.sh created its download directories before naming the missing tools"
+    true
+}
+tm_case "prepare-offline-names-missing-build-tools-before-anything" none a_build_host_tools_are_named
+
+a_lock_gate_verdict_is_reported_as_itself() {
+    local out rc
+    _pre_copy python3 tar gzip sha256sum git pip curl
+    # Stubs so the run stops at the lock gate whatever this host has.
+    printf '#!/usr/bin/env bash\nexit 0\n' > "${TM_TMP}/po/bin/pip"; chmod 755 "${TM_TMP}/po/bin/pip"
+    rm -f "${TM_TMP}/po/bin/curl"; printf '#!/usr/bin/env bash\nexit 0\n' > "${TM_TMP}/po/bin/curl"; chmod 755 "${TM_TMP}/po/bin/curl"
+    rc=0; out="$(cd "${TM_TMP}/po" && STUB_LOCK_RC=3 PATH="${TM_TMP}/po/bin" bash ./prepare-offline.sh 2>&1)" || rc=$?
+    [ "$rc" -ne 0 ] || _tm_afail "an unverifiable lock let the build go on"
+    case "$out" in *"could NOT BE VERIFIED"*) ;; *) _tm_afail "exit 3 (could not verify) was not reported as such: ${out}" ;; esac
+    case "$out" in *"FAILED its gate"*) _tm_afail "exit 3 was reported as a WRONG lock: ${out}" ;; esac
+    rc=0; out="$(cd "${TM_TMP}/po" && STUB_LOCK_RC=1 PATH="${TM_TMP}/po/bin" bash ./prepare-offline.sh 2>&1)" || rc=$?
+    [ "$rc" -ne 0 ] || _tm_afail "a failed lock gate let the build go on"
+    case "$out" in *"FAILED its gate (exit 1"*) ;; *) _tm_afail "exit 1 (the lock is wrong) was not reported as such: ${out}" ;; esac
+    case "$out" in *"NOT BE VERIFIED"*|*unreachable*) _tm_afail "a WRONG lock was reported as a network problem: ${out}" ;; esac
+    true
+}
+tm_case "the-lock-gate-verdict-is-reported-as-itself" none a_lock_gate_verdict_is_reported_as_itself
+
+a_offline_procedure_is_complete() {
+    local I="${TM_REPO_ROOT}/docs/INSTALL.md" R="${TM_REPO_ROOT}/README.md" B="${TM_REPO_ROOT}/install/README.md" f s
+    # 1. build-host prerequisites; 3. a checkout path before the tag exists
+    grep -q 'apt-get install -y git python3 python3-pip curl' "$I" || _tm_afail "INSTALL 5a does not list the build-host prerequisites"
+    grep -q 'git checkout --detach <40-hex commit id under review>' "$I" || _tm_afail "INSTALL 5a has no checkout path before the release is tagged"
+    # 4. offline --audit-only / --backup-only by absolute path, in both
+    for f in "$I" "$R"; do
+        for s in --audit-only --backup-only; do
+            grep -qF "sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh ${s} --offline" "$f" \
+                || _tm_afail "$(basename "$f") has no offline ${s} command by absolute path"
+        done
+    done
+    # 5. the README's offline section checks the bundle, both ways
+    local sect
+    sect="$(tm_extract_between "$R" '^### Offline \(air-gapped\) upgrade$' '^## Offline Install$')"
+    grep -q 'sha256sum -c topic-manager-offline-<version>.tar.gz.sha256' <<<"$sect" || _tm_afail "the README offline upgrade does not check the .sha256"
+    grep -q 'out of band' <<<"$sect" || _tm_afail "the README offline upgrade does not require an out-of-band checksum"
+    # 6. how rsyslog-openssl reaches an air-gapped upgraded host
+    for f in "$I" "$R" "$B"; do
+        grep -qF 'offline-src/install.sh --packages-only' "$f" || _tm_afail "$(basename "$f") does not say how to install a runtime package offline"
+    done
+    grep -q 'install.sh --packages-only' "$(tm_upgrade_sh)" || _tm_afail "the upgrade's rsyslog-openssl warning does not name the fix"
+    # 7. the TLS 1.1 probe proves the SERVER refused
+    grep -q 'alert protocol version' "$I" || _tm_afail "INSTALL 7 does not say what a SERVER refusal looks like"
+    grep -q 'no protocols available' "$I" || _tm_afail "INSTALL 7 does not warn that a FIPS client refuses on its own"
+    grep -qF "grep -c 'Cipher is (NONE)" "$I" && _tm_afail "INSTALL 7 still counts a client-side refusal as a pass"
+    # 8. the bundle's contents are stated as measured, not as "no -dev headers"
+    grep -qF 'No compiler and no `-dev` headers |' "$B" && _tm_afail "install/README.md still claims the bundle has no -dev packages"
+    grep -q '520 packages, 187 MB' "$B" || _tm_afail "install/README.md does not state what the bundle measured"
+    # 11. FIPS TLS 1.2 needs the extended master secret
+    grep -q 'extended master secret' "$I" || _tm_afail "INSTALL 10 does not say FIPS TLS 1.2 needs the extended master secret"
+    true
+}
+tm_case "the-offline-procedure-is-complete-as-written" none a_offline_procedure_is_complete
+
+a_packages_only_changes_nothing_else() {
+    local I; I="$(tm_install_sh)"
+    local branch n_branch n_dirs n_rsync n_cfg
+    branch="$(tm_extract_between "$I" '^if \[\[ \$PACKAGES_ONLY == true \]\]; then$' '^    exit 0$')"
+    tm_assert_eq "if [[ \$PACKAGES_ONLY == true ]]; then
+    install_required_packages
+    success \"--packages-only: runtime packages present; nothing else was changed.\"
+    exit 0" "$branch" "the --packages-only branch does something besides installing packages"
+    n_branch="$(grep -n -m1 '^if \[\[ \$PACKAGES_ONLY == true \]\]; then$' "$I" | cut -d: -f1)"
+    n_dirs="$(grep -n -m1 '^safe_install_dir [0-7]' "$I" | cut -d: -f1)"
+    n_rsync="$(grep -n -m1 '^rsync ' "$I" | cut -d: -f1)"
+    n_cfg="$(grep -n -m1 '^# ─── directory settings (fresh host only)' "$I" | cut -d: -f1)"
+    [ "$n_branch" -lt "$n_cfg" ] && [ "$n_branch" -lt "$n_dirs" ] && [ "$n_branch" -lt "$n_rsync" ] \
+        || _tm_afail "--packages-only exits only AFTER config, directory or file work (${n_branch} vs ${n_cfg}/${n_dirs}/${n_rsync})"
+    grep -q '^install_required_packages$' "$I" || _tm_afail "the normal install no longer installs the runtime packages"
+}
+tm_case "install-packages-only-changes-nothing-else" none a_packages_only_changes_nothing_else
+
+a_upgrade_checklist_numbers_and_paths() {
+    local UP; UP="$(tm_upgrade_sh)"
+    local block out
+    block="$(tm_extract_between "$UP" '^echo "\$\{BOLD\}Post-upgrade checklist:\$\{NC\}"$' '^echo "  Rollback:  sudo bash \$\{SELF\} --restore \$\{TIMESTAMP\}"$')" \
+        || _tm_afail "the checklist block moved"
+    # Run the REAL block with no AIDE and no reboot pending: numbering must not skip.
+    out="$( { echo 'BOLD=; NC=; YELLOW=; TIMESTAMP=20260929-000000; SELF=/abs/upgrade-full.sh'
+              echo 'systemctl() { return 3; }; hostname() { echo tm.example.org; }'
+              printf '%s\n' "$block"; } | bash 2>&1 | grep -E '^  [0-9]+\.' | sed -E 's/^  ([0-9]+)\..*/\1/' | tr '\n' ' ')"
+    local want="1 2 3 "; [ -f /var/run/reboot-required ] && want="1 2 3 4 "
+    tm_assert_eq "$want" "$out" "the printed checklist skips numbers"
+    grep -qE '^SELF="\$\(readlink -f "\$\{BASH_SOURCE\[0\]\}"' "$UP" || _tm_afail "the upgrade does not know its own absolute path"
+    grep -nE 'sudo bash upgrade-full\.sh --restore' "$UP" | grep -v ':#' \
+        && _tm_afail "a printed rollback line still uses a relative upgrade-full.sh"
+    true
+}
+tm_case "the-upgrade-checklist-counts-and-names-an-absolute-rollback" none a_upgrade_checklist_numbers_and_paths
+
 tm_finish

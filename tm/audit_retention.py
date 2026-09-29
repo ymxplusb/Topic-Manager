@@ -219,7 +219,7 @@ def main(argv=None):
     try:
         res = prune(cfg)
     except Exception as exc:
-        log.error('audit prune FAILED; nothing was deleted: %s: %s', type(exc).__name__, exc)
+        log.exception('audit prune FAILED; nothing was deleted: %s: %s', type(exc).__name__, exc)
         return 1
     cap = capacity(cfg)
     log.info('audit prune: %d deleted by age, %d by row limit; %s rows remain; '
