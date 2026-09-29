@@ -3123,3 +3123,19 @@ TARGET|surfaces
 EQUIV|no
 ANCHOR|elif _backwards:
 REPLACE|elif False:
+
+--- M382
+DESC|sonar-local keeps SonarQube's seeded conditions in the gate copy (delete loop gone)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    api POST "qualitygates/delete_condition?id=${cid}" >/dev/null || die2 "could not remove a seeded condition from the gate copy"
+REPLACE|    :
+
+--- M383
+DESC|sonar-local never reads the gate copy back
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|[[ "$have" == "$want" ]] || die2 "the gate copy is not the declared gate: has [${have//$'\n'/; }]"
+REPLACE|:

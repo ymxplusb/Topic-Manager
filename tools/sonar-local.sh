@@ -325,12 +325,31 @@ AUTH="${TOKEN}:"
 GATE_NAME="Jarvis Standard (sonar-local copy)"
 qname="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$GATE_NAME")"
 api POST "qualitygates/create?name=${qname}" >/dev/null || die2 "could not create the gate copy"
+# A new gate is NOT empty: SonarQube seeds it with its own Clean-as-You-Code
+# conditions (measured 2026-09-29: adding new_violations then failed as a
+# duplicate). Remove every seeded condition, add exactly the declared ones,
+# and read the gate back: it must hold those and nothing else.
+gate_conditions() {   # gate_conditions -> "id metric op error" per line
+    api GET "qualitygates/show?name=${qname}" | python3 -c '
+import json, sys
+for c in json.load(sys.stdin).get("conditions", []):
+    print(c["id"], c["metric"], c["op"], c.get("error", ""))'
+}
+seeded="$(gate_conditions)" || die2 "could not read the new gate"
+while read -r cid _; do
+    [[ -n "$cid" ]] || continue
+    api POST "qualitygates/delete_condition?id=${cid}" >/dev/null || die2 "could not remove a seeded condition from the gate copy"
+done <<<"$seeded"
 for c in "${JARVIS_GATE[@]}"; do
     read -r cm cop cerr <<<"$c"
     api POST "qualitygates/create_condition?gateName=${qname}&metric=${cm}&op=${cop}&error=${cerr}" >/dev/null \
         || die2 "could not add the gate condition ${c}"
 done
 api POST "qualitygates/set_as_default?name=${qname}" >/dev/null || die2 "could not make the gate copy the default"
+have="$(gate_conditions | cut -d' ' -f2- | sort)" || die2 "could not read the gate copy back"
+want="$(printf '%s\n' "${JARVIS_GATE[@]}" | sort)"
+[[ "$have" == "$want" ]] || die2 "the gate copy is not the declared gate: has [${have//$'\n'/; }]"
+say "gate: ${GATE_NAME}, ${#JARVIS_GATE[@]} conditions, read back identical"
 
 # WHAT "NEW" MEANS, AND WHY THE SCANNED REPOSITORY IS REWRITTEN. SonarQube
 # decides new code LINE BY LINE from `git blame`: a line is new when its commit

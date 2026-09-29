@@ -84,6 +84,10 @@ _upgrade_120() {
     ln -s ../topic-manager-future-thing.timer "$U/timers.target.wants/topic-manager-future-thing.timer"
     ln -s ../topic-manager-apply-audit.path "$U/paths.target.wants/topic-manager-apply-audit.path"
     ln -s ../topic-manager.socket "$U/sockets.target.wants/topic-manager.socket"
+    # A NEW enablement link to a unit the restore point also holds: the link
+    # goes, the unit is not disabled.
+    mkdir -p "$U/graphical.target.wants"
+    ln -s ../topic-manager.service "$U/graphical.target.wants/topic-manager.service"
     printf '#!/usr/bin/python3\n' > "$R/usr/libexec/topic-manager/tm-apply"
     printf 'RULES = 1\n' > "$R/usr/libexec/topic-manager/lib/settings_schema.py"
     printf '// polkit v1.2: restart + four apply units\n' > "$R/etc/polkit-1/rules.d/50-topic-manager.rules"
@@ -135,6 +139,7 @@ r_round_trip() {
     tm_assert_grep "nginx-test v1.1" "$U/topic-manager-nginx-test.service" "a unit the old release shipped was not put back"
     tm_assert_grep "127.0.0.1:5001" "$U/topic-manager.service" "the service unit was not put back"
     [ -L "$U/multi-user.target.wants/topic-manager.service" ] || _tm_afail "the service lost its enablement link"
+    [ -L "$U/graphical.target.wants/topic-manager.service" ] && _tm_afail "an enablement link the newer release added survived"
     grep -qx 'systemctl disable --now topic-manager.service' "${TM_TMP}/calls" \
         && _tm_afail "a unit the restored release ships was disabled"
     grep -q 'topic-manager-nginx-test' "${TM_TMP}/calls" && _tm_afail "a unit the restored release ships was retired"

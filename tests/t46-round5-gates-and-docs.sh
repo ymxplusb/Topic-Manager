@@ -102,6 +102,9 @@ e_known_vuln() {
     tm_assert_rc 1 "$RC" "a vulnerability beside S4502 passed: ${OUT}"
     _eval "$(_ok_except vulnerabilities 1)" "$M_OK" "[${V_OTHER}]"
     tm_assert_rc 1 "$RC" "a vulnerability that is not the known one passed: ${OUT}"
+    # The exception is the RULE AT THAT FILE, not the rule anywhere.
+    _eval "$(_ok_except vulnerabilities 1)" "$M_OK" '[{"rule":"python:S4502","component":"topic-manager:tm/routes.py","line":5,"message":"csrf"}]'
+    tm_assert_rc 1 "$RC" "S4502 in another file was excused as the known difference: ${OUT}"
     _eval "$(_ok_except vulnerabilities 3)" "$M_OK" "[${V_S4502}]"
     tm_assert_rc 2 "$RC" "a vulnerability count the list does not account for was treated as known: ${OUT}"
 }
@@ -152,6 +155,51 @@ e_verdict_block_exits_with_the_gate() {
     tm_assert_rc 0 "$RC" "a clean gate did not exit 0 through the verdict block: ${OUT}"
 }
 tm_case "sonar-local-exits-with-the-gate-verdict" none e_verdict_block_exits_with_the_gate
+
+# The gate setup against a stub SonarQube that SEEDS a new gate with its own
+# conditions, as SonarQube 26.9 does (measured: the first live run failed
+# adding new_violations as a duplicate). DROP=<metric> makes the stub ignore
+# one create_condition, so the read-back must catch it.
+_gate_setup() {   # _gate_setup [metric-the-stub-drops]
+    local d="${TM_TMP}/gs"; rm -rf "$d"; mkdir -p "$d"
+    {
+        echo 'set -uo pipefail'
+        echo 'die2() { echo "DIE2 $*"; exit 2; }; say() { echo "SAY $*"; }'
+        echo 'ST="'"$d"'/conds"; DROP="'"${1:-}"'"'
+        cat <<'STUB'
+api() {
+    local q="${2#*\?}"
+    case "$2" in
+      qualitygates/create\?*) printf '1 new_violations GT 0\n2 new_coverage LT 80\n3 new_duplicated_lines_density GT 3\n' > "$ST" ;;
+      qualitygates/delete_condition\?*) local id="${q#id=}"; awk -v i="$id" '$1 != i' "$ST" > "$ST.n"; mv "$ST.n" "$ST" ;;
+      qualitygates/create_condition\?*)
+        local m o e; m="${q#*metric=}"; m="${m%%&*}"; o="${q#*op=}"; o="${o%%&*}"; e="${q#*error=}"
+        awk -v m="$m" '$2 == m { f = 1 } END { exit f }' "$ST" || return 1
+        [ "$m" = "$DROP" ] && return 0
+        echo "$((RANDOM + 10)) $m $o $e" >> "$ST" ;;
+      qualitygates/set_as_default\?*) : ;;
+      qualitygates/show\?*) python3 -c '
+import json, sys
+print(json.dumps({"conditions": [dict(zip(("id", "metric", "op", "error"), l.split())) for l in open(sys.argv[1]) if l.strip()]}))' "$ST" ;;
+      *) return 1 ;;
+    esac
+}
+STUB
+        sed -n '/^JARVIS_GATE=($/,/^)$/p' "$S"
+        sed -n "/^# The estate's gate, condition for condition/,/^say \"gate: /p" "$S"
+    } > "${TM_TMP}/gs.sh"
+    grep -q 'gate_conditions' "${TM_TMP}/gs.sh" || tm_die "the gate setup block was not extracted"
+    RC=0; OUT="$(bash "${TM_TMP}/gs.sh" 2>&1)" || RC=$?
+}
+e_gate_setup_replaces_the_seeded_conditions() {
+    _gate_setup
+    tm_assert_rc 0 "$RC" "the gate copy could not be set up over SonarQube's seeded conditions: ${OUT}"
+    grep -q 'read back identical' <<<"$OUT" || _tm_afail "the gate copy was not read back: ${OUT}"
+    grep -q 'new_coverage' "${TM_TMP}/gs/conds" && _tm_afail "a seeded condition (new_coverage) stayed in the gate copy"
+    _gate_setup reliability_rating
+    tm_assert_rc 2 "$RC" "a gate copy missing a declared condition was accepted: ${OUT}"
+}
+tm_case "sonar-local-gate-copy-is-exactly-the-declared-conditions" none e_gate_setup_replaces_the_seeded_conditions
 
 # ─── a fake docker: the dead server, the volumes, the full disk ──────────────
 _fake_env() {
@@ -212,7 +260,7 @@ f_dead_server_fails_fast_and_cleans_up() {
     local created
     created="$(grep -c '^docker volume create ' "${TM_TMP}/fake/calls")"
     tm_assert_eq 4 "$created" "not one named volume per image VOLUME"
-    [ -s "${TM_TMP}/fake/vols" ] && _tm_afail "volumes left behind: $(cat "${TM_TMP}/fake/vols")"
+    [ -s "${TM_TMP}/fake/vols" ] && _tm_afail "volumes left behind: $(tr '\t\n' '  ' < "${TM_TMP}/fake/vols")"
     grep -qE '^docker rm -f -v ' "${TM_TMP}/fake/calls" || _tm_afail "containers are removed without their volumes (rm -f without -v)"
     grep -qE '^docker network rm ' "${TM_TMP}/fake/calls" || _tm_afail "the network is not removed"
     grep -qE '^docker run -d --rm ' "${TM_TMP}/fake/calls" && _tm_afail "the server runs with --rm: a dead one leaves no logs to read"
