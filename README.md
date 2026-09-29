@@ -103,7 +103,7 @@ The script, in order:
 - Installs the systemd service (`topic-manager.service`, `UMask=0077`) and its socket (`topic-manager.socket`: gunicorn listens only on `/run/topic-manager/gunicorn.sock`, 0660 `topic-manager:www-data`), the on-demand `topic-manager-nginx-test.service`, and `/etc/polkit-1/rules.d/50-topic-manager.rules`, which is what lets the Settings restart control act
 - v1.2.0: installs the root apply helper (`/usr/libexec/topic-manager/tm-apply`), its four one-shot units, the daily `topic-manager-audit-prune.timer`, `topic-manager-apply-audit.path` (audits each apply result as it lands, through `topic-manager-apply-audit.service`), and the Settings-managed nginx/rsyslog files (release defaults, only where absent); keeps `systemd-timesyncd` or installs `chrony` (see [Host settings](#host-settings-v120)); then APPLIES the saved host settings through the same path as the Settings button, so what is live is recorded from the first minute. Optional flags seed those settings: `--syslog-host/--syslog-port/--syslog-protocol/--syslog-app-id/--syslog-ca`, `--ntp-server`, `--no-http-redirect`, `--install-chrony`; a bad value stops the install before anything is changed
 - Installs the nginx site, the certificate (yours, an existing one, or the self-signed placeholder) and sets `ssl_protocols TLSv1.2 TLSv1.3` in `/etc/nginx/nginx.conf` — backed up, `nginx -t`'d, and put back if the test fails
-- Opens ufw ports 80 and 443 if ufw is active
+- Opens 443/tcp in ufw if ufw is active — and 80/tcp only while the HTTP redirect is on (with `--no-http-redirect`, never; turning the redirect off in Settings closes it again)
 - Verifies, as the service account, that the app can write `clusters.d` and cannot write `config.yaml`
 - **Starts the service**, waits for `/api/health`, and measures `tm.db` 0600 / `data/` 0700
 
@@ -621,6 +621,10 @@ back. What it needs is *access*, not answers:
 | **`apt`** | `apt full-upgrade` for nginx, OpenSSL, python3, krb5, kernel | use `--skip-os` to upgrade the app only |
 | **systemd** | stop/start `topic-manager`, reload nginx | none — this is required |
 
+**Run it detached, with a log file** (`setsid nohup … &` or `tmux`), online or offline, so a
+dropped SSH session cannot kill it mid-phase: see *Offline (air-gapped) upgrade* below for the
+commands; online, the same with your `--repo-url … --repo-commit …` arguments in place of `--offline`.
+
 On a STIG'd host the permission audit (phase 2) asks the **kernel**, not the file
 modes, whether `www-data` and `topic-manager` can actually reach what they need,
 so scoped-down ACLs, immutable attributes and AppArmor denials are reported
@@ -753,11 +757,25 @@ sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --list-back
 sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --restore 20260830-141205
 ```
 `--restore` verifies the backup's `SHA256SUMS` before it restores from it, puts back the recorded ownership and modes, and reports the health of what it restored. It also makes the product's host units, polkit rules and root helper what the restore point
-recorded: every unit, timer, path or socket unit the newer release added is stopped, disabled
-and removed (with its socket file), its helper and rules deleted, the older copies put back,
-and systemd reloaded — so no timer of the newer release keeps firing into code the restored
-one does not have. A restore point taken before v1.2.0's inventory cannot say what its release
-shipped; `--restore` then changes none of them and lists what it left. A vCSA snapshot revert remains the fastest option if the host itself is in doubt.
+recorded. The restore point records every unit file, drop-in directory and enablement link in
+`/etc/systemd/system` (the service's own drop-in excepted — it is restored separately), every
+rule in `/etc/polkit-1/rules.d` and all of `/usr/libexec/topic-manager`, whatever they are
+called. On the restore, every unit, timer, path or socket unit of the product's that the newer
+release added is stopped, disabled and removed — with its drop-in directory, its socket file and
+the runtime directory it declared (`/run/topic-manager-apply`, with the newer release's result
+files) — its helper and rules deleted, the older copies put back, and systemd reloaded, so no
+timer of the newer release keeps firing into code the restored one does not have. "The
+product's" is decided by what the file says, not only by its name: every unit and rule it ships
+names `topic-manager`. Anything else that changed in those directories since the restore point
+(a snap refresh's `snap-*.mount`, another tool's unit) is listed as *not the product's* and left
+alone. A restore point taken before v1.2.0's inventory cannot say what its release shipped;
+`--restore` then changes none of them and lists what it left.
+
+**The verdict.** `--restore` exits 0 only when the service answers healthy **as the version
+the restore point holds** (`manifest/state.env`) and nothing went wrong. Otherwise it prints
+`RESTORE INCOMPLETE — N problem(s)`, one line each — the service answering another version or
+not answering, a unit `systemctl` could not stop and disable (it may still run), a recorded file
+with no saved copy — and exits 1. Fix each, or revert the vCSA snapshot. A vCSA snapshot revert remains the fastest option if the host itself is in doubt.
 
 ### Offline (air-gapped) upgrade
 
@@ -802,6 +820,20 @@ sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --backup-on
 #   a verified restore point: "Baseline recorded (N paths)"
 sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline
 ```
+
+**Run it detached, with a log.** An upgrade takes minutes — longer offline, and longer again
+when it has to wait for the package lock — and a dropped SSH session (a network blip, a laptop
+going to sleep, a session timeout) hangs up the shell running it, which kills the script
+mid-phase. Start it so that a disconnect cannot reach it, and read its output from a file:
+```bash
+sudo -v                       # enter the password now: a backgrounded sudo cannot ask for it
+sudo setsid nohup bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline \
+    > ~/tm-upgrade.out 2>&1 < /dev/null &
+tail -f ~/tm-upgrade.out      # Ctrl-C ends only the tail; the upgrade carries on
+```
+or run it inside `tmux new -s tm-upgrade` (after a disconnect: `tmux attach -t tm-upgrade`).
+Either way the script also writes its full log to `/var/log/topic-manager-upgrade-<TIMESTAMP>.log`.
+Run `--restore` the same way.
 
 **A runtime package the release added.** The upgrade patches no OS package offline — there is
 no repository to reach — so a package a new release needs is not installed by it. v1.2.0 adds
@@ -974,9 +1006,10 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
 /etc/systemd/system/topic-manager.service    systemd unit
 /etc/systemd/system/topic-manager-nginx-test.service   Root-side `nginx -t`, Type=oneshot.
                              Never enabled; started on demand by the restart control
-/etc/polkit-1/rules.d/50-topic-manager.rules   Authorises the topic-manager account to
-                             restart topic-manager, reload/restart nginx, and start the
-                             nginx-test unit. Nothing else — no stop, no kill
+/etc/polkit-1/rules.d/50-topic-manager.rules   Authorises the topic-manager account for
+                             eight unit/verb pairs over seven units: restart topic-manager,
+                             reload/restart nginx, start the nginx-test unit and the four
+                             apply units. Nothing else — no stop, no kill
 /etc/systemd/system/topic-manager.service.d/ unit drop-ins, if used — this is
                              where TM_SECRET_KEY and TM_LDAP_BIND_PASSWORD live
                              when the configuration is held in the environment
@@ -1014,7 +1047,7 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
 - Destructive actions require name-match confirmation
 - Idle session timeout: 15 minutes (configurable as `session.timeout_minutes`); background refreshes do not count as activity
 - Fail-closed: application refuses to start if `secret_key` is absent or still the placeholder
-- The service account holds no general privilege escalation: `NoNewPrivileges=true` (so `sudo` cannot run under the unit at all), and exactly seven systemd unit/verb pairs are authorised through polkit (v1.2.0 added `start` on the four apply units, whose root helper re-validates everything and runs no code the service account owns) — see [Privileges the install grants](#privileges-the-install-grants)
+- The service account holds no general privilege escalation: `NoNewPrivileges=true` (so `sudo` cannot run under the unit at all), and exactly eight systemd unit/verb pairs, over seven units, are authorised through polkit (v1.2.0 added `start` on the four apply units, whose root helper re-validates everything and runs no code the service account owns) — see [Privileges the install grants](#privileges-the-install-grants)
 - The application cannot write or unlink its own `config.yaml`, and the upgrade asks the kernel to prove it as the real principal rather than reading mode bits
 - **No role separation.** Every member of `required_group` can delete any topic, rewrite the cluster list and restart the service. "Authenticated" and "fully privileged in this app" are the same thing here; the audit log records who acted, it does not constrain who may
 

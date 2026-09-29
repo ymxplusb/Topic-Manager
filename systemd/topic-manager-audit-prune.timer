@@ -2,6 +2,9 @@
 Description=Jarvis Topic Manager — daily audit retention prune
 
 [Timer]
+# Starts topic-manager-audit-prune.service (the unit of the same name).
+# Naming it also marks this file as the product's: a rollback retires or
+# restores a unit by what it says, not only by its name (t45).
 OnCalendar=daily
 RandomizedDelaySec=1h
 # A host that was off at the scheduled time prunes when it comes back.

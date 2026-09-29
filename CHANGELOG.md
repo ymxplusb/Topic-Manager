@@ -124,6 +124,30 @@ Database SRG V4R5 applied to SQLite.)
   server and refuses a docker disk at 90%; `check-version-surfaces.sh` no longer prints OK
   after a changelog-date FAIL.
 
+### Round 6 (WO-0004): clean-room round 5 and the gatekeeper's round-5 notes
+- **`install.sh` and the upgrade wait for the package lock.** On the air-gapped QC host
+  unattended-upgrades held dpkg's lock for ~4.5 minutes and `install.sh --packages-only`
+  failed at once, pointing at `dpkg --audit`. Every apt/dpkg step now waits (up to 600 s,
+  `TM_DPKG_LOCK_WAIT_S`) and names the process holding the lock; a lock still held stops the
+  run before anything changes, and the error text and TROUBLESHOOTING say so.
+- **`--restore` is judged by the version and by what it could not do.** It exits 0 only
+  when the service answers healthy as the version the restore point holds; the wrong
+  version, a unit `systemctl` could not stop and disable, or a recorded file with no saved
+  copy is listed under `RESTORE INCOMPLETE` and the exit is 1. The retired count now counts
+  every unit retired (it said 8 after listing 9), and a retired unit's runtime directory
+  (`/run/topic-manager-apply`) and drop-in directory go with it.
+- **The rollback inventory is by location.** The restore point records every unit file,
+  drop-in directory and link in `/etc/systemd/system` and every polkit rule, whatever its
+  name; a restore changes only the product's (what the file names, not only its name), and
+  lists anything else that changed as not the product's.
+- `tools/sonar-local.sh` fails a head whose scan indexed fewer than 80% of the base's files
+  (an exclusion of the whole tree printed PASS on 0 files), and its PASS line names the
+  conditions actually judged.
+- Docs: run the upgrade detached (`setsid nohup … &` or `tmux`) with a log file; the polkit
+  rule is eight unit/verb pairs over seven units everywhere; README's ufw line matches
+  INSTALL (80/tcp only while the HTTP redirect is on); the PPSM systemd-resolved row names
+  127.0.0.54:53 as well as 127.0.0.53:53.
+
 ### Changed
 
 - `_ALL_KEYS` is a NEW set (`_PUBLIC_KEYS | ADMIN_KEYS`, `_PUBLIC_KEYS` frozen). It used to

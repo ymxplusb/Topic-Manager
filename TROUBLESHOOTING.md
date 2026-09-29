@@ -216,6 +216,12 @@ The CDN was unreachable and the previous install's Vue is a different version (o
 Only the pinned file may serve. Stage the offline bundle (its `lib/` carries the pinned Vue) or
 restore network access to the CDN.
 
+### `The package lock is held by another process (named above)`
+Online runs only: Phase 5 (installing `git`) and Phase 6 (patching the OS) wait up to 600 s for
+dpkg's and apt's locks first, naming the process that holds them, and stop **before anything is
+changed** if it is still held. Let it finish or stop it, then run again (or pass `--skip-os`) —
+see *Fresh install* → `The package lock is STILL held`.
+
 ### `git clone failed`
 The clone is from the URL given with `--repo-url` (there is no default). Test it by hand, as
 root, the same way:
@@ -450,7 +456,7 @@ sudo journalctl -u polkit -n 5 --no-pager     # a fresh "Finished loading ... N 
 
 If the file is present but has no effect, look in that same journal — polkitd reports errors
 in a rules file there. Nothing in the rule can *deny* anything: it returns `YES` for its
-three unit/verb pairs and `NOT_HANDLED` for everything else, so a rule that is not in force
+eight unit/verb pairs (seven units; `nginx.service` has two verbs) and `NOT_HANDLED` for everything else, so a rule that is not in force
 takes nothing else with it.
 
 To ask whether the account is authorised **without restarting anything**, check against a
@@ -893,7 +899,9 @@ Sign in again.
 | `Refusing the offline package plan; nothing was installed or changed: <pkg>: ... would be DOWNGRADED / REMOVED / FIPS package ...` | The simulated plan broke the policy, so nothing was run. It should not happen (apt is configured so it cannot); report it with the line printed |
 | `Package plan declined. Nothing has been changed.` | You answered no at `Apply this package plan?`. Nothing was installed |
 | `Could not read the installed package set and its origins` | `dpkg-query -W` or `apt-cache policy` failed, so it could not be established which installed packages are FIPS modules; the install stops rather than guess. Run both by hand to see why (for example a damaged `/var/lib/dpkg/status`, or no package lists under `/var/lib/apt/lists`) |
-| `Offline package install failed (apt exit N) while applying the plan printed above` | Resolution succeeded but dpkg failed while installing, so **part of the plan may be applied**. Run `sudo dpkg --audit` and read dpkg's output above; fix the cause and re-run `install.sh` |
+| `Waiting for the package lock (/var/lib/dpkg/lock-frontend, held by PID N (<name>)) ...` (INFO) | Not an error. Another package manager holds dpkg's lock; `install.sh` (every mode, `--packages-only` included) and the upgrade wait for it, up to 600 s. On an air-gapped host it is usually `unattended-upgr` (unattended-upgrades) retrying an archive it cannot reach, for minutes |
+| `The package lock is STILL held after 600s: <lock>, held by PID N (<name>)` / `The package lock is held by another process (named above)` | Nothing was installed or changed. Let the named process finish (`ps -fp N`; for unattended-upgrades, `journalctl -u unattended-upgrades -n 20`), or stop it — `sudo systemctl stop unattended-upgrades apt-daily.service apt-daily-upgrade.service` — then run the same command again. `TM_DPKG_LOCK_WAIT_S=<seconds>` waits longer. `dpkg --audit` is not the check here: a held lock leaves nothing half-installed |
+| `Offline package install failed (apt exit N) while applying the plan printed above` | If apt's output above says `Could not get lock /var/lib/dpkg/lock-frontend`, another package manager took the lock after the wait: nothing was applied — see the row above. Otherwise resolution succeeded but dpkg failed while installing, so **part of the plan may be applied**. Run `sudo dpkg --audit` and read dpkg's output above; fix the cause and re-run `install.sh` |
 | `pip install from requirements.lock failed (a hash mismatch is refused, not retried)` | A wheel did not match its SHA-256 in `requirements.lock` — a tampered mirror, a corrupted bundle, or a bundle built from a different release. Rebuild the bundle; never edit the lock by hand |
 | `Cannot check /etc/topic-manager/config.yaml before changing anything` | Neither the existing venv nor `python3` can import PyYAML. `sudo apt install python3-yaml` and re-run; nothing was changed |
 | `--tls-cert and --tls-key are not a matching certificate/key pair` | The two files are not a pair, or one could not be read. Compare `openssl x509 -noout -pubkey -in <crt>` with `openssl pkey -pubout -in <key>` |
@@ -969,11 +977,25 @@ sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --restore 2
 It verifies the backup's `SHA256SUMS` before restoring from it, refuses to restore a backup
 that fails that check, puts back the recorded ownership and modes, and then reports the
 health of what it restored. It also makes the product's host units, polkit rules and root helper what the restore point
-recorded: every unit, timer, path or socket unit the newer release added is stopped, disabled
-and removed (with its socket file), its helper and rules deleted, the older copies put back,
-and systemd reloaded — so no timer of the newer release keeps firing into code the restored
-one does not have. A restore point taken before v1.2.0's inventory cannot say what its release
-shipped; `--restore` then changes none of them and lists what it left.
+recorded. The restore point records every unit file, drop-in directory and enablement link in
+`/etc/systemd/system` (the service's own drop-in excepted — it is restored separately), every
+rule in `/etc/polkit-1/rules.d` and all of `/usr/libexec/topic-manager`, whatever they are
+called. On the restore, every unit, timer, path or socket unit of the product's that the newer
+release added is stopped, disabled and removed — with its drop-in directory, its socket file and
+the runtime directory it declared (`/run/topic-manager-apply`, with the newer release's result
+files) — its helper and rules deleted, the older copies put back, and systemd reloaded, so no
+timer of the newer release keeps firing into code the restored one does not have. "The
+product's" is decided by what the file says, not only by its name: every unit and rule it ships
+names `topic-manager`. Anything else that changed in those directories since the restore point
+(a snap refresh's `snap-*.mount`, another tool's unit) is listed as *not the product's* and left
+alone. A restore point taken before v1.2.0's inventory cannot say what its release shipped;
+`--restore` then changes none of them and lists what it left.
+
+**The verdict.** `--restore` exits 0 only when the service answers healthy **as the version
+the restore point holds** (`manifest/state.env`) and nothing went wrong. Otherwise it prints
+`RESTORE INCOMPLETE — N problem(s)`, one line each — the service answering another version or
+not answering, a unit `systemctl` could not stop and disable (it may still run), a recorded file
+with no saved copy — and exits 1. Fix each, or revert the vCSA snapshot.
 
 **By hand**, if the script cannot run at all. A restore point is laid out as:
 ```
@@ -986,8 +1008,9 @@ shipped; `--restore` then changes none of them and lists what it left.
   system/topic-manager.nginx         system/tm-security-headers.conf
   system/logrotate-topic-manager     venv.tar.gz
   manifest/state.env                 manifest/permissions.baseline
-  manifest/owned-artefacts.list      system/owned/<absolute path>   (v1.2.0+: units,
-                                     polkit rules, /usr/libexec/topic-manager, byte-exact)
+  manifest/owned-artefacts.list      system/owned/<absolute path>   (v1.2.0+: unit files,
+                                     drop-ins and links in /etc/systemd/system, polkit
+                                     rules, /usr/libexec/topic-manager, byte-exact)
   SHA256SUMS
 ```
 ```bash

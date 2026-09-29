@@ -39,7 +39,11 @@
 #      bugs, vulnerabilities and reliability_rating decide the exit code; the
 #      two things a throwaway server cannot know are said, not hidden
 #      (KNOWN DIFFERENCES, below);
-#   6. every container, every volume and the network are removed on every
+#   6. the head's scan must have READ the tree: its indexed-file count is held
+#      to 80% of the base's (judge_coverage), so an exclusion that hides the
+#      tree cannot pass on "0 new issues"; the PASS line names the conditions
+#      actually judged, and the ones only reported;
+#   7. every container, every volume and the network are removed on every
 #      exit path; a server that dies while starting fails the run at once, and
 #      a docker host whose disk is 90% full is refused before anything starts.
 #
@@ -48,8 +52,9 @@
 # from the environment are never passed in (docker run passes only what -e
 # names).
 #
-# Exit: 0 = every gate condition passes; 1 = a condition fails (issues
-# listed); 2 = could not run (no docker, a full docker disk, a ref that does
+# Exit: 0 = every judged gate condition passes and the head read the tree;
+# 1 = a condition fails (issues listed), or the head indexed fewer files than
+# the floor; 2 = could not run (no docker, a full docker disk, a ref that does
 # not exist, the server died or never came up, a scan or a query failed, a
 # gate condition that could not be read). 2 is NOT a pass.
 #
@@ -180,16 +185,33 @@ if got_gate != gate_name:
     say("COULD NOT RUN: the project is on gate %r, not %r" % (got_gate, gate_name)); sys.exit(2)
 by_metric = {c.get("metricKey"): c for c in status.get("conditions", [])}
 fail, unknown = [], []
+# What the PASS line reports (round 6, gatekeeper round 5 a): which conditions
+# were JUDGED, which had no value, and which were reported but not judged. It
+# printed "(7 conditions)" while security_hotspots_reviewed decides nothing.
+judged, novalue, reported = [], [], []
 for metric, op, err in conds:
     c = by_metric.get(metric)
+    if metric == "security_hotspots_reviewed":
+        reported.append(metric)
+        say("  %-32s %s %s  %s here: KNOWN DIFFERENCE, not the verdict (reviews are the estate server's state; new hotspots are held by new_security_hotspots_reviewed)"
+            % (metric, op, err, "no value" if c is None else "actual %s (%s)" % (c.get("actualValue", "?"), c.get("status", "?"))))
+        continue
     if c is None:
         if measures.get(metric) not in (None, ""):
             unknown.append(metric)
             say("  %-32s %s %s  NOT EVALUATED although it has a value (%s)" % (metric, op, err, measures[metric]))
+        elif not metric.startswith("new_"):
+            # bugs, vulnerabilities and reliability_rating ALWAYS have a value
+            # once a project is analysed; none means the server said nothing,
+            # not "clean".
+            unknown.append(metric)
+            say("  %-32s %s %s  NO VALUE for an overall measure: the analysis reported nothing" % (metric, op, err))
         else:
+            novalue.append(metric)
             say("  %-32s %s %s  no value (nothing new to measure): OK" % (metric, op, err))
         continue
     actual, st = c.get("actualValue", "?"), c.get("status", "?")
+    judged.append(metric)
     if st == "OK":
         say("  %-32s %s %s  actual %s: OK" % (metric, op, err, actual)); continue
     if metric == "vulnerabilities":
@@ -208,9 +230,6 @@ for metric, op, err in conds:
         else:
             say("  %-32s %s %s  actual %s: OK on the estate (every one is a KNOWN DIFFERENCE, listed above)" % (metric, op, err, actual))
         continue
-    if metric == "security_hotspots_reviewed":
-        say("  %-32s %s %s  actual %s here: KNOWN DIFFERENCE, not the verdict (reviews are the estate server's state; new hotspots are held by new_security_hotspots_reviewed)" % (metric, op, err, actual))
-        continue
     fail.append(metric); say("  %-32s %s %s  actual %s: FAIL" % (metric, op, err, actual))
 say("HEAD %s: new_violations=%s (all issues %s); gate %s" % (label, measures.get("new_violations", "?"),
     measures.get("violations", "?"), gate_name))
@@ -218,9 +237,46 @@ if unknown:
     say("COULD NOT RUN: condition(s) not evaluable: %s" % ", ".join(unknown)); sys.exit(2)
 if fail:
     say("FAIL: %s - the tag's Sonar gate would fail on these" % ", ".join(fail)); sys.exit(1)
-say("PASS: every condition of the estate gate holds (%d conditions)" % len(conds))
+say("PASS: %d of %d conditions judged and hold (%s)%s%s" % (len(judged), len(conds), ", ".join(judged),
+    "; no value, nothing new to judge: " + ", ".join(novalue) if novalue else "",
+    "; reported, NOT judged (KNOWN DIFFERENCE): " + ", ".join(reported) if reported else ""))
 sys.exit(0)
 PYGATE
+}
+
+# THE SCAN MUST HAVE READ THE TREE (round 6, gatekeeper round 5 a). A head
+# whose sonar-project.properties said sonar.exclusions=**/* indexed 0 files,
+# so it had 0 new issues, and printed PASS. The head's indexed-file count is
+# held to a floor DERIVED FROM THE BASE: at least MIN_FILES_PCT% of the files
+# the base scan indexed, and never 0. A release that really deletes a fifth of
+# the tree fails here and says why; that is a decision to make in review.
+MIN_FILES_PCT=80
+
+# indexed_files <scan-log> — the scanner's "N files indexed" count.
+indexed_files() {   # indexed_files <scan-log>
+    local line
+    while IFS= read -r line; do
+        if [[ "$line" =~ (^|[^0-9])([0-9]+)\ files?\ indexed ]]; then
+            echo "${BASH_REMATCH[2]}"; return 0
+        fi
+    done < "$1"
+    return 1
+}
+
+# judge_coverage <base-log> <head-log> — 0 = the head read at least the floor;
+# 1 = it did not (FAIL); 2 = a count is missing, or the base read nothing.
+judge_coverage() {   # judge_coverage <base-log> <head-log>
+    local b h floor
+    b="$(indexed_files "$1")" || { say "COULD NOT RUN: the base scan did not say how many files it indexed"; return 2; }
+    h="$(indexed_files "$2")" || { say "COULD NOT RUN: the head scan did not say how many files it indexed"; return 2; }
+    (( b > 0 )) || { say "COULD NOT RUN: the base scan indexed 0 files, so there is no floor to hold the head to"; return 2; }
+    floor=$(( (b * MIN_FILES_PCT + 99) / 100 ))
+    if (( h < floor || h == 0 )); then
+        say "FAIL: the head scan indexed ${h} file(s), below the floor of ${floor} (${MIN_FILES_PCT}% of the base's ${b}). A tree the scan did not read is not a tree it passed: check sonar.exclusions / sonar.sources in the head's sonar-project.properties"
+        return 1
+    fi
+    say "files indexed: head ${h}, base ${b} (floor ${floor} = ${MIN_FILES_PCT}% of the base): OK"
+    return 0
 }
 
 # ─── local run (a Linux host with docker) ────────────────────────────────────
@@ -423,5 +479,14 @@ metrics="$(for c in "${JARVIS_GATE[@]}"; do printf '%s,' "${c%% *}"; done)violat
     && api GET "measures/component?component=${PROJECT_KEY}&metricKeys=${metrics}" > "$WORK/v-measures.json" \
     && api GET "issues/search?componentKeys=${PROJECT_KEY}&types=VULNERABILITY&resolved=false&ps=100" > "$WORK/v-vulns.json"
 } || die2 "could not read the gate status, measures or vulnerabilities"
-evaluate_gate "$WORK" "$GATE_NAME" "${head_sha:0:12} vs ${BASE_REF}"
-exit $?
+cov=0
+judge_coverage "$WORK/scan-${base_ver}.log" "$WORK/scan-${head_ver}.log" || cov=$?
+gate=0
+evaluate_gate "$WORK" "$GATE_NAME" "${head_sha:0:12} vs ${BASE_REF}" || gate=$?
+if (( cov == 2 || gate == 2 )); then
+    say "VERDICT: COULD NOT RUN (exit 2) - not a pass"; exit 2
+elif (( cov != 0 || gate != 0 )); then
+    say "VERDICT: FAIL (exit 1)$( (( cov != 0 )) && echo ' - the head scan did not read the tree')"; exit 1
+fi
+say "VERDICT: PASS (exit 0)"
+exit 0

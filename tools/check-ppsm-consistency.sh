@@ -122,6 +122,10 @@ PINNED = [
     ("Host",    "25",   "TCP",     "Inbound",  "inet_interfaces = all"),
     ("Host",    "25",   "TCP",     "Inbound",  "inet_interfaces = loopback-only"),
     ("Host",    "323",  "UDP",     "Loopback", "chronyc"),
+    # systemd-resolved listens on BOTH stubs (clean-room N6, 2026-09-29):
+    # 127.0.0.53:53 and the proxy-only 127.0.0.54:53.
+    ("App",     "53",   "UDP/TCP", "Loopback", "127.0.0.53:53"),
+    ("App",     "53",   "UDP/TCP", "Loopback", "127.0.0.54:53"),
     ("Host",    "ephemeral (32768-60999)", "UDP", "Outbound", "rsyslog UDP sender sockets"),
     ("Auth",    "636",  "TCP",     "Outbound", ""),
     ("Infra",   "53",   "UDP/TCP", "Outbound", ""),

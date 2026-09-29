@@ -847,9 +847,9 @@ DESC|install: the explicit cleanup of the temporary apt config after the install
 TESTS|t23-offline-apt.sh
 TARGET|install
 EQUIV|yes
-ANCHOR|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" install -y "${inst_opts[@]}" "$@" || rc=$?
+ANCHOR|        install -y "${inst_opts[@]}" "$@" || rc=$?
 ANCHOR|    rm -rf -- "$tmp"; APT_BUNDLE_TMP=""; trap - EXIT
-REPLACE|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" install -y "${inst_opts[@]}" "$@" || rc=$?
+REPLACE|        install -y "${inst_opts[@]}" "$@" || rc=$?
 REPLACE|    true
 
 --- M104
@@ -1029,8 +1029,8 @@ DESC|install: a failed update of the private lists is ignored
 TESTS|t23-offline-apt.sh
 TARGET|install
 EQUIV|no
-ANCHOR|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" update -qq || rc=$?
-REPLACE|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" update -qq || true
+ANCHOR|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" update -qq || rc=$?
+REPLACE|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" update -qq || true
 
 --- M126
 DESC|install: a failed resolution (simulation) is ignored
@@ -2813,15 +2813,16 @@ REPLACE|    [[ "$u" == *.service && -f "$f" ]] && mapfile -t socks < <(socket_un
 DESC|R1: a retired unit is not stopped and disabled
 TESTS|t44-backend-socket.sh t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|    systemctl disable --now "$u" >/dev/null 2>&1 || true
+ANCHOR|    if ! out="$(systemctl disable --now "$u" 2>&1)"; then
+REPLACE|    if ! out="$(true)"; then
 
 --- M342
 DESC|R1: a retired unit's file is left in place
 TESTS|t44-backend-socket.sh t45-rollback-host-artefacts.sh
 EQUIV|no
 ANCHOR|    rm -f -- "$f"
-ANCHOR|    shopt -s nullglob
-REPLACE|    shopt -s nullglob
+ANCHOR|    if [[ -d "${f}.d" && ! -L "${f}.d" && "${f}.d" != "${DROPIN_DIR:-}" ]]; then
+REPLACE|    if [[ -d "${f}.d" && ! -L "${f}.d" && "${f}.d" != "${DROPIN_DIR:-}" ]]; then
 
 --- M343
 DESC|R1: a retired unit's enablement links are left in place
@@ -2862,8 +2863,8 @@ REPLACE|        if [[ ! -d "$OWNED_LIBEXEC_DIR" && ! -L "$OWNED_LIBEXEC_DIR" ]];
 DESC|R1: the inventory omits polkit rules
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|                 "${OWNED_UNIT_DIR}"/*.requires/"${SERVICE}"* "${OWNED_POLKIT_DIR}"/*"${SERVICE}"*; do
-REPLACE|                 "${OWNED_UNIT_DIR}"/*.requires/"${SERVICE}"*; do
+ANCHOR|        for p in "${OWNED_POLKIT_DIR}"/*; do
+REPLACE|        for p in; do
 
 --- M349
 DESC|R1: Phase 4 records an EMPTY inventory
@@ -2891,8 +2892,10 @@ DESC|R1: the legacy branch falls through into the inventory path
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
 ANCHOR|        warn "  Retire any the restored release does not ship: sudo systemctl disable --now <unit>; delete the file; sudo systemctl daemon-reload"
+ANCHOR|        remove_retired_runtime
 ANCHOR|        return 0
 REPLACE|        warn "  Retire any the restored release does not ship: sudo systemctl disable --now <unit>; delete the file; sudo systemctl daemon-reload"
+REPLACE|        remove_retired_runtime
 
 --- M353
 DESC|R1: what the restore point held is treated as added (the 'had' check dropped)
@@ -2902,11 +2905,11 @@ ANCHOR|        [[ -n "${had[$p]+x}" ]] && continue
 REPLACE|        :
 
 --- M354
-DESC|R1: an enablement link is sent to retire_unit as if it were a unit
+DESC|R1: an enablement link (or a drop-in, rule, helper) is sent to retire_unit as if it were a unit
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|            "${OWNED_UNIT_DIR}"/*/*) added_other+=("$p") ;;          # an enablement link
-REPLACE|            "${OWNED_UNIT_DIR}"/*/*) added_units+=("$p") ;;          # an enablement link
+ANCHOR|            added_other+=("$p")      # a link, a drop-in, a rule, the helper tree
+REPLACE|            added_units+=("$p")      # a link, a drop-in, a rule, the helper tree
 
 --- M355
 DESC|R1: no added unit is retired
@@ -2934,8 +2937,8 @@ DESC|R1: no daemon-reload after the units are retired
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
 ANCHOR|    systemctl daemon-reload >/dev/null 2>&1 || true
-ANCHOR|    info "Host units, rules and helpers restored to the restore point's inventory (${#added_units[@]} unit(s) retired)"
-REPLACE|    info "Host units, rules and helpers restored to the restore point's inventory (${#added_units[@]} unit(s) retired)"
+ANCHOR|    info "Host units, rules and helpers restored to the restore point's inventory (${#RETIRED_UNITS[@]} unit(s) retired${RETIRED_UNITS[*]:+: ${RETIRED_UNITS[*]}})"
+REPLACE|    info "Host units, rules and helpers restored to the restore point's inventory (${#RETIRED_UNITS[@]} unit(s) retired${RETIRED_UNITS[*]:+: ${RETIRED_UNITS[*]}})"
 
 --- M359
 DESC|R1: restore_from_backup (--restore and the rollback) never uses the inventory
@@ -3106,14 +3109,12 @@ ANCHOR|    if st == "OK":
 REPLACE|    if st != "OK":
 
 --- M380
-DESC|sonar-local's verdict exit code is discarded
+DESC|sonar-local's gate verdict exit code is discarded
 TESTS|t46-round5-gates-and-docs.sh
 TARGET|sonar
 EQUIV|no
-ANCHOR|evaluate_gate "$WORK" "$GATE_NAME" "${head_sha:0:12} vs ${BASE_REF}"
-ANCHOR|exit $?
-REPLACE|evaluate_gate "$WORK" "$GATE_NAME" "${head_sha:0:12} vs ${BASE_REF}"
-REPLACE|exit 0
+ANCHOR|evaluate_gate "$WORK" "$GATE_NAME" "${head_sha:0:12} vs ${BASE_REF}" || gate=$?
+REPLACE|evaluate_gate "$WORK" "$GATE_NAME" "${head_sha:0:12} vs ${BASE_REF}" || true
 
 # ─── round 5: version-surfaces does not say OK after a date FAIL ────────────
 --- M381
@@ -3139,3 +3140,349 @@ TARGET|sonar
 EQUIV|no
 ANCHOR|[[ "$have" == "$want" ]] || die2 "the gate copy is not the declared gate: has [${have//$'\n'/; }]"
 REPLACE|:
+
+# ─── round 6 (WO-0004): gatekeeper round 5 a-d, clean-room N1/N5 ───────────
+--- M384
+DESC|a: sonar-local never holds the head's indexed files to the base's
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|judge_coverage "$WORK/scan-${base_ver}.log" "$WORK/scan-${head_ver}.log" || cov=$?
+REPLACE|:
+
+--- M385
+DESC|a: the coverage floor comparison is <= (a head AT the floor fails)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    if (( h < floor || h == 0 )); then
+REPLACE|    if (( h <= floor || h == 0 )); then
+
+--- M386
+DESC|a: the coverage floor comparison is flipped to >
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    if (( h < floor || h == 0 )); then
+REPLACE|    if (( h > floor || h == 0 )); then
+
+--- M387
+DESC|a: the floor percentage is bumped down (80 -> 79)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|MIN_FILES_PCT=80
+REPLACE|MIN_FILES_PCT=79
+
+--- M388
+DESC|a: the explicit h == 0 clause is dropped. DOCUMENTED EQUIVALENT: the base must have indexed at least one file (else exit 2 first), so the floor is at least 1 and h == 0 is always below it
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|yes
+ANCHOR|    if (( h < floor || h == 0 )); then
+REPLACE|    if (( h < floor )); then
+
+--- M389
+DESC|a: a base that indexed nothing still yields a floor
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    (( b > 0 )) || { say "COULD NOT RUN: the base scan indexed 0 files, so there is no floor to hold the head to"; return 2; }
+REPLACE|    :
+
+--- M390
+DESC|a: a coverage that could not be judged is not exit 2
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|if (( cov == 2 || gate == 2 )); then
+REPLACE|if (( gate == 2 )); then
+
+--- M391
+DESC|a: a coverage FAIL does not fail the run
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|elif (( cov != 0 || gate != 0 )); then
+REPLACE|elif (( gate != 0 )); then
+
+--- M392
+DESC|a: indexed_files reads the wrong scanner line (files ignored)
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|        if [[ "$line" =~ (^|[^0-9])([0-9]+)\ files?\ indexed ]]; then
+REPLACE|        if [[ "$line" =~ (^|[^0-9])([0-9]+)\ files?\ ignored ]]; then
+
+--- M393
+DESC|a: an overall measure with no value passes as "nothing new"
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|        elif not metric.startswith("new_"):
+REPLACE|        elif False:
+
+--- M394
+DESC|a: overall security_hotspots_reviewed is judged again
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    if metric == "security_hotspots_reviewed":
+REPLACE|    if False:
+
+--- M395
+DESC|a: the PASS line's judged list is never filled
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|    judged.append(metric)
+REPLACE|    pass
+
+--- M396
+DESC|a: the PASS line's no-value list is never filled
+TESTS|t46-round5-gates-and-docs.sh
+TARGET|sonar
+EQUIV|no
+ANCHOR|            novalue.append(metric)
+REPLACE|            pass
+
+--- M397
+DESC|b: the unit inventory is a name prefix again
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        for p in "${OWNED_UNIT_DIR}"/*; do
+REPLACE|        for p in "${OWNED_UNIT_DIR}"/"${SERVICE}"*; do
+
+--- M398
+DESC|b: drop-in directories are not inventoried
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        for p in "${OWNED_UNIT_DIR}"/*.d; do
+REPLACE|        for p in; do
+
+--- M399
+DESC|b: retire_unit leaves the unit's drop-in directory
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        rm -rf -- "${f}.d"
+REPLACE|        :
+
+--- M400
+DESC|b: the service's own drop-in (secrets) is inventoried and judged
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            [[ -d "$p" && ! -L "$p" && "$p" != "$DROPIN_DIR" ]] || continue
+REPLACE|            [[ -d "$p" && ! -L "$p" ]] || continue
+
+--- M401
+DESC|b: ownership by content is gone (only the name counts)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    [[ -f "${2}${1}" && ! -L "${2}${1}" ]] && grep -qF -- "$SERVICE" "${2}${1}"
+REPLACE|    false
+
+--- M402
+DESC|b: ownership by name is gone (only the content counts)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    [[ "${1##*/}" == "${SERVICE}"* ]] && return 0
+REPLACE|    :
+
+--- M403
+DESC|b: every ADDED artefact is retired, the product's or not (a snap mount is stopped)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if ! owned_artefact "$p"; then
+REPLACE|        if false; then
+
+--- M404
+DESC|b: every RECORDED artefact is put back, the product's or not (another tool's unit reverted)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if ! owned_artefact "$p" "${BD}/system/owned"; then
+REPLACE|        if false; then
+
+--- M405
+DESC|N5: the retired units' runtime directories are never removed
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    remove_retired_runtime
+ANCHOR|    systemctl daemon-reload >/dev/null 2>&1 || true
+REPLACE|    systemctl daemon-reload >/dev/null 2>&1 || true
+
+--- M406
+DESC|N5: a runtime directory a KEPT unit declares is removed anyway
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            [[ $'\n'"$(unit_runtime_dirs "$f")"$'\n' == *$'\n'"${d}"$'\n'* ]] && keep="${f##*/}"
+REPLACE|            :
+
+--- M407
+DESC|N5: a RuntimeDirectory= that is not a plain name is removed (path escape)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if [[ ! "$d" =~ ^[A-Za-z0-9_.@-]+(/[A-Za-z0-9_.@-]+)*$ || "/${d}/" == */../* || "/${d}/" == */./* ]]; then
+REPLACE|        if false; then
+
+--- M408
+DESC|N5: retire_unit never records the unit's RuntimeDirectory=
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        while IFS= read -r rd; do RETIRED_RUNTIME+=("$rd"); done < <(unit_runtime_dirs "$f")
+REPLACE|        :
+
+--- M409
+DESC|N5: the retired count misses units (retire_unit does not record them)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    RETIRED_UNITS+=("$u")
+REPLACE|    :
+
+--- M410
+DESC|d: a unit systemctl could not disable is not a restore problem
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        RESTORE_PROBLEMS+=("systemctl disable --now ${u} failed (${out//$'\n'/ }): it may still be running or enabled")
+REPLACE|        :
+
+--- M411
+DESC|d: a recorded artefact with no saved copy is not a restore problem
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            RESTORE_PROBLEMS+=("the restore point lists ${p} but holds no copy of it: left as it is")
+REPLACE|            :
+
+--- M412
+DESC|c: the restored version comparison is flipped
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    elif [[ "$hv" != "$v" ]]; then
+REPLACE|    elif [[ "$hv" == "$v" ]]; then
+
+--- M413
+DESC|c: a restore point that records no (or an unknown) version is accepted
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    elif [[ -z "$v" || "$v" == unknown ]]; then
+REPLACE|    elif false; then
+
+--- M414
+DESC|d: restore problems do not fail the verdict
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ ${#RESTORE_PROBLEMS[@]} -eq 0 ]]; then
+REPLACE|    if true; then
+
+--- M415
+DESC|c/d: restore_from_backup discards the verdict
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    restore_verdict "$BD"
+REPLACE|    restore_verdict "$BD" || true
+
+--- M416
+DESC|d: restore_from_backup does not start a fresh restore record
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    RETIRED_UNITS=(); RETIRED_RUNTIME=(); RESTORE_PROBLEMS=()
+REPLACE|    :
+
+--- M417
+DESC|N1: Phase 6 patches the OS without waiting for the package lock
+TESTS|t47-round6-lock-and-docs.sh
+EQUIV|no
+ANCHOR|    wait_for_dpkg_lock "${DPKG_LOCKS[@]}" "${APT_LOCKS[@]}" \
+ANCHOR|        || fail "The package lock is held by another process (named above). Nothing has been changed; run again once it is released, or use --skip-os."
+REPLACE|    :
+
+--- M418
+DESC|N1: the offline (bundle) install does not wait for the package lock
+TESTS|t47-round6-lock-and-docs.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if ! wait_for_dpkg_lock; then
+REPLACE|    if false; then
+
+--- M419
+DESC|N1: the online runtime-package install does not wait for the package lock
+TESTS|t47-round6-lock-and-docs.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        wait_for_dpkg_lock "${DPKG_LOCKS[@]}" "${APT_LOCKS[@]}" \
+ANCHOR|            || die "The package lock is held by another process (named above); nothing was installed or changed."
+REPLACE|        :
+
+--- M420
+DESC|N1: the online chrony install does not wait for the package lock
+TESTS|t47-round6-lock-and-docs.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        wait_for_dpkg_lock "${DPKG_LOCKS[@]}" "${APT_LOCKS[@]}" \
+ANCHOR|            || die "The package lock is held by another process (named above); chrony was not installed."
+REPLACE|        :
+
+--- M421
+DESC|N1: the wait gives up at once (bound comparison flipped)
+TESTS|t47-round6-lock-and-docs.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if (( waited >= DPKG_LOCK_WAIT_S )); then
+REPLACE|        if (( waited < DPKG_LOCK_WAIT_S )); then
+
+--- M422
+DESC|N1: a held lock is never seen (the holder is not reported)
+TESTS|t47-round6-lock-and-docs.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            echo "${f}, held by PID ${pid} (${comm})"
+REPLACE|            :
+
+--- M423
+DESC|N1: the wait counts 100 s per 1 s slept (constant bumped)
+TESTS|t47-round6-lock-and-docs.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        sleep 1; waited=$((waited + 1))
+REPLACE|        sleep 1; waited=$((waited + 100))
+
+--- M424
+DESC|N1: the device half of the lock key is wrong (major/minor swapped)
+TESTS|t47-round6-lock-and-docs.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        key="$(printf '%02x:%02x:%s' $(( (dev >> 8) & 0xfff )) $(( (dev & 0xff) | ((dev >> 12) & 0xfff00) )) "$ino")"
+REPLACE|        key="$(printf '%02x:%02x:%s' $(( (dev & 0xff) | ((dev >> 12) & 0xfff00) )) $(( (dev >> 8) & 0xfff )) "$ino")"
+
+--- M425
+DESC|N1: Phase 5 installs git without waiting for the package lock
+TESTS|t47-round6-lock-and-docs.sh
+EQUIV|no
+ANCHOR|        wait_for_dpkg_lock "${DPKG_LOCKS[@]}" "${APT_LOCKS[@]}" \
+ANCHOR|            || fail "The package lock is held by another process (named above); git could not be installed. Nothing has been changed."
+REPLACE|        :
+
+--- M426
+DESC|N1: the bundle install's apt call loses its own lock timeout
+TESTS|t47-round6-lock-and-docs.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" \
+REPLACE|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" \
+
+--- M427
+DESC|b: a polkit rule with the service in its name is not the product's
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        [[ "${p##*/}" == *"${SERVICE}"* ]] && return 0
+REPLACE|        :
+
+--- M428
+DESC|b: a polkit rule that names the service account (under another name) is not the product's
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ "$p" == "${OWNED_POLKIT_DIR}"/* ]]; then
+ANCHOR|        [[ "${p##*/}" == *"${SERVICE}"* ]] && return 0
+ANCHOR|        [[ -f "${pre}${p}" && ! -L "${pre}${p}" ]] && grep -qF -- "$SERVICE" "${pre}${p}"
+REPLACE|    if [[ "$p" == "${OWNED_POLKIT_DIR}"/* ]]; then
+REPLACE|        [[ "${p##*/}" == *"${SERVICE}"* ]] && return 0
+REPLACE|        false

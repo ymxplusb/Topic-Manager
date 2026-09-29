@@ -119,6 +119,7 @@ STUB
     {
         echo 'set -uo pipefail'
         echo 'info() { :; }; success() { echo "OK $*"; }; warn() { echo "WARN $*"; }; die() { echo "DIE $*"; exit 1; }'
+        echo 'wait_for_dpkg_lock() { return 0; }; DPKG_LOCKS=(/l1); APT_LOCKS=(/l2); DPKG_LOCK_WAIT_S=600'
         printf 'INSTALLED="%s"\n' "$1"
         echo 'pkg_installed() { [[ " $INSTALLED " == *" $1 "* ]] || [[ -f "'"${TM_TMP}"'/now.$1" ]]; }'
         echo 'apt_install_from_bundle() { echo "BUNDLE allow=[${APT_ALLOW_REMOVE:-}] $*" >> "'"${TM_TMP}"'/calls"; : > "'"${TM_TMP}"'/now.chrony"; }'
@@ -143,12 +144,12 @@ tm_case "timesyncd-is-kept-unless-install-chrony" none a_timesyncd_kept
 
 a_install_chrony_online() {
     _time_daemon_harness "systemd-timesyncd" true true 'Remv systemd-timesyncd [255.4]\nInst chrony (4.5-1 Ubuntu:24.04)\n'
-    grep -q '^apt-get install -y --no-install-recommends chrony' "${TM_TMP}/calls" \
+    grep -qE '^apt-get (-o DPkg::Lock::Timeout=600 )?install -y --no-install-recommends chrony' "${TM_TMP}/calls" \
         || _tm_afail "--install-chrony did not install chrony: $(cat "${TM_TMP}/calls") $(cat "${TM_TMP}/td.out")"
     tm_assert_grep "REMOVES systemd-timesyncd" "${TM_TMP}/td.out" "the removal was not announced"
     _time_daemon_harness "systemd-timesyncd" true true 'Remv systemd-timesyncd [255.4]\nRemv ntpsec [1.2]\nInst chrony (4.5-1 Ubuntu:24.04)\n'
     tm_assert_rc 1 "$TD_RC" "a plan that also removes ANOTHER package was carried out"
-    grep -q '^apt-get install -y' "${TM_TMP}/calls" && _tm_afail "chrony was installed although the plan removed ntpsec"
+    grep -qE '^apt-get (-o [^ ]+ )*install -y' "${TM_TMP}/calls" && _tm_afail "chrony was installed although the plan removed ntpsec"
     tm_assert_grep "would also remove: ntpsec" "${TM_TMP}/td.out"
 }
 tm_case "install-chrony-online-removes-only-systemd-timesyncd" none a_install_chrony_online
@@ -181,6 +182,7 @@ STUB
         echo 'info() { echo "INFO $*"; }; die() { echo "DIE $*"; exit 1; }'
         echo 'apt_fips_packages() { :; }'
         echo 'apt_removal_reason() { :; }'
+        echo 'wait_for_dpkg_lock() { return 0; }; DPKG_LOCK_WAIT_S=600'
         tm_extract_func "$INSTALL_SH" apt_install_from_bundle
         printf 'NON_INTERACTIVE=true APT_ALLOW_REMOVE="%s" apt_install_from_bundle "%s" chrony\n' "$2" "${TM_TMP}/apt"
         echo 'echo RETURNED'

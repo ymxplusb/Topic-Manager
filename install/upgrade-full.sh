@@ -103,6 +103,14 @@ DROPIN_DIR="/etc/systemd/system/${SERVICE}.service.d"
 OWNED_UNIT_DIR="/etc/systemd/system"
 OWNED_POLKIT_DIR="/etc/polkit-1/rules.d"
 OWNED_LIBEXEC_DIR="/usr/libexec/${SERVICE}"
+# Where a retired unit's RuntimeDirectory= lives (remove_retired_runtime).
+OWNED_RUNTIME_DIR="/run"
+# One restore's record, reset by restore_from_backup: the units it retired,
+# their runtime directories, and every PROBLEM it met — a unit systemctl could
+# not stop and disable, a recorded artefact with no saved copy, the wrong
+# version answering. Any problem makes the restore's verdict non-zero
+# (restore_verdict), with each one listed.
+RETIRED_UNITS=(); RETIRED_RUNTIME=(); RESTORE_PROBLEMS=()
 
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_ROOT="/var/backups/topic-manager"
@@ -216,6 +224,70 @@ success() { echo "${GREEN}[OK]${NC}      $*"; }
 warn()    { echo "${YELLOW}[WARN]${NC}    $*"; }
 phase()   { echo; echo "${BOLD}── $* ─────────────────────────────────────────${NC}"; }
 fail()    { echo "${RED}[FAIL]${NC}    $*" >&2; exit 1; }
+
+# ─── the package lock ────────────────────────────────────────────────────────
+# MEASURED on the air-gapped STIG + FIPS clean-room host (2026-09-29):
+# unattended-upgrades held dpkg's lock for ~4.5 minutes while it tried to
+# reach an archive it never will, and `install.sh --packages-only` failed at
+# once with a message that sent the operator to `dpkg --audit` (which was
+# clean). Every apt/dpkg step now WAITS for the lock first, bounded
+# (TM_DPKG_LOCK_WAIT_S, default 600 s), naming the process that holds it, and
+# apt is given the same bound (-o DPkg::Lock::Timeout) for the moment between
+# the wait and its own lock. Byte-identical in install.sh and
+# install/upgrade-full.sh (t47).
+DPKG_LOCKS=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock)
+APT_LOCKS=(/var/lib/apt/lists/lock /var/cache/apt/archives/lock)
+DPKG_LOCK_WAIT_S="${TM_DPKG_LOCK_WAIT_S:-600}"
+
+# dpkg_lock_holder <lock-file>... — "<lock-file>, held by PID <pid> (<name>)"
+# for the first of them some process holds, or nothing. dpkg and apt take
+# POSIX (fcntl) locks, and the kernel lists every one in /proc/locks by
+# device and inode, so this reads that and needs no tool (fuser and lslocks
+# are not on every STIG host).
+dpkg_lock_holder() {   # dpkg_lock_holder <lock-file>...
+    local f dev ino key line pid comm
+    local -a w
+    [[ -r /proc/locks ]] || return 0
+    for f in "$@"; do
+        [[ -e "$f" ]] || continue
+        dev="$(stat -c %d -- "$f" 2>/dev/null)" && ino="$(stat -c %i -- "$f" 2>/dev/null)" || continue
+        key="$(printf '%02x:%02x:%s' $(( (dev >> 8) & 0xfff )) $(( (dev & 0xff) | ((dev >> 12) & 0xfff00) )) "$ino")"
+        while IFS= read -r line; do
+            read -r -a w <<<"$line"
+            [[ "${w[1]:-}" == "->" ]] && continue          # a waiter, not the holder
+            [[ "${w[5]:-}" == "$key" ]] || continue
+            pid="${w[4]}"
+            comm="$(cat "/proc/${pid}/comm" 2>/dev/null || echo unknown)"
+            echo "${f}, held by PID ${pid} (${comm})"
+            return 0
+        done < /proc/locks
+    done
+    return 0
+}
+
+# wait_for_dpkg_lock [<lock-file>...] — 0 once none of them is held (default:
+# dpkg's two); 1, having named the holder, if one still is after
+# DPKG_LOCK_WAIT_S seconds.
+wait_for_dpkg_lock() {   # wait_for_dpkg_lock [<lock-file>...]
+    local waited=0 holder said="" locks=("$@")
+    [[ ${#locks[@]} -gt 0 ]] || locks=("${DPKG_LOCKS[@]}")
+    while holder="$(dpkg_lock_holder "${locks[@]}")"; [[ -n "$holder" ]]; do
+        if (( waited >= DPKG_LOCK_WAIT_S )); then
+            warn "The package lock is STILL held after ${DPKG_LOCK_WAIT_S}s: ${holder}."
+            warn "  Usually unattended-upgrades (on an air-gapped host it retries an archive it cannot"
+            warn "  reach). Let it finish, or stop it: sudo systemctl stop unattended-upgrades apt-daily.service"
+            warn "  apt-daily-upgrade.service; then run this again. A longer wait: TM_DPKG_LOCK_WAIT_S=<seconds>."
+            return 1
+        fi
+        if [[ "$holder" != "$said" ]] || (( waited % 60 == 0 && waited > 0 )); then
+            info "Waiting for the package lock (${holder}); ${waited}s of up to ${DPKG_LOCK_WAIT_S}s ..."
+            said="$holder"
+        fi
+        sleep 1; waited=$((waited + 1))
+    done
+    [[ -z "$said" ]] || info "The package lock was released after ${waited}s"
+    return 0
+}
 
 [[ $EUID -eq 0 ]] || fail "Run with sudo: sudo bash upgrade-full.sh"
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -802,19 +874,47 @@ socket_unit_paths() {   # socket_unit_paths <unit-file>
     sed -n -E 's/^[[:space:]]*Listen(Stream|Datagram|SequentialPacket)[[:space:]]*=[[:space:]]*(\/[^[:space:]]+)[[:space:]]*$/\2/p' "$1" 2>/dev/null
 }
 
-# retire_unit <unit-file> — stop and disable a product unit, remove its file
-# and every enablement link to it, and, for a socket unit, the socket file it
-# left behind: systemd does not delete a Unix socket on stop (RemoveOnStop=
-# defaults to no), so a rollback to a TCP release used to leave a dead
-# /run/topic-manager/gunicorn.sock that nothing listens on (clean-room R2).
+# unit_runtime_dirs <unit-file> — the RuntimeDirectory= names a unit declares
+# (relative to /run; one line may name several), one per line.
+unit_runtime_dirs() {   # unit_runtime_dirs <unit-file>
+    local line d
+    local -a ds
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*RuntimeDirectory[[:space:]]*=(.*)$ ]] || continue
+        read -r -a ds <<<"${BASH_REMATCH[1]}"
+        for d in "${ds[@]}"; do printf '%s\n' "$d"; done
+    done < "$1"
+}
+
+# retire_unit <unit-file> — stop and disable a product unit, remove its file,
+# its drop-in directory (<unit>.d/) and every enablement link to it, and, for
+# a socket unit, the socket file it left behind: systemd does not delete a
+# Unix socket on stop (RemoveOnStop= defaults to no), so a rollback to a TCP
+# release used to leave a dead /run/topic-manager/gunicorn.sock that nothing
+# listens on (clean-room R2). The RuntimeDirectory= it declares is noted for
+# remove_retired_runtime: with RuntimeDirectoryPreserve=yes it outlives the
+# unit, and a rollback left /run/topic-manager-apply and the newer release's
+# result files behind (clean-room N5).
+# A systemctl that could not stop and disable the unit is a RESTORE PROBLEM,
+# never ignored (gatekeeper round 5, d): the unit may still be running, or
+# still enabled, and the restore's verdict says so (restore_verdict).
 retire_unit() {   # retire_unit <unit-file>
-    local f="$1" u s l
+    local f="$1" u s l rd out
     u="$(basename "$f")"
     local socks=()
     [[ "$u" == *.socket && -f "$f" ]] && mapfile -t socks < <(socket_unit_paths "$f")
-    systemctl disable --now "$u" >/dev/null 2>&1 || true
+    if [[ -f "$f" ]]; then
+        while IFS= read -r rd; do RETIRED_RUNTIME+=("$rd"); done < <(unit_runtime_dirs "$f")
+    fi
+    if ! out="$(systemctl disable --now "$u" 2>&1)"; then
+        RESTORE_PROBLEMS+=("systemctl disable --now ${u} failed (${out//$'\n'/ }): it may still be running or enabled")
+    fi
+    # reset-failed only clears a failed state; it errs on a unit that has none.
     systemctl reset-failed "$u" >/dev/null 2>&1 || true
     rm -f -- "$f"
+    if [[ -d "${f}.d" && ! -L "${f}.d" && "${f}.d" != "${DROPIN_DIR:-}" ]]; then
+        rm -rf -- "${f}.d"
+    fi
     shopt -s nullglob
     for l in "${OWNED_UNIT_DIR}"/*.wants/"$u" "${OWNED_UNIT_DIR}"/*.requires/"$u"; do rm -f -- "$l"; done
     shopt -u nullglob
@@ -822,19 +922,70 @@ retire_unit() {   # retire_unit <unit-file>
         [[ -S "$s" ]] && rm -f -- "$s"
         rmdir -- "$(dirname "$s")" 2>/dev/null || true
     done
-    info "Retired ${u} (the restored release does not ship it)"
+    RETIRED_UNITS+=("$u")
+    info "Retired ${u} (the restore point does not hold it)"
 }
 
-# owned_inventory — every product host artefact under the OWNED_* locations,
-# NUL-delimited and sorted: unit files and their enablement links (the
-# service's drop-in directory is backed up on its own, backup_dropin), polkit
-# rules, and the whole root-helper tree.
+# remove_retired_runtime — after the retirements: the runtime directory each
+# retired unit declared, under OWNED_RUNTIME_DIR, unless a unit still
+# installed declares the same one. A name that is not a plain relative path is
+# a restore problem and is left alone.
+remove_retired_runtime() {
+    local d f keep
+    local -A seen=()
+    for d in "${RETIRED_RUNTIME[@]}"; do
+        [[ -z "${seen[$d]+x}" ]] || continue
+        seen["$d"]=1
+        if [[ ! "$d" =~ ^[A-Za-z0-9_.@-]+(/[A-Za-z0-9_.@-]+)*$ || "/${d}/" == */../* || "/${d}/" == */./* ]]; then
+            RESTORE_PROBLEMS+=("a retired unit declared RuntimeDirectory=${d}, which is not a plain name under ${OWNED_RUNTIME_DIR}: left as it is")
+            continue
+        fi
+        keep=""
+        shopt -s nullglob
+        for f in "${OWNED_UNIT_DIR}"/*; do
+            [[ -f "$f" ]] || continue
+            [[ $'\n'"$(unit_runtime_dirs "$f")"$'\n' == *$'\n'"${d}"$'\n'* ]] && keep="${f##*/}"
+        done
+        shopt -u nullglob
+        if [[ -n "$keep" ]]; then
+            info "Kept ${OWNED_RUNTIME_DIR}/${d}: ${keep} still declares it"
+        elif [[ -e "${OWNED_RUNTIME_DIR}/${d}" || -L "${OWNED_RUNTIME_DIR}/${d}" ]]; then
+            rm -rf -- "${OWNED_RUNTIME_DIR:?}/${d}"
+            info "Removed ${OWNED_RUNTIME_DIR}/${d} (the runtime directory of a retired unit)"
+        fi
+    done
+}
+
+# owned_inventory — every host artefact under the OWNED_* LOCATIONS, whatever
+# it is called, NUL-delimited and sorted: every unit file in the unit
+# directory, every drop-in directory (<unit>.d/) with its contents, every alias
+# or enablement link to one of those unit files, every polkit rule, and the
+# whole root-helper tree. Round 5 inventoried the unit directory by a NAME
+# PREFIX, so a unit the product shipped under another name (tm-*.service), and
+# the drop-in directory of a unit it retired, survived a rollback (gatekeeper
+# round 5, b). The service's own drop-in (DROPIN_DIR) is not in it:
+# backup_dropin/restore_dropin own it, because it holds secrets. What a
+# restore may CHANGE is narrower than what is recorded — owned_artefact.
 owned_inventory() {
-    local p
+    local p t
+    local -A unitf=()
     {
         shopt -s nullglob
-        for p in "${OWNED_UNIT_DIR}/${SERVICE}"* "${OWNED_UNIT_DIR}"/*.wants/"${SERVICE}"* \
-                 "${OWNED_UNIT_DIR}"/*.requires/"${SERVICE}"* "${OWNED_POLKIT_DIR}"/*"${SERVICE}"*; do
+        for p in "${OWNED_UNIT_DIR}"/*; do
+            [[ -f "$p" && ! -L "$p" ]] || continue
+            unitf["${p##*/}"]=1
+            printf '%s\0' "$p"
+        done
+        for p in "${OWNED_UNIT_DIR}"/*.d; do
+            [[ -d "$p" && ! -L "$p" && "$p" != "$DROPIN_DIR" ]] || continue
+            find "$p" -print0
+        done
+        for p in "${OWNED_UNIT_DIR}"/* "${OWNED_UNIT_DIR}"/*/*; do
+            [[ -L "$p" && "$p" != "$DROPIN_DIR"/* ]] || continue
+            t="$(readlink -- "$p")"
+            [[ -n "${unitf[${t##*/}]+x}" ]] && printf '%s\0' "$p"
+        done
+        for p in "${OWNED_POLKIT_DIR}"/*; do
             [[ -d "$p" && ! -L "$p" ]] && continue
             printf '%s\0' "$p"
         done
@@ -845,7 +996,59 @@ owned_inventory() {
         if [[ -d "$OWNED_LIBEXEC_DIR" && ! -L "$OWNED_LIBEXEC_DIR" ]]; then
             find "$OWNED_LIBEXEC_DIR" -print0
         fi
-    } | sort -z
+    } | sort -z -u
+}
+
+# owned_artefact <path> [<prefix>] — is <path> the PRODUCT's, i.e. one a
+# rollback may retire or put back? The inventory records whole locations;
+# this decides what a restore may change there, so a unit another tool added
+# after the restore point (snapd writes snap-*.mount units into the unit
+# directory on every refresh; a configuration-management agent installs an
+# exporter) is never stopped, and one it changed is never reverted — each is
+# listed instead. The product's: the root-helper tree; a unit whose name
+# begins with the service name, or a polkit rule with it anywhere in its name;
+# a file that names it (every unit and rule the product
+# ships does, whatever it is called — t45 holds that); a link to such a unit;
+# the drop-in directory, or a file in it, of such a unit. <prefix> reads the
+# files from a restore point's copy rather than from the host.
+owned_artefact() {   # owned_artefact <path> [<prefix>]
+    local p="$1" pre="${2:-}" rel t
+    case "$p" in "$OWNED_LIBEXEC_DIR"|"$OWNED_LIBEXEC_DIR"/*) return 0 ;; esac
+    # A polkit rule is NN-<name>.rules: the service anywhere in the name, or
+    # in the rule (every rule of the product's names its service account).
+    if [[ "$p" == "${OWNED_POLKIT_DIR}"/* ]]; then
+        [[ "${p##*/}" == *"${SERVICE}"* ]] && return 0
+        [[ -f "${pre}${p}" && ! -L "${pre}${p}" ]] && grep -qF -- "$SERVICE" "${pre}${p}"
+        return
+    fi
+    if [[ "$p" == "${OWNED_UNIT_DIR}"/*.d || "$p" == "${OWNED_UNIT_DIR}"/*.d/* ]]; then
+        rel="${p#"${OWNED_UNIT_DIR}"/}"; rel="${rel%%/*}"
+        owned_unit_file "${OWNED_UNIT_DIR}/${rel%.d}" "$pre" && return 0
+        [[ -f "${pre}${p}" && ! -L "${pre}${p}" ]] && grep -qF -- "$SERVICE" "${pre}${p}"
+        return
+    fi
+    if [[ -L "${pre}${p}" ]]; then
+        [[ "${p##*/}" == "${SERVICE}"* ]] && return 0
+        t="$(readlink -- "${pre}${p}")"
+        owned_unit_file "${OWNED_UNIT_DIR}/${t##*/}" "$pre"
+        return
+    fi
+    owned_unit_file "$p" "$pre"
+}
+owned_unit_file() {   # owned_unit_file <path> <prefix>
+    [[ "${1##*/}" == "${SERVICE}"* ]] && return 0
+    [[ -f "${2}${1}" && ! -L "${2}${1}" ]] && grep -qF -- "$SERVICE" "${2}${1}"
+}
+
+# same_artefact <a> <b> — the same link target, both directories, or the same bytes.
+same_artefact() {   # same_artefact <a> <b>
+    if [[ -L "$1" || -L "$2" ]]; then
+        [[ -L "$1" && -L "$2" && "$(readlink -- "$1")" == "$(readlink -- "$2")" ]]
+    elif [[ -d "$1" || -d "$2" ]]; then
+        [[ -d "$1" && -d "$2" ]]
+    else
+        cmp -s -- "$1" "$2"
+    fi
 }
 
 # backup_owned_artefacts <backup-dir> — the inventory, and a byte-exact copy
@@ -864,11 +1067,14 @@ backup_owned_artefacts() {   # backup_owned_artefacts <backup-dir>
 }
 
 # restore_owned_artefacts <backup-dir> — make the product's host artefacts
-# what the restore point recorded. Present now and absent then = added by
-# the release being rolled back: units are stopped, disabled and removed
-# (retire_unit), everything else deleted. Recorded then = put back from the
-# restore point's copy. Then systemd reloads, so no removed timer or path
-# unit fires the restored release into a module it does not have.
+# what the restore point recorded. The product's (owned_artefact), present now
+# and absent then = added by the release being rolled back: units are stopped,
+# disabled and removed with their drop-ins (retire_unit), everything else
+# deleted. The product's, recorded then = put back from the restore point's
+# copy; recorded with no copy = a restore problem. Anything else that changed
+# in these locations is listed and left alone. Then the retired units' runtime
+# directories go and systemd reloads, so no removed timer or path unit fires
+# the restored release into a module it does not have.
 restore_owned_artefacts() {   # restore_owned_artefacts <backup-dir>
     local BD="$1" list="${1}/manifest/owned-artefacts.list" p
     local -A had=()
@@ -880,24 +1086,29 @@ restore_owned_artefacts() {   # restore_owned_artefacts <backup-dir>
         mapfile -d '' now < <(owned_inventory)
         warn "This restore point predates the host-artefact inventory, so it cannot say which"
         warn "  units, rules and helpers its release shipped. Present now, NOT removed:"
-        for p in "${now[@]}"; do warn "    ${p}"; done
+        for p in "${now[@]}"; do owned_artefact "$p" && warn "    ${p}"; done
         warn "  Retire any the restored release does not ship: sudo systemctl disable --now <unit>; delete the file; sudo systemctl daemon-reload"
+        remove_retired_runtime
         return 0
     fi
     while IFS= read -r -d '' p; do had["$p"]=1; done < "$list"
 
-    local cur=() added_units=() added_other=()
+    # Judged BEFORE anything is removed: a drop-in is the product's because
+    # its unit is, and retire_unit is about to delete that unit.
+    local cur=() added_units=() added_other=() foreign=()
     mapfile -d '' cur < <(owned_inventory)
     for p in "${cur[@]}"; do
         [[ -n "${had[$p]+x}" ]] && continue
-        case "$p" in
-            "${OWNED_UNIT_DIR}"/*/*) added_other+=("$p") ;;          # an enablement link
-            "${OWNED_UNIT_DIR}"/*)   added_units+=("$p") ;;
-            *)                       added_other+=("$p") ;;
-        esac
+        if ! owned_artefact "$p"; then
+            foreign+=("${p} (added since the restore point)")
+        elif [[ "$p" != "${OWNED_UNIT_DIR}"/*/* && "$p" == "${OWNED_UNIT_DIR}"/* && -f "$p" && ! -L "$p" ]]; then
+            added_units+=("$p")                                    # a unit file
+        else
+            added_other+=("$p")      # a link, a drop-in, a rule, the helper tree
+        fi
     done
     for p in "${added_units[@]}"; do retire_unit "$p"; done
-    # Deepest first, so a helper directory is empty when its turn comes.
+    # Deepest first, so a directory is empty when its turn comes.
     local i
     for (( i=${#added_other[@]}-1; i>=0; i-- )); do
         p="${added_other[$i]}"
@@ -906,6 +1117,10 @@ restore_owned_artefacts() {   # restore_owned_artefacts <backup-dir>
 
     while IFS= read -r -d '' p; do
         local src="${BD}/system/owned${p}"
+        if ! owned_artefact "$p" "${BD}/system/owned"; then
+            same_artefact "$src" "$p" || foreign+=("${p} (changed or removed since the restore point)")
+            continue
+        fi
         if [[ -d "$src" && ! -L "$src" ]]; then
             [[ -L "$p" ]] && rm -f -- "$p"
             mkdir -p -- "$p"; chmod --reference="$src" -- "$p"; chown --reference="$src" -- "$p"
@@ -913,11 +1128,17 @@ restore_owned_artefacts() {   # restore_owned_artefacts <backup-dir>
             mkdir -p -- "$(dirname "$p")"
             rm -rf -- "$p"; cp -a -- "$src" "$p"
         else
+            RESTORE_PROBLEMS+=("the restore point lists ${p} but holds no copy of it: left as it is")
             warn "The restore point lists ${p} but holds no copy of it — left as it is."
         fi
     done < "$list"
+    if [[ ${#foreign[@]} -gt 0 ]]; then
+        warn "Not the product's, so this rollback left them as they are:"
+        for p in "${foreign[@]}"; do warn "    ${p}"; done
+    fi
+    remove_retired_runtime
     systemctl daemon-reload >/dev/null 2>&1 || true
-    info "Host units, rules and helpers restored to the restore point's inventory (${#added_units[@]} unit(s) retired)"
+    info "Host units, rules and helpers restored to the restore point's inventory (${#RETIRED_UNITS[@]} unit(s) retired${RETIRED_UNITS[*]:+: ${RETIRED_UNITS[*]}})"
 }
 
 # restore_v120_managed <backup-dir> — put them back exactly; from a restore
@@ -1124,6 +1345,7 @@ restore_from_backup() {
     fi
 
     warn "Restoring from ${BD} ..."
+    RETIRED_UNITS=(); RETIRED_RUNTIME=(); RESTORE_PROBLEMS=()
     systemctl stop "$SERVICE" 2>/dev/null || true
     systemctl stop "${SERVICE}.socket" 2>/dev/null || true
 
@@ -1221,15 +1443,36 @@ restore_from_backup() {
     nginx -t >/dev/null 2>&1 && systemctl reload nginx 2>/dev/null || true
 
     sleep 5
-    local h v
+    restore_verdict "$BD"
+}
+
+# restore_verdict <backup-dir> — the restore's exit code. 0 only when the
+# service answers healthy AS THE RESTORED VERSION (manifest/state.env) and the
+# restore met no problem. Health alone was the verdict until round 6
+# (gatekeeper round 5, c): ANY process answering "ok" — the newer release's
+# included — passed as "back on v<restored>". Every problem —
+# the wrong or an unknown version, a unit systemctl could not retire, a
+# recorded artefact with no saved copy — is listed under RESTORE INCOMPLETE
+# and the verdict is 1, so `--restore` exits non-zero (gatekeeper round 5, d).
+restore_verdict() {   # restore_verdict <backup-dir>
+    local BD="$1" h v hv p
     h="$(curl -sk --max-time 10 https://localhost/api/health 2>/dev/null || true)"
-    v="$(grep -oP 'topic_manager_version=\K.*' "${BD}/manifest/state.env" 2>/dev/null || echo '?')"
-    if grep -q '"ok"' <<<"$h"; then
+    v="$(grep -oP '^topic_manager_version=\K.*' "${BD}/manifest/state.env" 2>/dev/null || true)"
+    hv="$(grep -oP '"version":\s*"\K[^"]+' <<<"$h" || true)"
+    if ! grep -q '"ok"' <<<"$h"; then
+        RESTORE_PROBLEMS+=("health is not OK: ${h:-no response}")
+    elif [[ -z "$v" || "$v" == unknown ]]; then
+        RESTORE_PROBLEMS+=("the restore point does not record its version (manifest/state.env), so the service answering ${hv:-no version} cannot be confirmed as the restored release")
+    elif [[ "$hv" != "$v" ]]; then
+        RESTORE_PROBLEMS+=("the service answers version ${hv:-none}, not the restored ${v}: what is running is not what was restored")
+    fi
+    if [[ ${#RESTORE_PROBLEMS[@]} -eq 0 ]]; then
         success "Restore complete — back on v${v}, healthy: ${h}"
         return 0
     fi
-    warn "Restore ran but health is not OK: ${h:-no response}"
-    warn "Restore the vCSA snapshot. Backup retained at ${BD}"
+    warn "RESTORE INCOMPLETE — ${#RESTORE_PROBLEMS[@]} problem(s):"
+    for p in "${RESTORE_PROBLEMS[@]}"; do warn "  - ${p}"; done
+    warn "Fix each one, or restore the vCSA snapshot. Backup retained at ${BD}"
     return 1
 }
 
@@ -2134,7 +2377,11 @@ phase "Phase 5 — Fetch target source"
 # =============================================================================
 
 if [[ $ONLINE == true ]]; then
-    command -v git >/dev/null || apt-get install -y --no-install-recommends git -qq
+    if ! command -v git >/dev/null; then
+        wait_for_dpkg_lock "${DPKG_LOCKS[@]}" "${APT_LOCKS[@]}" \
+            || fail "The package lock is held by another process (named above); git could not be installed. Nothing has been changed."
+        apt-get -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" install -y --no-install-recommends git -qq
+    fi
     # Root-owned, 0700 and unpredictable. mktemp -d creates the directory
     # itself and fails rather than reusing one, so there is no race to lose;
     # assert_root_owned_path then walks every ancestor, because a root-owned
@@ -2204,14 +2451,18 @@ if [[ $SKIP_OS == true ]]; then
 elif [[ $ONLINE != true ]]; then
     warn "Offline: OS packages NOT patched this run."
 else
+    # Waited for BEFORE anything destructive: a held lock stops the run here,
+    # with the holder named, and nothing has changed yet.
+    wait_for_dpkg_lock "${DPKG_LOCKS[@]}" "${APT_LOCKS[@]}" \
+        || fail "The package lock is held by another process (named above). Nothing has been changed; run again once it is released, or use --skip-os."
     DESTRUCTIVE_STARTED=true
     info "apt-get update ..."
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" update -qq
     info "apt-get full-upgrade (nginx, openssl, python3, krb5, open-vm-tools, kernel) ..."
-    DEBIAN_FRONTEND=noninteractive apt-get \
+    DEBIAN_FRONTEND=noninteractive apt-get -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" \
         -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
         full-upgrade -y -qq
-    DEBIAN_FRONTEND=noninteractive apt-get autoremove -y -qq
+    DEBIAN_FRONTEND=noninteractive apt-get -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" autoremove -y -qq
     success "OS packages patched"
     info "nginx:   $(nginx -v 2>&1 | sed 's|.*/||')"
     info "openssl: $(openssl version)"

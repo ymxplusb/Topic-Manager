@@ -317,6 +317,70 @@ tls_keypair_matches() {
     [[ "$c" == "$k" ]]
 }
 
+# ─── the package lock ────────────────────────────────────────────────────────
+# MEASURED on the air-gapped STIG + FIPS clean-room host (2026-09-29):
+# unattended-upgrades held dpkg's lock for ~4.5 minutes while it tried to
+# reach an archive it never will, and `install.sh --packages-only` failed at
+# once with a message that sent the operator to `dpkg --audit` (which was
+# clean). Every apt/dpkg step now WAITS for the lock first, bounded
+# (TM_DPKG_LOCK_WAIT_S, default 600 s), naming the process that holds it, and
+# apt is given the same bound (-o DPkg::Lock::Timeout) for the moment between
+# the wait and its own lock. Byte-identical in install.sh and
+# install/upgrade-full.sh (t47).
+DPKG_LOCKS=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock)
+APT_LOCKS=(/var/lib/apt/lists/lock /var/cache/apt/archives/lock)
+DPKG_LOCK_WAIT_S="${TM_DPKG_LOCK_WAIT_S:-600}"
+
+# dpkg_lock_holder <lock-file>... — "<lock-file>, held by PID <pid> (<name>)"
+# for the first of them some process holds, or nothing. dpkg and apt take
+# POSIX (fcntl) locks, and the kernel lists every one in /proc/locks by
+# device and inode, so this reads that and needs no tool (fuser and lslocks
+# are not on every STIG host).
+dpkg_lock_holder() {   # dpkg_lock_holder <lock-file>...
+    local f dev ino key line pid comm
+    local -a w
+    [[ -r /proc/locks ]] || return 0
+    for f in "$@"; do
+        [[ -e "$f" ]] || continue
+        dev="$(stat -c %d -- "$f" 2>/dev/null)" && ino="$(stat -c %i -- "$f" 2>/dev/null)" || continue
+        key="$(printf '%02x:%02x:%s' $(( (dev >> 8) & 0xfff )) $(( (dev & 0xff) | ((dev >> 12) & 0xfff00) )) "$ino")"
+        while IFS= read -r line; do
+            read -r -a w <<<"$line"
+            [[ "${w[1]:-}" == "->" ]] && continue          # a waiter, not the holder
+            [[ "${w[5]:-}" == "$key" ]] || continue
+            pid="${w[4]}"
+            comm="$(cat "/proc/${pid}/comm" 2>/dev/null || echo unknown)"
+            echo "${f}, held by PID ${pid} (${comm})"
+            return 0
+        done < /proc/locks
+    done
+    return 0
+}
+
+# wait_for_dpkg_lock [<lock-file>...] — 0 once none of them is held (default:
+# dpkg's two); 1, having named the holder, if one still is after
+# DPKG_LOCK_WAIT_S seconds.
+wait_for_dpkg_lock() {   # wait_for_dpkg_lock [<lock-file>...]
+    local waited=0 holder said="" locks=("$@")
+    [[ ${#locks[@]} -gt 0 ]] || locks=("${DPKG_LOCKS[@]}")
+    while holder="$(dpkg_lock_holder "${locks[@]}")"; [[ -n "$holder" ]]; do
+        if (( waited >= DPKG_LOCK_WAIT_S )); then
+            warn "The package lock is STILL held after ${DPKG_LOCK_WAIT_S}s: ${holder}."
+            warn "  Usually unattended-upgrades (on an air-gapped host it retries an archive it cannot"
+            warn "  reach). Let it finish, or stop it: sudo systemctl stop unattended-upgrades apt-daily.service"
+            warn "  apt-daily-upgrade.service; then run this again. A longer wait: TM_DPKG_LOCK_WAIT_S=<seconds>."
+            return 1
+        fi
+        if [[ "$holder" != "$said" ]] || (( waited % 60 == 0 && waited > 0 )); then
+            info "Waiting for the package lock (${holder}); ${waited}s of up to ${DPKG_LOCK_WAIT_S}s ..."
+            said="$holder"
+        fi
+        sleep 1; waited=$((waited + 1))
+    done
+    [[ -z "$said" ]] || info "The package lock was released after ${waited}s"
+    return 0
+}
+
 # apt_fips_packages — print, one per line, every INSTALLED package that the
 # offline bundle must never replace because it is a FIPS module (round 3):
 #   * its installed version string contains "fips" in any case (Ubuntu Pro
@@ -482,7 +546,7 @@ apt_install_from_bundle() {
     # Anything else the plan would remove is still refused below.
     [[ -z "${APT_ALLOW_REMOVE:-}" ]] || inst_opts=(--no-install-recommends --no-download)
     info "Resolving from the offline bundle (never downgrades, never replaces FIPS packages; ${#fips[@]} FIPS package(s) held): $*"
-    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" update -qq || rc=$?
+    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" update -qq || rc=$?
     if [[ $rc -eq 0 ]]; then
         plan="$(LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" -s install "${inst_opts[@]}" "$@" 2>&1)" || rc=$?
     fi
@@ -540,13 +604,22 @@ apt_install_from_bundle() {
             die "Package plan declined. Nothing has been changed."
         fi
     fi
-    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" install -y "${inst_opts[@]}" "$@" || rc=$?
+    if ! wait_for_dpkg_lock; then
+        rm -rf -- "$tmp"; APT_BUNDLE_TMP=""; trap - EXIT
+        die "The package lock is held by another process (named above) and was not
+     released within ${DPKG_LOCK_WAIT_S}s; nothing was installed or changed.
+     See TROUBLESHOOTING.md -> Fresh install (\"The package lock is STILL held\")."
+    fi
+    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" \
+        install -y "${inst_opts[@]}" "$@" || rc=$?
     rm -rf -- "$tmp"; APT_BUNDLE_TMP=""; trap - EXIT
     [[ $rc -eq 0 ]] || die "Offline package install failed (apt exit ${rc}) while applying the plan
-     printed above. The bundle never downgrades a package and never replaces a
-     FIPS package, but dpkg may have applied PART of that plan: check
-     'dpkg --audit' before running this script again.
-     See TROUBLESHOOTING.md -> Fresh install."
+     printed above. If apt says 'Could not get lock /var/lib/dpkg/lock-frontend',
+     another package manager (usually unattended-upgrades) took the lock after the
+     wait: nothing was applied; let it finish and run this again. Otherwise the
+     bundle never downgrades a package and never replaces a FIPS package, but
+     dpkg may have applied PART of that plan: check 'dpkg --audit' before running
+     this script again. See TROUBLESHOOTING.md -> Fresh install."
 }
 
 # normalise_frontend_install <dir> — a FRESH or re-installed frontend is
@@ -628,8 +701,11 @@ install_required_packages() {
     if [[ ${#MISSING_PKGS[@]} -eq 0 ]]; then
         success "All required packages already installed"
     elif [[ $ONLINE == true ]]; then
-        DEBIAN_FRONTEND=noninteractive apt-get update -qq
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${MISSING_PKGS[@]}"
+        wait_for_dpkg_lock "${DPKG_LOCKS[@]}" "${APT_LOCKS[@]}" \
+            || die "The package lock is held by another process (named above); nothing was installed or changed."
+        DEBIAN_FRONTEND=noninteractive apt-get -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" \
+            install -y --no-install-recommends "${MISSING_PKGS[@]}"
     else
         apt_install_from_bundle "${SCRIPT_DIR}/install/packages/apt" "${MISSING_PKGS[@]}"
     fi
@@ -861,8 +937,11 @@ install_time_daemon() {
         rm_other="$(printf '%s\n' "$plan" | awk '/^Remv / && $2 != "systemd-timesyncd" { print $2 }')"
         [[ -z "$rm_other" ]] || die "Installing chrony would also remove: ${rm_other//$'\n'/ }. Refused; nothing
      was changed by this step. Install chrony by hand if that is intended."
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends chrony \
-            || die "chrony could not be installed."
+        wait_for_dpkg_lock "${DPKG_LOCKS[@]}" "${APT_LOCKS[@]}" \
+            || die "The package lock is held by another process (named above); chrony was not installed."
+        DEBIAN_FRONTEND=noninteractive apt-get -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" \
+            install -y --no-install-recommends chrony \
+            || die "chrony could not be installed (if apt says 'Could not get lock', another package manager held it: let it finish and run this again)."
     else
         APT_ALLOW_REMOVE="systemd-timesyncd" apt_install_from_bundle "${SCRIPT_DIR}/install/packages/apt" chrony
     fi

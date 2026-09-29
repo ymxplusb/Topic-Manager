@@ -44,7 +44,7 @@ the script has **measured** each point rather than assumed it:
 | Config | `/etc/topic-manager/config.yaml` `0640 root:topic-manager`, written from your directory settings with a fresh random `secret_key`; no environment defaults |
 | Audit DB | `/opt/topic-manager/data` `0700`, `tm.db` `0600`, both owned by `topic-manager` |
 | Clusters | `/etc/topic-manager/clusters.d/clusters.yaml` `0640 topic-manager:topic-manager`, **empty** — you add clusters in Settings |
-| Restart control | polkit rule `/etc/polkit-1/rules.d/50-topic-manager.rules` (three unit/verb pairs) and the root-side `topic-manager-nginx-test.service` |
+| Restart control | polkit rule `/etc/polkit-1/rules.d/50-topic-manager.rules` (eight unit/verb pairs over seven units: restart `topic-manager.service`, reload/restart `nginx.service`, start `topic-manager-nginx-test.service` and the four `topic-manager-apply-*.service`) and the root-side `topic-manager-nginx-test.service` |
 | Frontend | `/var/www/topic-manager` **root:root**, dirs 0755 / files 0644 (the web server reads it and cannot rewrite it); Vue 3.5.43, **SHA-256 verified** against the pin in `install/upgrade-full.sh` before it is served |
 | Python | a venv of **binary wheels only**, every package (transitive ones included) **hash-verified** against `requirements.lock`; no compiler on the host |
 
@@ -489,5 +489,17 @@ sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline
 # rsyslog-openssl, for Remote syslog over TLS) — from the same bundle, nothing else changed:
 sudo bash /var/lib/topic-manager/offline-src/install.sh --packages-only
 ```
+
+**Run the upgrade (and a `--restore`) detached, with a log file**, so a dropped SSH session
+cannot kill it mid-phase:
+```bash
+sudo -v                       # enter the password now: a backgrounded sudo cannot ask for it
+sudo setsid nohup bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline \
+    > ~/tm-upgrade.out 2>&1 < /dev/null &
+tail -f ~/tm-upgrade.out      # Ctrl-C ends only the tail
+```
+or inside `tmux new -s tm-upgrade`. The script's own log is `/var/log/topic-manager-upgrade-<TIMESTAMP>.log`.
+`install.sh` and the upgrade WAIT for the package lock (up to 600 s, `TM_DPKG_LOCK_WAIT_S`),
+naming the process that holds it — on an air-gapped host usually unattended-upgrades.
 
 See README.md → *Upgrading* and `install/README.md`.

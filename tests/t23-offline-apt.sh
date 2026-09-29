@@ -48,6 +48,8 @@ _driver() {
         echo 'set -euo pipefail'
         echo 'die() { echo "[DIE] $*" >&2; exit 1; }; info() { echo "[INFO] $*"; }'
         echo 'NON_INTERACTIVE="${T_NONINT:-true}"'
+        # The package-lock wait is t48's; here the lock is free.
+        echo 'wait_for_dpkg_lock() { return 0; }; DPKG_LOCK_WAIT_S=600'
         tm_extract_func "$INSTALL_SH" apt_fips_packages
         tm_extract_func "$INSTALL_SH" apt_plan_names
         tm_extract_func "$INSTALL_SH" apt_removal_reason

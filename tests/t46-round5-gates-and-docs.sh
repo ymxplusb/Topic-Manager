@@ -39,8 +39,10 @@ g_gate_is_jarvis_standard() {
     setdef="$(grep -n 'qualitygates/set_as_default' "$S" | cut -d: -f1)"; setdef="$(sed -n 1p <<<"$setdef")"
     scan1="$(grep -n '^scan "\$base_sha"' "$S" | cut -d: -f1)"
     [ "$setdef" -lt "$scan1" ] || _tm_afail "the gate is set after the scans: they would be judged by Sonar way"
-    grep -qx 'evaluate_gate "$WORK" "$GATE_NAME" "${head_sha:0:12} vs ${BASE_REF}"' "$S" \
+    grep -qx 'evaluate_gate "$WORK" "$GATE_NAME" "${head_sha:0:12} vs ${BASE_REF}" || gate=$?' "$S" \
         || _tm_afail "the verdict is not evaluate_gate"
+    grep -qx 'judge_coverage "$WORK/scan-${base_ver}.log" "$WORK/scan-${head_ver}.log" || cov=$?' "$S" \
+        || _tm_afail "the verdict does not hold the head's indexed files to the base's"
 }
 tm_case "sonar-local-holds-the-project-to-jarvis-standard" none g_gate_is_jarvis_standard
 
@@ -125,6 +127,13 @@ e_unevaluated_is_not_a_pass() {
 }
 tm_case "gate-an-unevaluated-condition-or-another-gate-is-exit-2" none e_unevaluated_is_not_a_pass
 
+# The scanner's own lines, as sonar-scanner-cli 11 prints them.
+_logs() {   # _logs <base-files> <head-files> — scan logs in ${TM_TMP}/vb
+    mkdir -p "${TM_TMP}/vb"
+    printf 'INFO  Indexing files...\nINFO  %s files indexed\nINFO  0 files ignored because of scm ignore settings\n' "$1" > "${TM_TMP}/vb/scan-1.1.1.log"
+    printf 'INFO  Indexing files...\nINFO  %s files indexed\nINFO  0 files ignored because of scm ignore settings\n' "$2" > "${TM_TMP}/vb/scan-1.2.0.log"
+}
+
 # The verdict block itself, from "the verdict" to the end of the script, with
 # api() answering from fixtures: its exit code IS the gate's.
 e_verdict_block_exits_with_the_gate() {
@@ -138,15 +147,20 @@ e_verdict_block_exits_with_the_gate() {
         echo 'set -uo pipefail'
         echo 'die2() { echo "DIE2 $*"; exit 2; }'
         echo 'WORK="'"$d"'"; PROJECT_KEY=topic-manager; head_sha=0123456789abcdef; BASE_REF=base'
+        echo 'base_ver=1.1.1; head_ver=1.2.0; say() { echo "sonar-local: $*"; }'
         echo 'GATE_NAME="Jarvis Standard (sonar-local copy)"'
         echo 'api() { case "$2" in issues/search*VULNERABILITY*) cat "$WORK/fx/vulns" ;; issues/search*) cat "$WORK/fx/issues" ;;'
         echo '  qualitygates/get_by_project*) cat "$WORK/fx/gate" ;; qualitygates/project_status*) cat "$WORK/fx/status" ;;'
         echo '  measures/component*) cat "$WORK/fx/measures" ;; *) return 1 ;; esac; }'
         sed -n '/^JARVIS_GATE=($/,/^)$/p' "$S"
         grep -E '^KNOWN_VULN_DIFFERENCES=' "$S"
+        grep -E '^MIN_FILES_PCT=' "$S"
         tm_extract_func "$S" evaluate_gate
+        tm_extract_func "$S" indexed_files
+        tm_extract_func "$S" judge_coverage
         sed -n '/^# ─── the verdict ─/,$p' "$S"
     } > "${TM_TMP}/vb.sh"
+    _logs 101 144
     grep -q 'evaluate_gate "\$WORK"' "${TM_TMP}/vb.sh" || tm_die "the verdict block was not extracted"
     RC=0; OUT="$(bash "${TM_TMP}/vb.sh" 2>&1)" || RC=$?
     tm_assert_rc 1 "$RC" "the script's exit code is not the gate's (bugs failing): ${OUT}"
@@ -155,6 +169,48 @@ e_verdict_block_exits_with_the_gate() {
     tm_assert_rc 0 "$RC" "a clean gate did not exit 0 through the verdict block: ${OUT}"
 }
 tm_case "sonar-local-exits-with-the-gate-verdict" none e_verdict_block_exits_with_the_gate
+
+# ROUND 6 (gatekeeper round 5, a): a head scan that read nothing is not a pass.
+e_head_must_read_the_tree() {
+    e_verdict_block_exits_with_the_gate >/dev/null 2>&1        # builds vb.sh with a clean gate
+    printf '{"projectStatus":{"conditions":%s}}' "$(_ok_except none 0)" > "${TM_TMP}/vb/fx/status"
+    _logs 101 0
+    RC=0; OUT="$(bash "${TM_TMP}/vb.sh" 2>&1)" || RC=$?
+    tm_assert_rc 1 "$RC" "GATEKEEPER R5 a: a head scan that indexed 0 files passed: ${OUT}"
+    grep -q 'the head scan indexed 0 file(s), below the floor of 81' <<<"$OUT" || _tm_afail "the coverage failure does not give the numbers: ${OUT}"
+    grep -q 'VERDICT: PASS' <<<"$OUT" && _tm_afail "the final verdict said PASS on an unread tree: ${OUT}"
+    _logs 101 80
+    RC=0; OUT="$(bash "${TM_TMP}/vb.sh" 2>&1)" || RC=$?
+    tm_assert_rc 1 "$RC" "a head that read 80 of the base's 101 files (79%) passed: ${OUT}"
+    _logs 101 81
+    RC=0; OUT="$(bash "${TM_TMP}/vb.sh" 2>&1)" || RC=$?
+    tm_assert_rc 0 "$RC" "a head that read 81 of 101 files (the floor) failed: ${OUT}"
+    grep -q 'files indexed: head 81, base 101 (floor 81' <<<"$OUT" || _tm_afail "the passing coverage is not reported: ${OUT}"
+    _logs 0 0
+    RC=0; OUT="$(bash "${TM_TMP}/vb.sh" 2>&1)" || RC=$?
+    tm_assert_rc 2 "$RC" "a base that read nothing gave a floor: ${OUT}"
+    printf 'INFO  EXECUTION SUCCESS\n' > "${TM_TMP}/vb/scan-1.2.0.log"
+    RC=0; OUT="$(bash "${TM_TMP}/vb.sh" 2>&1)" || RC=$?
+    tm_assert_rc 2 "$RC" "a head log with no indexed count was judged: ${OUT}"
+}
+tm_case "sonar-local-fails-a-head-scan-that-did-not-read-the-tree" none e_head_must_read_the_tree
+
+e_pass_names_what_was_judged() {
+    _eval "$(_ok_except none 0)" "$M_OK" '[]'
+    tm_assert_rc 0 "$RC" "a clean project did not pass: ${OUT}"
+    grep -q 'PASS: 5 of 7 conditions judged and hold (new_violations, new_duplicated_lines_density, bugs, vulnerabilities, reliability_rating); no value, nothing new to judge: new_security_hotspots_reviewed; reported, NOT judged (KNOWN DIFFERENCE): security_hotspots_reviewed' <<<"$OUT" \
+        || _tm_afail "GATEKEEPER R5 a: the PASS line does not say which conditions were judged: ${OUT}"
+    grep -q '(7 conditions)' <<<"$OUT" && _tm_afail "the PASS line still claims all seven: ${OUT}"
+    # An OVERALL measure the server gave no value for is not "nothing new".
+    local c
+    c="$(_ok_except none 0)"; c="${c/'{"metricKey":"reliability_rating","status":"OK","actualValue":"1"},'/}"
+    grep -q reliability_rating <<<"$c" && tm_die "the fixture still carries reliability_rating"
+    _eval "$c" "$M_OK" '[]'
+    tm_assert_rc 2 "$RC" "reliability_rating with no value at all passed as clean: ${OUT}"
+    grep -q 'reliability_rating.*NO VALUE for an overall measure' <<<"$OUT" || _tm_afail "the missing overall measure is not named: ${OUT}"
+    true
+}
+tm_case "sonar-local-pass-line-names-the-judged-conditions" none e_pass_names_what_was_judged
 
 # The gate setup against a stub SonarQube that SEEDS a new gate with its own
 # conditions, as SonarQube 26.9 does (measured: the first live run failed

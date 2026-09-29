@@ -17,8 +17,8 @@
  * "Interactive authentication required", which is polkit refusing, not the
  * sandbox. This file is that rule.
  *
- * SCOPE. Seven units and an explicit verb each (v1.2.0 added the four
- * one-shot apply units, START only). addRule is evaluated for
+ * SCOPE. Seven units, eight unit/verb pairs: an explicit verb for each,
+ * two for nginx (v1.2.0 added the four one-shot apply units, START only). addRule is evaluated for
  * EVERY manage-units action on the system, so anything not matched here falls
  * through to the default policy untouched — this file only ever returns YES,
  * never NO, and never widens anything for any other subject.
