@@ -93,6 +93,16 @@ SERVICE="topic-manager"
 # `systemctl show`, which reports the merged unit), so this directory is
 # configuration and secret material, not a system file that install re-creates.
 DROPIN_DIR="/etc/systemd/system/${SERVICE}.service.d"
+# Where a release lays down HOST artefacts outside its own trees: systemd
+# units (and their enablement links), polkit rules, root helpers. Phase 4
+# records every product artefact found here into the restore point
+# (owned_inventory); a restore removes what is present now and was not then,
+# and puts back what was — so a rollback retires whatever units, timers,
+# paths, sockets, rules and helpers the NEWER release added, without this
+# script carrying a list of their names (clean-room 2026-09-29, R1).
+OWNED_UNIT_DIR="/etc/systemd/system"
+OWNED_POLKIT_DIR="/etc/polkit-1/rules.d"
+OWNED_LIBEXEC_DIR="/usr/libexec/${SERVICE}"
 
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_ROOT="/var/backups/topic-manager"
@@ -778,13 +788,136 @@ backup_v120_managed() {   # backup_v120_managed <backup-dir>
 restore_socket_unit() {   # restore_socket_unit <backup-dir>
     local BD="$1"
     if [[ -f "${BD}/system/topic-manager.socket" ]]; then
-        cp -a "${BD}/system/topic-manager.socket" /etc/systemd/system/topic-manager.socket
+        cp -a "${BD}/system/topic-manager.socket" "${OWNED_UNIT_DIR}/topic-manager.socket"
         systemctl enable topic-manager.socket >/dev/null 2>&1 || true
-    else
-        systemctl disable --now topic-manager.socket >/dev/null 2>&1 || true
-        rm -f /etc/systemd/system/topic-manager.socket
-        rm -f /etc/systemd/system/sockets.target.wants/topic-manager.socket
+    elif [[ -e "${OWNED_UNIT_DIR}/topic-manager.socket" || -L "${OWNED_UNIT_DIR}/topic-manager.socket" ]]; then
+        retire_unit "${OWNED_UNIT_DIR}/topic-manager.socket"
     fi
+}
+
+# socket_unit_paths <unit-file> — the filesystem sockets a .socket unit
+# listens on (ListenStream/ListenDatagram/ListenSequentialPacket values that
+# are absolute paths), one per line. Read from the unit itself, not assumed.
+socket_unit_paths() {   # socket_unit_paths <unit-file>
+    sed -n -E 's/^[[:space:]]*Listen(Stream|Datagram|SequentialPacket)[[:space:]]*=[[:space:]]*(\/[^[:space:]]+)[[:space:]]*$/\2/p' "$1" 2>/dev/null
+}
+
+# retire_unit <unit-file> — stop and disable a product unit, remove its file
+# and every enablement link to it, and, for a socket unit, the socket file it
+# left behind: systemd does not delete a Unix socket on stop (RemoveOnStop=
+# defaults to no), so a rollback to a TCP release used to leave a dead
+# /run/topic-manager/gunicorn.sock that nothing listens on (clean-room R2).
+retire_unit() {   # retire_unit <unit-file>
+    local f="$1" u s l
+    u="$(basename "$f")"
+    local socks=()
+    [[ "$u" == *.socket && -f "$f" ]] && mapfile -t socks < <(socket_unit_paths "$f")
+    systemctl disable --now "$u" >/dev/null 2>&1 || true
+    systemctl reset-failed "$u" >/dev/null 2>&1 || true
+    rm -f -- "$f"
+    shopt -s nullglob
+    for l in "${OWNED_UNIT_DIR}"/*.wants/"$u" "${OWNED_UNIT_DIR}"/*.requires/"$u"; do rm -f -- "$l"; done
+    shopt -u nullglob
+    for s in "${socks[@]}"; do
+        [[ -S "$s" ]] && rm -f -- "$s"
+        rmdir -- "$(dirname "$s")" 2>/dev/null || true
+    done
+    info "Retired ${u} (the restored release does not ship it)"
+}
+
+# owned_inventory — every product host artefact under the OWNED_* locations,
+# NUL-delimited and sorted: unit files and their enablement links (the
+# service's drop-in directory is backed up on its own, backup_dropin), polkit
+# rules, and the whole root-helper tree.
+owned_inventory() {
+    local p
+    {
+        shopt -s nullglob
+        for p in "${OWNED_UNIT_DIR}/${SERVICE}"* "${OWNED_UNIT_DIR}"/*.wants/"${SERVICE}"* \
+                 "${OWNED_UNIT_DIR}"/*.requires/"${SERVICE}"* "${OWNED_POLKIT_DIR}"/*"${SERVICE}"*; do
+            [[ -d "$p" && ! -L "$p" ]] && continue
+            printf '%s\0' "$p"
+        done
+        shopt -u nullglob
+        # An if, not `test && find`: on a host without the helper (every
+        # 1.1.x host) that would end the group non-zero, and under pipefail
+        # abort Phase 4.
+        if [[ -d "$OWNED_LIBEXEC_DIR" && ! -L "$OWNED_LIBEXEC_DIR" ]]; then
+            find "$OWNED_LIBEXEC_DIR" -print0
+        fi
+    } | sort -z
+}
+
+# backup_owned_artefacts <backup-dir> — the inventory, and a byte-exact copy
+# of every artefact in it, into the restore point (Phase 4).
+backup_owned_artefacts() {   # backup_owned_artefacts <backup-dir>
+    local BD="$1" p d
+    owned_inventory > "${BD}/manifest/owned-artefacts.list"
+    while IFS= read -r -d '' p; do
+        d="${BD}/system/owned${p}"
+        if [[ -d "$p" && ! -L "$p" ]]; then
+            mkdir -p -- "$d"; chmod --reference="$p" -- "$d"; chown --reference="$p" -- "$d"
+        else
+            mkdir -p -- "$(dirname "$d")"; cp -a -- "$p" "$d"
+        fi
+    done < "${BD}/manifest/owned-artefacts.list"
+}
+
+# restore_owned_artefacts <backup-dir> — make the product's host artefacts
+# what the restore point recorded. Present now and absent then = added by
+# the release being rolled back: units are stopped, disabled and removed
+# (retire_unit), everything else deleted. Recorded then = put back from the
+# restore point's copy. Then systemd reloads, so no removed timer or path
+# unit fires the restored release into a module it does not have.
+restore_owned_artefacts() {   # restore_owned_artefacts <backup-dir>
+    local BD="$1" list="${1}/manifest/owned-artefacts.list" p
+    local -A had=()
+    if [[ ! -f "$list" ]]; then
+        # Taken by an upgrade script older than the inventory: nothing here
+        # says which of these its release shipped, and guessing from names
+        # would be the hardcoded list this replaced. Name them, loudly.
+        local now=()
+        mapfile -d '' now < <(owned_inventory)
+        warn "This restore point predates the host-artefact inventory, so it cannot say which"
+        warn "  units, rules and helpers its release shipped. Present now, NOT removed:"
+        for p in "${now[@]}"; do warn "    ${p}"; done
+        warn "  Retire any the restored release does not ship: sudo systemctl disable --now <unit>; delete the file; sudo systemctl daemon-reload"
+        return 0
+    fi
+    while IFS= read -r -d '' p; do had["$p"]=1; done < "$list"
+
+    local cur=() added_units=() added_other=()
+    mapfile -d '' cur < <(owned_inventory)
+    for p in "${cur[@]}"; do
+        [[ -n "${had[$p]+x}" ]] && continue
+        case "$p" in
+            "${OWNED_UNIT_DIR}"/*/*) added_other+=("$p") ;;          # an enablement link
+            "${OWNED_UNIT_DIR}"/*)   added_units+=("$p") ;;
+            *)                       added_other+=("$p") ;;
+        esac
+    done
+    for p in "${added_units[@]}"; do retire_unit "$p"; done
+    # Deepest first, so a helper directory is empty when its turn comes.
+    local i
+    for (( i=${#added_other[@]}-1; i>=0; i-- )); do
+        p="${added_other[$i]}"
+        if [[ -d "$p" && ! -L "$p" ]]; then rm -rf -- "$p"; else rm -f -- "$p"; fi
+    done
+
+    while IFS= read -r -d '' p; do
+        local src="${BD}/system/owned${p}"
+        if [[ -d "$src" && ! -L "$src" ]]; then
+            [[ -L "$p" ]] && rm -f -- "$p"
+            mkdir -p -- "$p"; chmod --reference="$src" -- "$p"; chown --reference="$src" -- "$p"
+        elif [[ -e "$src" || -L "$src" ]]; then
+            mkdir -p -- "$(dirname "$p")"
+            rm -rf -- "$p"; cp -a -- "$src" "$p"
+        else
+            warn "The restore point lists ${p} but holds no copy of it — left as it is."
+        fi
+    done < "$list"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    info "Host units, rules and helpers restored to the restore point's inventory (${#added_units[@]} unit(s) retired)"
 }
 
 # restore_v120_managed <backup-dir> — put them back exactly; from a restore
@@ -1025,6 +1158,7 @@ restore_from_backup() {
     [[ -f "${BD}/system/topic-manager.service" ]] && \
         cp -a "${BD}/system/topic-manager.service" /etc/systemd/system/
     restore_socket_unit "$BD"
+    restore_owned_artefacts "$BD"
     restore_dropin "$BD"
     restore_cluster_store "$BD"
     [[ -f "${BD}/system/logrotate-topic-manager" ]] && \
@@ -1916,6 +2050,7 @@ backup_dropin "$BACKUP_DIR"
 [[ -f /etc/logrotate.d/topic-manager ]] && \
     cp -a /etc/logrotate.d/topic-manager "${BACKUP_DIR}/system/logrotate-topic-manager"
 backup_v120_managed "$BACKUP_DIR"
+backup_owned_artefacts "$BACKUP_DIR"
 
 {
     echo "topic_manager_version=${INSTALLED_VER}"

@@ -78,14 +78,25 @@ tm_case "install-and-upgrade-install-stop-back-up-and-restore-the-socket" none a
 _restore_socket() {   # _restore_socket <backup-has-socket: yes|no>
     local R="${TM_TMP}/rs"
     rm -rf "$R" "${TM_TMP}/bd"; mkdir -p "$R/etc/systemd/system/sockets.target.wants" "${TM_TMP}/bd/system"
-    printf '[Socket]\nListenStream=%s\n' "$SOCK" > "$R/etc/systemd/system/topic-manager.socket"
+    # A REAL Unix socket where the unit says it listens, as systemd leaves it
+    # after a stop (RemoveOnStop= defaults to no). AF_UNIX paths are short, so
+    # it lives under its own short directory, not the scratch tree.
+    RSOCKD="$(mktemp -d /tmp/tms.XXXXXX)"; RSOCK="${RSOCKD}/gunicorn.sock"
+    "$PY" -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$RSOCK" \
+        || tm_die "could not create a Unix socket at ${RSOCK}"
+    [ -S "$RSOCK" ] || tm_die "no socket at ${RSOCK}"
+    printf '[Socket]\nListenStream=%s\n' "$RSOCK" > "$R/etc/systemd/system/topic-manager.socket"
     ln -s ../topic-manager.socket "$R/etc/systemd/system/sockets.target.wants/topic-manager.socket"
     [ "$1" = yes ] && printf '[Socket]\n# the restore point copy\n' > "${TM_TMP}/bd/system/topic-manager.socket"
     : > "${TM_TMP}/calls"
     {
         echo 'set -uo pipefail'
         echo 'systemctl() { echo "systemctl $*" >> "'"${TM_TMP}"'/calls"; }'
-        tm_extract_func "$UP" restore_socket_unit | sed "s#/etc/systemd/#${R}/etc/systemd/#g"
+        echo 'info() { :; }'
+        echo 'OWNED_UNIT_DIR="'"${R}"'/etc/systemd/system"'
+        tm_extract_func "$UP" socket_unit_paths
+        tm_extract_func "$UP" retire_unit
+        tm_extract_func "$UP" restore_socket_unit
         echo 'restore_socket_unit "$1"'
     } > "${TM_TMP}/rs.sh"
     grep -qE '(^|[^/])/etc/systemd' <(grep -v "${R}" "${TM_TMP}/rs.sh") && tm_die "a path escaped the fake root"
@@ -100,13 +111,18 @@ a_rollback_socket() {
     tm_assert_nofile "$R/etc/systemd/system/topic-manager.socket" "the socket unit survived a rollback to a release without one"
     [ -L "$R/etc/systemd/system/sockets.target.wants/topic-manager.socket" ] \
         && _tm_afail "the socket stays wanted by sockets.target after the rollback"
+    # R2 (clean-room 2026-09-29): the dead socket file itself.
+    [ -e "$RSOCK" ] && { rm -rf "$RSOCKD"; _tm_afail "CLEAN-ROOM R2: the stale gunicorn socket survived a rollback to a TCP release"; }
+    [ -d "$RSOCKD" ] && { rm -rf "$RSOCKD"; _tm_afail "the emptied socket directory was left behind"; }
     _restore_socket yes
     grep -q 'the restore point copy' "$R/etc/systemd/system/topic-manager.socket" \
-        || _tm_afail "a rollback to a socket release did not restore its socket unit"
-    grep -q 'disable' "${TM_TMP}/calls" && _tm_afail "a rollback to a socket release disabled the socket"
+        || { rm -rf "$RSOCKD"; _tm_afail "a rollback to a socket release did not restore its socket unit"; }
+    grep -q 'disable' "${TM_TMP}/calls" && { rm -rf "$RSOCKD"; _tm_afail "a rollback to a socket release disabled the socket"; }
+    [ -S "$RSOCK" ] || { rm -rf "$RSOCKD"; _tm_afail "a rollback to a socket release deleted the live socket"; }
+    rm -rf "$RSOCKD"
     true
 }
-tm_case "a-rollback-to-a-tcp-release-removes-the-socket" none a_rollback_socket
+tm_case "a-rollback-to-a-tcp-release-removes-the-socket-and-its-file" linux a_rollback_socket
 
 # ── the REAL gunicorn, with the unit's own arguments ─────────────────────────
 _unit_args() {   # the service's ExecStart arguments, one per line, paths relocated
