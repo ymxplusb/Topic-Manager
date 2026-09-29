@@ -321,7 +321,7 @@ tm_case "sbom-infrastructure-rows-agree-with-the-about-dialog" none g_sbom_infra
 # ── REG-0012: required values are non-empty scalars; required_group "" is valid
 g_config_example() {
     local mut
-    for mut in 's/^  port: .*/  port: []/' 's/^  secret_key: .*/  secret_key: {}/' 's/^  ldap_server: .*/  ldap_server: []/'; do
+    for mut in 's/^  timeout_minutes: .*/  timeout_minutes: []/' 's/^  secret_key: .*/  secret_key: {}/' 's/^  ldap_server: .*/  ldap_server: []/'; do
         rm -rf "${TM_TMP}/tree"; _tree tools/check-config-example.sh config
         sed -i "$mut" "$FX/config/config.yaml.example"
         cmp -s "$R/config/config.yaml.example" "$FX/config/config.yaml.example" && tm_die "fixture '${mut}' changed nothing"

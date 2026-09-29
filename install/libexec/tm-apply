@@ -74,6 +74,11 @@ PROD_LIB = '/usr/libexec/topic-manager/lib'
 
 STAGE_DIR = '/opt/topic-manager/data/apply'
 RESULT_DIR = '/run/topic-manager-apply'
+# Replaced after every FINAL verdict, and only then. topic-manager-apply-audit.path
+# watches THIS file, not the directory: the "running" result written at the
+# start of an apply would otherwise start the audit run early, and a verdict
+# written while that run was still going would be merged into it and missed.
+DONE_MARKER = 'finished'
 BACKUP_DIR = '/var/backups/topic-manager/apply'
 BACKUPS_KEPT = 10
 
@@ -104,6 +109,8 @@ SNIP_LOGIN = '/etc/nginx/snippets/tm-limits-login.conf'
 SNIP_API = '/etc/nginx/snippets/tm-limits-api.conf'
 HTTP_SITE_AVAILABLE = '/etc/nginx/sites-available/topic-manager-http'
 HTTP_SITE_ENABLED = '/etc/nginx/sites-enabled/topic-manager-http'
+
+NGINX_SITE = '/etc/nginx/sites-available/topic-manager'
 
 TLS_DIR = '/etc/topic-manager/tls'
 TLS_CRT = TLS_DIR + '/server.crt'
@@ -333,6 +340,7 @@ def load_job(ctx, schema, tls_check, domain):
         problems = schema.check_domain(domain, values)
         if problems:
             raise ApplyError('validate', 'refused: %s' % '; '.join(problems))
+        sink_guard(values)
     else:
         want = doc.get('files')
         if not isinstance(want, dict) or not {'crt', 'key'} <= set(want):
@@ -346,8 +354,47 @@ def load_job(ctx, schema, tls_check, domain):
     return job, by, values, blobs
 
 
+# ── the helper's OWN last barrier, independent of lib/settings_schema.py ──────
+# Every value below is written by root into a file another root daemon parses
+# (rsyslog, chrony, systemd-timesyncd, nginx). load_job() has already held it
+# to the shared schema; this is a SECOND, separately written rule, so a
+# weakness in the shared validator is not by itself a path to root's config
+# files. Measured 2026-09-29 (sec-review): the shared valid_host() let
+# ipaddress accept an IPv6 scope id, "fe80::1%a\nb", and the newline reached
+# 30-topic-manager.conf and the chrony sources as syntax. Whatever the schema
+# says, nothing but these characters is ever rendered.
+_SINK_HOST = re.compile(r'[A-Za-z0-9:][A-Za-z0-9.:-]{0,252}')
+_SINK_RULES = {
+    'syslog_host':     re.compile(r'(?:[A-Za-z0-9:][A-Za-z0-9.:-]{0,252})?'),
+    'syslog_port':     re.compile(r'[0-9]{1,5}'),
+    'syslog_protocol': re.compile(r'udp|tcp|tls'),
+    'syslog_app_id':   re.compile(r'[A-Za-z0-9._-]{1,48}'),
+    'syslog_enabled':  re.compile(r'true|false'),
+    'http_redirect_enabled': re.compile(r'true|false'),
+}
+_SINK_NUMBER = re.compile(r'[0-9]{1,9}')
+
+
+def sink_guard(values):
+    """Refuse any value that is not in the renderable character set, key by
+    key, with fullmatch (a `$` would let a trailing newline through). Raises
+    ApplyError('validate') naming the key and never quoting the value."""
+    for key, value in values.items():
+        text = value if isinstance(value, str) else None
+        if key == 'ntp_servers':
+            ok = text is not None and (text == '' or all(
+                _SINK_HOST.fullmatch(s) for s in text.split(',')))
+        else:
+            rule = _SINK_RULES.get(key, _SINK_NUMBER if key.startswith('ratelimit_') else None)
+            ok = rule is not None and text is not None and bool(rule.fullmatch(text))
+        if not ok:
+            raise ApplyError('validate', 'refused: %s is not a value this helper will render '
+                             '(its own character rule, independent of the shared schema)'
+                             % re.sub(r'[^A-Za-z0-9_]', '?', str(key))[:40])
+
+
 # ── results ──────────────────────────────────────────────────────────────────
-def write_result(ctx, domain, doc):
+def write_result(ctx, domain, doc, name=None):
     d = ctx.p(RESULT_DIR)
     os.makedirs(d, mode=0o755, exist_ok=True)
     st = os.lstat(d)
@@ -360,7 +407,7 @@ def write_result(ctx, domain, doc):
         os.fsync(fd)
     finally:
         os.close(fd)
-    os.replace(tmp, os.path.join(d, '%s.result' % domain))
+    os.replace(tmp, os.path.join(d, name or '%s.result' % domain))
 
 
 # ── file operations: never through a symlink ─────────────────────────────────
@@ -648,16 +695,35 @@ def nginx_test(ctx):
         raise ApplyError('test', 'nginx -t failed: %s' % _tail(out))
 
 
+#: A ufw rule that still admits port 80 after 80/tcp is removed: the port on
+#: its own or in a comma list (either protocol, either address family), or an
+#: application profile that includes it.
+_UFW_OTHER_80 = re.compile(r'^(?:(?:[0-9]+,)*80(?:,[0-9]+)*(?:/(?:tcp|udp))?(?: \(v6\))?'
+                           r'|(?:Nginx|Apache) (?:HTTP|Full)(?: \(v6\))?)\s+ALLOW\b')
+
+
 def ufw_state(ctx):
+    """The firewall as ufw reports it. FAILS CLOSED (sec-review TM-SEC-010):
+    only a parsed "Status: active" or "Status: inactive" is a state. A host
+    with no ufw at all has nothing to manage; a ufw that is there and cannot
+    answer (non-zero exit, timeout, unreadable output) stops the apply, because
+    "inactive" would skip the firewall step and report a success that never
+    happened."""
+    if not os.path.exists(ctx.tool('ufw')):
+        return {'active': False, 'installed': False, 'port80': False, 'others': []}
     rc, out = run(ctx, 'ufw', ['status'])
     if rc != 0:
-        # No ufw (or it cannot answer) is "not active": there is nothing to manage.
-        return {'active': False, 'port80': False, 'others': []}
-    active = 'Status: active' in out
+        raise ApplyError('firewall', 'ufw status failed (exit %d): %s. The firewall state is '
+                         'unknown, so nothing was changed' % (rc, _tail(out, 2)))
+    status = re.search(r'^Status: (active|inactive)$', out, re.M)
+    if not status:
+        raise ApplyError('firewall', 'ufw status gave no "Status: active|inactive" line: %s. '
+                         'The firewall state is unknown, so nothing was changed' % _tail(out, 2))
     port80 = bool(re.search(r'^80/tcp\s+ALLOW\b', out, re.M))
     others = [l.strip() for l in out.splitlines()
-              if re.match(r'^(80(/udp)?|Nginx (HTTP|Full))\s', l.strip()) and 'ALLOW' in l]
-    return {'active': active, 'port80': port80, 'others': others}
+              if _UFW_OTHER_80.match(l.strip()) and not re.match(r'^80/tcp\s', l.strip())]
+    return {'active': status.group(1) == 'active', 'installed': True,
+            'port80': port80, 'others': others}
 
 
 def ufw_apply(ctx, action):
@@ -668,17 +734,25 @@ def ufw_apply(ctx, action):
 
 
 def ufw_verify(ctx, action, before, details):
+    """Check the rule, and say what is TRUE of port 80 afterwards (adversary
+    F-07): removing 80/tcp does not close the port while another rule still
+    admits it, and the detail must not claim it does."""
     if not before or not before['active']:
-        details.append('ufw is not active: no firewall rule was changed')
+        details.append('ufw is not installed: no firewall rule was changed'
+                       if before and not before.get('installed', True)
+                       else 'ufw is not active: no firewall rule was changed')
         return
     st = ufw_state(ctx)
     if st['port80'] != (action == 'allow'):
         raise ApplyError('verify', 'ufw 80/tcp is %s after the change'
                          % ('open' if st['port80'] else 'closed'))
-    details.append('ufw 80/tcp %s' % ('open' if action == 'allow' else 'closed'))
-    if action == 'delete' and st['others']:
-        details.append('NOTE: another ufw rule still opens port 80: %s'
+    if action == 'allow':
+        details.append('ufw 80/tcp open')
+    elif st['others']:
+        details.append('ufw rule 80/tcp removed, but port 80 is STILL OPEN through: %s'
                        % '; '.join(st['others'][:3]))
+    else:
+        details.append('ufw 80/tcp closed')
 
 
 def access_as(ctx, user, path):
@@ -1007,10 +1081,27 @@ def plan_nginx(ctx, v):
 
 
 # ── domain: tls ──────────────────────────────────────────────────────────────
+def configured_server_name(ctx):
+    """The FIRST server_name of the Topic Manager site — the name install.sh
+    and the upgrade set from --server-name — or None when it is unset, the
+    placeholder, or the catch-all. Read by root from root's own file."""
+    try:
+        with open(ctx.p(NGINX_SITE), encoding='utf-8', errors='replace') as fh:
+            m = re.search(r'^\s*server_name\s+([^\s;]+)', fh.read(), re.M)
+    except OSError:
+        return None
+    name = m.group(1) if m else None
+    if not name or name == '_' or 'YOUR-HOSTNAME' in name:
+        return None
+    return name
+
+
 def plan_tls(ctx, tls_check, blobs):
     plan = Plan()
+    server_name = configured_server_name(ctx)
     try:
-        info = tls_check.validate(blobs['crt'], blobs['key'], blobs.get('chain'))
+        info = tls_check.validate(blobs['crt'], blobs['key'], blobs.get('chain'),
+                                  server_name=server_name)
     except tls_check.CertInvalid as exc:
         raise ApplyError('validate', 'refused: %s' % exc)
     chain = b''.join(tls_check.split_certs(blobs.get('chain') or b''))
@@ -1116,6 +1207,11 @@ def main(argv=None):
                finished_at=now_iso())
     try:
         write_result(ctx, domain, doc)
+        # The audit trail records this verdict now, whether or not anyone is
+        # polling for it (adversary F-03): the .path unit starts
+        # topic-manager-apply-audit.service on this write.
+        write_result(ctx, domain, {'domain': domain, 'job': doc.get('job'), 'state': state,
+                                   'finished_at': doc['finished_at']}, name=DONE_MARKER)
     except Exception as exc:
         print('could not write the result: %s' % exc, file=sys.stderr)
     log('%s: %s' % (state.upper(), message))

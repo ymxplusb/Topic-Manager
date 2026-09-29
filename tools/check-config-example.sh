@@ -70,7 +70,7 @@ def scalar_value(v):
 
 
 REQUIRED = {
-    "server":   ["host", "port", "secret_key"],
+    "server":   ["secret_key"],       # v1.2.0: no host/port (Unix socket)
     "auth":     ["ldap_server", "ldap_domain", "ldap_base_dn", "required_group"],
     "session":  ["timeout_minutes", "max_concurrent"],
     "audit":    ["db_path"],

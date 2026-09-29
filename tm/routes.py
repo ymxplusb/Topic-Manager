@@ -81,22 +81,30 @@ def _max_sessions(db):
 # the database broke in between — the response says the change WAS made, and
 # the record itself has gone to syslog at CRIT as AUDIT_WRITE_FAILED.
 
-def _audit_unavailable():
+def _where_the_record_went(exc):
+    """Where the failed record actually went — never a guess (round 4,
+    sec-review TM-SEC-006): audit.write_failed says whether syslog took it."""
+    if getattr(exc, 'syslog_delivered', False):
+        return ('The record was sent to the host syslog as AUDIT_WRITE_FAILED (CRIT).')
+    return ('The host syslog did NOT accept the record either: its only copy is the '
+            'AUDIT_WRITE_FAILED line in the service log (journalctl -u topic-manager).')
+
+
+def _audit_unavailable(exc=None):
     return jsonify({
         'error': 'audit_unavailable',
         'message': ('The audit trail cannot be written, so nothing was changed. '
-                    'An administrator must check the audit database '
-                    '(see AUDIT_WRITE_FAILED in the host syslog).'),
+                    'An administrator must check the audit database. '
+                    + _where_the_record_went(exc)),
     }), 503
 
 
-def _audit_failed_after(what):
+def _audit_failed_after(what, exc=None):
     return jsonify({
         'error': 'audit_write_failed',
         'message': ('%s WAS made, but its audit record could not be written to '
-                    'the audit database. The record was sent to the host syslog '
-                    'as AUDIT_WRITE_FAILED (CRIT). Check the audit database before '
-                    'making any further change.' % what),
+                    'the audit database. %s Check the audit database before '
+                    'making any further change.' % (what, _where_the_record_went(exc))),
     }), 500
 
 
@@ -105,8 +113,8 @@ def audit_gate(f):
     def decorated(*args, **kwargs):
         try:
             audit.require_writable(_cfg())
-        except audit.AuditUnavailable:
-            return _audit_unavailable()
+        except audit.AuditUnavailable as exc:
+            return _audit_unavailable(exc)
         return f(*args, **kwargs)
     return decorated
 
@@ -152,6 +160,37 @@ def _parse_json_body():
     return data, None
 
 
+# ── cross-site request forgery (v1.2.0 round 4, sec-review CWE-352) ──────
+# A state-changing request is accepted only when the browser says it came from
+# this origin (Sec-Fetch-Site: same-origin) or it carries X-TM-Request: 1,
+# which app/main.js adds to every non-GET request the SPA makes. A custom
+# header cannot be sent cross-origin without a CORS preflight, and this API
+# answers no preflight, so another site can send neither.
+#
+# The old rule refused only Sec-Fetch-Site: cross-site and only in
+# require_auth. That let through a SAME-SITE sibling (another host under the
+# same registrable domain), a browser that sends no Fetch Metadata, and, on the
+# multipart certificate upload, a plain HTML form: the JSON Content-Type rule
+# that protects the other routes cannot apply to multipart/form-data, and a
+# form post can be multipart. Tooling (curl) sends the header too.
+_SAFE_METHODS = frozenset({'GET', 'HEAD', 'OPTIONS'})
+CSRF_HEADER = 'X-TM-Request'
+
+
+@bp.before_request
+def _refuse_cross_site():
+    if request.method in _SAFE_METHODS:
+        return None
+    fetch_site = request.headers.get('Sec-Fetch-Site')
+    if fetch_site == 'same-origin':
+        return None
+    if fetch_site is None and request.headers.get(CSRF_HEADER) == '1':
+        return None
+    return jsonify({'error': 'Cross-site requests are not permitted',
+                    'message': 'A request that changes something must come from this site '
+                               '(Sec-Fetch-Site: same-origin) or carry %s: 1.' % CSRF_HEADER}), 403
+
+
 # ── auth decorator ────────────────────────────────────────────────
 # All authenticated users are members of the Kafka-Admins AD group —
 # group membership is enforced at login time by auth.validate_credentials.
@@ -160,13 +199,8 @@ def _parse_json_body():
 def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        # Block cross-site fetch requests on state-mutation methods.
-        # Sec-Fetch-Site is set by all modern browsers; absence (curl/Postman)
-        # is allowed so the API remains usable by authorized tooling.
-        if request.method not in ('GET', 'HEAD', 'OPTIONS'):
-            if request.headers.get('Sec-Fetch-Site') == 'cross-site':
-                return jsonify({'error': 'Cross-site requests are not permitted'}), 403
-
+        # Cross-site request refusal is bp.before_request (_refuse_cross_site),
+        # which runs before this for EVERY route, the public ones included.
         sid = session.get('sid')
         if not sid:
             return jsonify({'error': 'Authentication required'}), 401
@@ -217,6 +251,9 @@ def health():
 
 
 # ── auth ──────────────────────────────────────────────────────────
+LOGIN_FAILED_MESSAGE = 'Sign-in failed: the user name or password is wrong, or this account may not use Topic Manager.'
+
+
 @bp.route('/auth/login', methods=['POST'])
 def login():
     data, err = _parse_json_body()
@@ -239,15 +276,20 @@ def login():
         audit.log_action(_cfg(), _log_safe(username) or '(empty)', 'LOGIN_FAILED',
                          request.remote_addr or 'unknown',
                          'reason=%s' % str(result)[:120], '', best_effort=True)
-        return jsonify({'error': result}), 401
+        # ONE answer for every failure (round 4, sec-review TM-SEC-009): "User
+        # not found", "Invalid credentials", "Not a member of ..." and a raw LDAP
+        # error told an unauthenticated caller which accounts exist and what the
+        # directory said. The specific reason stays in the audit row and the log
+        # above, where an administrator reads it.
+        return jsonify({'error': LOGIN_FAILED_MESSAGE}), 401
 
     cfg = _cfg()
     # A sign-in is an audited action like any other: no session is created
     # that the audit trail cannot record.
     try:
         audit.require_writable(cfg)
-    except audit.AuditUnavailable:
-        return _audit_unavailable()
+    except audit.AuditUnavailable as exc:
+        return _audit_unavailable(exc)
     db  = get_db(cfg)
 
     # Clean up expired sessions before checking the count
@@ -260,7 +302,7 @@ def login():
     # commit releases it.
     db.execute('BEGIN IMMEDIATE')
     active = count_active_sessions(db, result['username'])
-    if 0 < max_s <= active:          # 0 = unlimited
+    if 0 < max_s <= active:          # a limit of zero means unlimited
         return _refuse_session_limit(cfg, db, result['username'], active, max_s)
 
     sid = create_session(db, result['username'], _timeout(), request.remote_addr)
@@ -275,13 +317,13 @@ def login():
                          request.remote_addr or 'unknown',
                          'bind=%s' % ('service' if _cfg().get('auth', {}).get('ldap_bind_dn')
                                       else 'direct-user'), '')
-    except audit.AuditUnavailable:
+    except audit.AuditUnavailable as exc:
         # The session row exists but has not been handed out: remove it, and
         # the sign-in did not happen.
         db = get_db(cfg)
         delete_session(db, sid)
         db.close()
-        return _audit_unavailable()
+        return _audit_unavailable(exc)
 
     session.permanent = True
     session['sid']  = sid
@@ -422,8 +464,8 @@ def create_cluster():
         audit.log_action(_cfg(), user, 'CLUSTER_CREATE', cluster['id'],
                          'after: %s' % cluster_store.audit_detail(cluster),
                          cluster['id'])
-    except audit.AuditUnavailable:
-        return _audit_failed_after('The cluster profile %s' % cluster['id'])
+    except audit.AuditUnavailable as exc:
+        return _audit_failed_after('The cluster profile %s' % cluster['id'], exc)
     log.info('CLUSTER_CREATE id=%s user=%s', cluster['id'], user)
     return jsonify({'ok': True, 'cluster': cluster_store.public_view(cluster)}), 201
 
@@ -467,8 +509,8 @@ def update_cluster(cluster_id):
                          % (cluster_store.audit_detail(previous),
                             cluster_store.audit_detail(cluster)),
                          cluster_id)
-    except audit.AuditUnavailable:
-        return _audit_failed_after('The change to cluster profile %s' % cluster_id)
+    except audit.AuditUnavailable as exc:
+        return _audit_failed_after('The change to cluster profile %s' % cluster_id, exc)
     log.info('CLUSTER_UPDATE id=%s user=%s', cluster_id, user)
     return jsonify({'ok': True, 'cluster': cluster_store.public_view(cluster)})
 
@@ -498,8 +540,8 @@ def delete_cluster(cluster_id):
         audit.log_action(_cfg(), user, 'CLUSTER_DELETE', cluster_id,
                          'before: %s' % cluster_store.audit_detail(previous),
                          cluster_id)
-    except audit.AuditUnavailable:
-        return _audit_failed_after('The deletion of cluster profile %s' % cluster_id)
+    except audit.AuditUnavailable as exc:
+        return _audit_failed_after('The deletion of cluster profile %s' % cluster_id, exc)
     log.info('CLUSTER_DELETE id=%s user=%s', cluster_id, user)
     return jsonify({'ok': True})
 
@@ -577,8 +619,8 @@ def restart_service():
                          '%s + %s' % (service_control.NGINX_UNIT,
                                       service_control.SERVICE_UNIT),
                          'nginx=%s, topic-manager=restart; %s' % (nginx_action, detail))
-    except audit.AuditUnavailable:
-        return _audit_unavailable()
+    except audit.AuditUnavailable as exc:
+        return _audit_unavailable(exc)
     log.warning('SERVICE_RESTART user=%s nginx=%s', user, nginx_action)
 
     def _record(message):
@@ -671,8 +713,8 @@ def create_topic():
         audit.log_action(_cfg(), user, 'CREATE', name,
                          f'partitions={partitions}, rf={rf}, config={config}',
                          cluster.get('id', ''))
-    except audit.AuditUnavailable:
-        return _audit_failed_after('The creation of topic %s' % name)
+    except audit.AuditUnavailable as exc:
+        return _audit_failed_after('The creation of topic %s' % name, exc)
     log.info('CREATE topic=%s user=%s', name, user)
     return jsonify({'ok': True, 'name': name}), 201
 
@@ -710,8 +752,8 @@ def update_topic_config(name):
     user = session['user']['username']
     try:
         audit.log_action(_cfg(), user, 'UPDATE_CONFIG', name, str(updates), cluster.get('id', ''))
-    except audit.AuditUnavailable:
-        return _audit_failed_after('The configuration change to topic %s' % name)
+    except audit.AuditUnavailable as exc:
+        return _audit_failed_after('The configuration change to topic %s' % name, exc)
     log.info('UPDATE_CONFIG topic=%s user=%s', name, user)
     return jsonify({'ok': True})
 
@@ -729,8 +771,8 @@ def delete_topic(name):
     user = session['user']['username']
     try:
         audit.log_action(_cfg(), user, 'DELETE', name, 'confirmed by user', cluster.get('id', ''))
-    except audit.AuditUnavailable:
-        return _audit_failed_after('The deletion of topic %s' % name)
+    except audit.AuditUnavailable as exc:
+        return _audit_failed_after('The deletion of topic %s' % name, exc)
     log.info('DELETE topic=%s user=%s', name, user)
     return jsonify({'ok': True})
 
@@ -747,11 +789,23 @@ def list_consumer_groups():
 
 
 # ── audit log ─────────────────────────────────────────────────────
+#: The largest page of audit rows one request may ask for (round 4,
+#: sec-review TM-SEC-007). SQLite reads LIMIT -1 as "no limit", so an
+#: unchecked per_page of -1, 0 or 10**9 returned the whole table in one
+#: response. The Audit tab asks for 50.
+AUDIT_PAGE_MAX = 500
+
+
 @bp.route('/audit', methods=['GET'])
 @require_auth
 def get_audit():
     page     = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
+    if page < 1:
+        return jsonify({'error': 'page must be a whole number from 1'}), 400
+    if not 1 <= per_page <= AUDIT_PAGE_MAX:
+        return jsonify({'error': 'per_page must be a whole number from 1 to %d'
+                                 % AUDIT_PAGE_MAX}), 400
     return jsonify(audit.get_audit_log(_cfg(), page, per_page))
 
 
@@ -865,9 +919,9 @@ def update_settings():
         record = audit.log_action(cfg, user, 'SETTINGS_UPDATE', 'app_settings', detail, '',
                                   db=db)
         db.commit()
-    except audit.AuditUnavailable:
+    except audit.AuditUnavailable as exc:
         db.rollback()
-        return _audit_unavailable()
+        return _audit_unavailable(exc)
     except Exception:
         db.rollback()
         log.exception('SETTINGS_UPDATE by user=%s was NOT applied: the change and '
@@ -919,9 +973,9 @@ def _start_staged(cfg, domain, job, user):
     and nothing changes."""
     try:
         audit.log_action(cfg, user, 'SYSTEM_APPLY_REQUESTED', domain, 'job=%s' % job)
-    except audit.AuditUnavailable:
+    except audit.AuditUnavailable as exc:
         apply_mod.discard_stage(cfg, domain)
-        return _audit_unavailable()
+        return _audit_unavailable(exc)
     ok, detail = service_control.start_apply_unit(domain)
     if not ok:
         apply_mod.record_start_failure(cfg, domain, job, detail)
@@ -953,7 +1007,9 @@ def _refuse_if_busy(cfg, domain):
 def system_apply(domain):
     if domain not in apply_mod.APPLY_DOMAINS:
         return jsonify({'error': 'unknown_domain', 'domain': _log_safe(domain, 32)}), 404
-    data, err = _parse_json_body()
+    # The body carries nothing (the SAVED settings are applied); requiring
+    # JSON is what refuses a form post.
+    _, err = _parse_json_body()
     if err:
         return err
     cfg = _cfg()

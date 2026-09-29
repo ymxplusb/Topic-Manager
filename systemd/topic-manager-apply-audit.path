@@ -1,0 +1,21 @@
+[Unit]
+Description=Jarvis Topic Manager — record every finished "Apply to host" in the audit trail
+Documentation=file:/opt/topic-manager/tm/apply.py
+
+# v1.2.0 round 4 (adversary F-03). The root apply helper writes its verdict to
+# /run/topic-manager-apply/<domain>.result. Until round 4 the SYSTEM_APPLY_RESULT
+# audit row was written only when a browser polled GET /api/system/apply/<d>,
+# so an apply whose browser tab was closed was never audited, and a reboot
+# (the results live on /run) lost it for good. The helper replaces
+# /run/topic-manager-apply/finished after every FINAL verdict (never for the
+# "running" one), and that starts topic-manager-apply-audit.service, which
+# records the verdict at once, as the service account. The service also records
+# any it finds at every start, and the daily audit prune does too, so a missed
+# event is caught up.
+
+[Path]
+PathChanged=/run/topic-manager-apply/finished
+Unit=topic-manager-apply-audit.service
+
+[Install]
+WantedBy=paths.target

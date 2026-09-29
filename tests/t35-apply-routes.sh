@@ -60,7 +60,7 @@ with c.session_transaction() as s:
 now = datetime.datetime.now(datetime.timezone.utc)
 def db(): return sqlite3.connect(os.environ['TM_TEST_DB'])
 d = db(); d.execute('INSERT INTO sessions VALUES (?,?,?,?,?,?)', ('sid1','admin',now.isoformat(),now.isoformat(),(now+datetime.timedelta(hours=1)).isoformat(),'x')); d.commit(); d.close()
-H = {'Content-Type': 'application/json'}
+H = {'Content-Type': 'application/json', 'X-TM-Request': '1'}
 RUN = os.environ['TM_APPLY_RESULT_DIR']
 STAGE = os.path.join(os.path.dirname(os.environ['TM_TEST_DB']), 'apply')
 def result(domain, **kw):
@@ -174,7 +174,7 @@ a_refusals() {
 r = c.post('/api/system/apply/tls', data='{}', headers=H); print('tls=%d' % r.status_code)
 r = c.post('/api/system/apply/etc', data='{}', headers=H); print('etc=%d' % r.status_code)
 r = c.get('/api/system/apply/etc'); print('getetc=%d' % r.status_code)
-r = c.post('/api/system/apply/nginx', data='{}', headers={}); print('nojson=%d' % r.status_code)
+r = c.post('/api/system/apply/nginx', data='{}', headers={'X-TM-Request': '1'}); print('nojson=%d' % r.status_code)
 c.put('/api/settings', data=json.dumps({'syslog_enabled': 'true'}), headers=H)
 r = c.post('/api/system/apply/syslog', data='{}', headers=H)
 print('cross=%d %s' % (r.status_code, json.dumps(r.get_json(), sort_keys=True)))

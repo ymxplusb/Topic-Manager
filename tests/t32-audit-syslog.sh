@@ -208,7 +208,7 @@ with c.session_transaction() as s:
 now = datetime.datetime.now(datetime.timezone.utc)
 d = db(); d.execute('INSERT INTO sessions VALUES (?,?,?,?,?,?)', ('sid1','admin',now.isoformat(),now.isoformat(),(now+datetime.timedelta(hours=1)).isoformat(),'x')); d.commit()
 drain()
-r = c.put('/api/settings', data=json.dumps({'banner_text': 'X'}), headers={'Content-Type':'application/json'})
+r = c.put('/api/settings', data=json.dumps({'banner_text': 'X'}), headers={'Content-Type':'application/json', 'X-TM-Request': '1'})
 got = drain()
 print('code=%d n=%d' % (r.status_code, len(got)))
 print('settings=%s' % any('action=\"SETTINGS_UPDATE\"' in g for g in got))
@@ -271,7 +271,7 @@ with c.session_transaction() as s:
     s["user"] = {"username": "admin"}; s["sid"] = "sid1"
 now = datetime.datetime.now(datetime.timezone.utc)
 d = db(); d.execute("INSERT INTO sessions VALUES (?,?,?,?,?,?)", ("sid1","admin",now.isoformat(),now.isoformat(),(now+datetime.timedelta(hours=1)).isoformat(),"x")); d.commit(); d.close()
-H = {"Content-Type": "application/json"}
+H = {"Content-Type": "application/json", "X-TM-Request": "1"}
 '
 
 a_routes_fail_closed() {

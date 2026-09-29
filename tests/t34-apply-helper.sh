@@ -87,6 +87,151 @@ a_ufw_inactive() {
 }
 tm_case "an-inactive-ufw-is-never-changed" "$REQ" a_ufw_inactive
 
+# ─── round 4 (sec-review HIGH CWE-74/93): the host values reach three root
+# writers — rsyslog (30-topic-manager.conf), chrony (sources.d) and
+# systemd-timesyncd (the drop-in). An IPv6 scope id is free text to Python's
+# ipaddress, so "fe80::1%a\nb" used to pass valid_host() and its newline was
+# rendered as SYNTAX into each of them, as root.
+# Syntax in every one of rsyslog, chrony and timesyncd: a newline, a space,
+# a scope id, an option-shaped leading '-'.
+_R4_SYNTAX=(
+    'fe80::1%a\nb'
+    'fe80::1%eth0'
+    'logs.example.org\nforward'
+    'logs example.org'
+    '-logs.example.org'
+)
+# Not syntax, but not RFC 1123 names either: the shared schema refuses them.
+_R4_STRICT=(
+    'logs.example.org.'
+    'logs..example.org'
+    'a-.example.org'
+    '1.2.3'
+)
+
+_r4_stage_writer() {   # _r4_stage_writer <writer> <n> <host-json-text>
+    local job; job="$(printf '%016x' "$((0x400 + $2))")"
+    case "$1" in
+        rsyslog)
+            fx_stage_raw syslog "{\"domain\":\"syslog\",\"job\":\"${job}\",\"requested_by\":\"t\",\"files\":{},\"settings\":{\"syslog_enabled\":\"true\",\"syslog_host\":\"$3\",\"syslog_port\":\"514\",\"syslog_protocol\":\"tcp\",\"syslog_app_id\":\"tm\"}}"
+            fx_helper syslog ;;
+        chrony|timesyncd)
+            fx_stage_raw time "{\"domain\":\"time\",\"job\":\"${job}\",\"requested_by\":\"t\",\"files\":{},\"settings\":{\"ntp_servers\":\"ntp1.example.org,$3\"}}"
+            fx_helper time ;;
+    esac
+}
+
+_r4_every_writer_refuses() {   # <required fragment> <who> <forbidden fragment> <host>...
+    local want="$1" who="$2" forbid="$3" writer host n=0 before
+    shift 3
+    for writer in rsyslog chrony timesyncd; do
+        fx_setup
+        case "$writer" in
+            chrony)    printf 'chrony.service\n' >> "${TM_TMP}/active" ;;
+            timesyncd) printf 'systemd-timesyncd.service\n' >> "${TM_TMP}/active" ;;
+        esac
+        before="$(fx_hash_managed)"
+        for host in "$@"; do
+            n=$((n+1))
+            _r4_stage_writer "$writer" "$n" "$host"
+            [ "$FX_RC" -ne 0 ] || _tm_afail "the ${writer} writer ACCEPTED ${host}"
+            tm_assert_eq "failed validate" "$(fx_field "d['state'] + ' ' + d['step']")" \
+                "${writer}: ${host} was not refused at validation: $(cat "$FX_RES")"
+            grep -qF "$want" "$FX_RES" || _tm_afail "${writer}: ${host} was refused, but not by ${who}: $(cat "$FX_RES")"
+            [ -z "$forbid" ] || ! grep -qF "$forbid" "$FX_RES" \
+                || _tm_afail "${writer}: ${host} got past ${who} and was only stopped later: $(cat "$FX_RES")"
+        done
+        tm_assert_eq "$before" "$(fx_hash_managed)" "a refused ${writer} request CHANGED the host"
+        grep -E '^(systemctl (restart|try-reload)|rsyslogd|chronyd|chronyc|nginx)' "${TM_TMP}/calls" \
+            && _tm_afail "a refused ${writer} request still ran a test or a reload"
+        [ ! -e "$FX/etc/chrony/sources.d/topic-manager.sources" ] \
+            || _tm_afail "chrony sources were written for a refused request"
+        [ ! -e "$FX/etc/systemd/timesyncd.conf.d/topic-manager.conf" ] \
+            || _tm_afail "a timesyncd drop-in was written for a refused request"
+    done
+    :
+}
+
+a_scope_ids_refused_by_every_writer() {
+    # The REAL shared rules: refused by settings_schema (the reason names the key).
+    _r4_every_writer_refuses "refused: " "the shared schema" "its own character rule" \
+        "${_R4_SYNTAX[@]}" "${_R4_STRICT[@]}"
+}
+tm_case "scope-ids-and-control-characters-are-refused-for-every-writer" "$REQ" a_scope_ids_refused_by_every_writer
+
+a_helper_rule_holds_without_the_schema() {
+    # The helper must not rely on the shared validator alone. Its lib/ here is a
+    # copy whose valid_host() accepts ANY non-empty string — the weakness
+    # sec-review found, made total — and every payload must still be refused,
+    # by the helper's OWN rule.
+    local weak="${TM_TMP}/weaklib"
+    mkdir -p "$weak"
+    cp "$(tm_py_root)/tm/settings_schema.py" "$(tm_py_root)/tm/tls_check.py" "$weak/"
+    printf '\n\ndef valid_host(value):\n    return isinstance(value, str) and bool(value)\n' >> "$weak/settings_schema.py"
+    # Prove the copy IS weak, or the case proves nothing.
+    PYTHONDONTWRITEBYTECODE=1 python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import settings_schema as s; sys.exit(0 if s.normalise('syslog_host', 'fe80::1%a\nb') else 1)" "$weak" \
+        || _tm_afail "the weakened schema copy still refuses a scope id: the case would pass for the wrong reason"
+    FX_LIB="$weak" _r4_every_writer_refuses "its own character rule, independent of the shared schema" \
+        "the helper's own rule" "" "${_R4_SYNTAX[@]}"
+}
+tm_case "the-helpers-own-rule-refuses-what-a-weak-schema-lets-through" "$REQ" a_helper_rule_holds_without_the_schema
+
+# ─── round 4 (sec-review TM-SEC-010): a ufw that cannot answer is NOT "inactive"
+a_ufw_status_failure_fails_closed() {
+    local before mode
+    for mode in fail garble; do
+        fx_setup
+        echo 80/tcp >> "${TM_TMP}/ufw.state"
+        : > "${TM_TMP}/${mode}.ufw"
+        before="$(fx_hash_managed)"
+        fx_stage nginx "${NGX/\"http_redirect_enabled\":\"true\"/\"http_redirect_enabled\":\"false\"}" >/dev/null
+        fx_helper nginx
+        tm_assert_eq "failed firewall" "$(fx_field "d['state'] + ' ' + d['step']")" \
+            "ufw status (${mode}) was read as a state: $(cat "$FX_RES")"
+        grep -q "The firewall state is unknown, so nothing was changed" "$FX_RES" \
+            || _tm_afail "the ${mode} refusal does not say the firewall state is unknown: $(cat "$FX_RES")"
+        grep -q "ufw is not active" "$FX_RES" && _tm_afail "an unreadable ufw was reported as not active"
+        tm_assert_eq "$before" "$(fx_hash_managed)" "a failed ufw status (${mode}) still changed the host"
+        grep -E '^(ufw (allow|delete)|systemctl try-reload)' "${TM_TMP}/calls" \
+            && _tm_afail "the firewall or nginx was changed after ufw status failed (${mode})"
+    done
+    # No ufw on the host at all is a state, and it is said plainly.
+    fx_setup
+    rm -f "${FXBIN}/ufw"
+    fx_stage nginx "${NGX/\"http_redirect_enabled\":\"true\"/\"http_redirect_enabled\":\"false\"}" >/dev/null
+    fx_helper nginx
+    tm_assert_eq "ok" "$(fx_field "d['state']")" "a host without ufw could not apply: $(cat "$FX_RES")"
+    grep -q "ufw is not installed: no firewall rule was changed" "$FX_RES" \
+        || _tm_afail "a host without ufw is not reported as such: $(cat "$FX_RES")"
+}
+tm_case "an-unreadable-ufw-fails-the-apply-closed" "$REQ" a_ufw_status_failure_fails_closed
+
+# ─── round 4 (adversary F-07): the detail says what is TRUE of port 80
+a_ufw_detail_is_true() {
+    fx_setup
+    printf '80/tcp\nNginx Full\n' >> "${TM_TMP}/ufw.state"
+    fx_stage nginx "${NGX/\"http_redirect_enabled\":\"true\"/\"http_redirect_enabled\":\"false\"}" >/dev/null
+    fx_helper nginx
+    tm_assert_eq "ok" "$(fx_field "d['state']")" "state: $(cat "$FX_RES")"
+    local details; details="$(fx_field "'|'.join(d['details'])")"
+    case "$details" in
+        *"ufw 80/tcp closed"*) _tm_afail "the result claims port 80 is closed while Nginx Full still admits it: ${details}" ;;
+    esac
+    case "$details" in
+        *"ufw rule 80/tcp removed, but port 80 is STILL OPEN through: Nginx Full"*) ;;
+        *) _tm_afail "the result does not say port 80 is still open, or through what: ${details}" ;;
+    esac
+    # And with nothing else admitting 80 it IS closed, and says so.
+    fx_setup
+    echo 80/tcp >> "${TM_TMP}/ufw.state"
+    fx_stage nginx "${NGX/\"http_redirect_enabled\":\"true\"/\"http_redirect_enabled\":\"false\"}" >/dev/null
+    fx_helper nginx
+    details="$(fx_field "'|'.join(d['details'])")"
+    case "$details" in *"ufw 80/tcp closed"*) ;; *) _tm_afail "a truly closed port 80 is not reported closed: ${details}" ;; esac
+    case "$details" in *"STILL OPEN"*) _tm_afail "port 80 reported open with no other rule: ${details}" ;; esac
+}
+tm_case "the-firewall-detail-says-what-is-true-of-port-80" "$REQ" a_ufw_detail_is_true
+
 a_injection_refused() {
     fx_setup
     local before job payload bad n=0

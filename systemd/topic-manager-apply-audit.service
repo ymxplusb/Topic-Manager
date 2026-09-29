@@ -1,0 +1,32 @@
+[Unit]
+Description=Jarvis Topic Manager — audit finished "Apply to host" results
+Documentation=file:/opt/topic-manager/tm/apply.py
+
+# Started by topic-manager-apply-audit.path whenever the root apply helper
+# writes a result. Records SYSTEM_APPLY_RESULT (and TLS_CERT_REPLACED) once per
+# finished job — the claim is a single conditional UPSERT, so this, the four
+# gunicorn workers and the prune can never record one job twice. Runs as the
+# service account with the service's sandbox; it only READS /run and writes
+# tm.db. UMask=0077 here as in the prune unit: a oneshot does not inherit
+# topic-manager.service's.
+
+[Service]
+Type=oneshot
+User=topic-manager
+Group=topic-manager
+UMask=0077
+WorkingDirectory=/opt/topic-manager
+Environment="TM_CONFIG=/etc/topic-manager/config.yaml"
+Environment="TM_CLUSTERS_DIR=/etc/topic-manager/clusters.d"
+Environment="TM_CLUSTER_CERT_DIR=/opt/topic-manager/data/cluster-certs"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+ExecStart=/opt/topic-manager/venv/bin/python3 -m tm.apply audit
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=topic-manager-apply-audit
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/topic-manager/data

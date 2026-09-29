@@ -74,9 +74,16 @@ _INT_RANGES = {
 _BOOL_KEYS = ('syslog_enabled', 'http_redirect_enabled')
 SYSLOG_PROTOCOLS = ('udp', 'tcp', 'tls')
 
-_HOSTNAME_RE = re.compile(r'^[A-Za-z0-9.-]{1,253}$')
-_APP_ID_RE = re.compile(r'^[A-Za-z0-9._-]{1,48}$')
-_INT_RE = re.compile(r'^[0-9]{1,9}$')
+#: One RFC 1123 label: 1-63 letters, digits and hyphens, not starting or
+#: ending with a hyphen. fullmatch() only: `$` also matches before a trailing
+#: newline, which is exactly the character this rule exists to keep out.
+_LABEL_RE = re.compile(r'[A-Za-z\d](?:[A-Za-z\d-]{0,61}[A-Za-z\d])?', re.ASCII)
+#: The only characters an IP literal may be written with here. No '%': an
+#: IPv6 scope id ("fe80::1%eth0") is free text to ipaddress — it accepted
+#: "fe80::1%a\nb", and the newline then reached rsyslog and chrony as root.
+_IP_CHARS_RE = re.compile(r'[\dA-Fa-f:.]{2,45}', re.ASCII)
+_APP_ID_RE = re.compile(r'[\w.-]{1,48}', re.ASCII)
+_INT_RE = re.compile(r'\d{1,9}', re.ASCII)
 MAX_NTP_SERVERS = 5
 
 
@@ -90,18 +97,36 @@ class InvalidSetting(ValueError):
 
 def valid_host(value):
     """A host name or an IP literal, and nothing a config file could read as
-    syntax. The contract's charset (letters, digits, '.', '-') for a name; an
-    IPv4/IPv6 literal through ipaddress. A leading '-' or '.' is refused on
-    top of the contract: no host name starts with either, and '-x' reads as an
-    option to more than one tool the root helper runs."""
-    if not isinstance(value, str) or not value:
+    syntax. These values are rendered by the ROOT helper into rsyslog, chrony
+    and timesyncd files, so the rule is a whitelist of characters first and a
+    parse second:
+      * an IP literal is written with 0-9 A-F a-f ':' '.' only and must parse
+        as IPv4 or IPv6 WITHOUT a scope id;
+      * anything else is a strict RFC 1123 host name: dot-separated labels of
+        1-63 letters, digits and hyphens, no label starting or ending with a
+        hyphen (so no '-x' that a tool reads as an option), no empty label
+        (so no leading, trailing or doubled dot), 253 characters at most, and
+        a last label that is not all digits (that is a malformed IPv4
+        address, not a name).
+    No whitespace, control character, '%', quote, brace or semicolon can pass
+    either branch."""
+    if not isinstance(value, str) or not value or len(value) > 253:
+        return False
+    if ':' in value or value.replace('.', '').isdigit():
+        # A name never has a ':' and never is all digits and dots.
+        return _valid_ip_literal(value)
+    labels = value.split('.')
+    return all(_LABEL_RE.fullmatch(label) for label in labels) and not labels[-1].isdigit()
+
+
+def _valid_ip_literal(value):
+    if not _IP_CHARS_RE.fullmatch(value):
         return False
     try:
-        ipaddress.ip_address(value)
-        return True
+        addr = ipaddress.ip_address(value)
     except ValueError:
-        pass
-    return bool(_HOSTNAME_RE.match(value)) and value[0] not in '-.'
+        return False
+    return getattr(addr, 'scope_id', None) is None
 
 
 def _as_text(key, value):
@@ -149,7 +174,7 @@ def _norm_bool(key, text):
 
 def _norm_int(key, text):
     lo, hi = _INT_RANGES[key]
-    if not _INT_RE.match(text):
+    if not _INT_RE.fullmatch(text):
         raise InvalidSetting(key, 'must be a whole number from %d to %d' % (lo, hi))
     n = int(text)
     if not lo <= n <= hi:
@@ -164,7 +189,7 @@ def _norm_protocol(key, text):
 
 
 def _norm_app_id(key, text):
-    if not _APP_ID_RE.match(text):
+    if not _APP_ID_RE.fullmatch(text):
         raise InvalidSetting(key, '1-48 characters from A-Z a-z 0-9 . _ -')
     return text
 
@@ -188,7 +213,7 @@ def _norm_ntp(key, text):
         if not valid_host(s):
             raise InvalidSetting(key, '%r is not a host name or IP address'
                                  % s[:64])
-    if len(set(s.lower() for s in servers)) != len(servers):
+    if len({s.lower() for s in servers}) != len(servers):
         raise InvalidSetting(key, 'a server is listed twice')
     return ','.join(servers)
 

@@ -8,8 +8,9 @@
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 server:
-  host: 127.0.0.1
-  port: 5001
+  # No host or port: gunicorn listens only on the Unix socket systemd creates
+  # for nginx (/run/topic-manager/gunicorn.sock, systemd/topic-manager.socket).
+  # A host:/port: left here by an older release is ignored.
   # Generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
   secret_key: "CHANGE_ME_GENERATE_A_RANDOM_SECRET"
 

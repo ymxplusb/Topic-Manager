@@ -94,8 +94,10 @@ a_server_level_limits() {
     done
     grep -qE '^\s*listen\s+80\b' "$SITE" && _tm_afail "the main site still listens on :80 — the redirect toggle cannot remove it"
     grep -qE '^\s*listen\s+80;' "${TM_REPO_ROOT}/nginx/topic-manager-http.conf" || _tm_afail "the :80 site has no listener"
-    grep -q 'return 301 https://\$host\$request_uri;' "${TM_REPO_ROOT}/nginx/topic-manager-http.conf" \
-        || _tm_afail "the :80 site does not redirect to HTTPS"
+    grep -qE '^\s*return 301 https://\$server_name\$request_uri;' "${TM_REPO_ROOT}/nginx/topic-manager-http.conf" \
+        || _tm_afail "the :80 site does not redirect to the CONFIGURED name over HTTPS"
+    grep -qE '^[[:space:]]*return[^;]*[$](http_)?host' "${TM_REPO_ROOT}/nginx/topic-manager-http.conf" \
+        && _tm_afail "the :80 redirect copies the client's Host header (open redirect, CWE-601)"
     grep -q '"code":"rate_limited"' "$SITE" || _tm_afail "the JSON 429 has no code to tell it from the app's own 429"
     grep -qE 'client_body_buffer_size\s+1m;' "$SITE" || _tm_afail "an API body can spill to nginx's temp dir (a TLS key would)"
 }
@@ -117,6 +119,38 @@ a_real_nginx_t() {
     true
 }
 tm_case "the-shipped-site-passes-the-real-nginx-t" "linux,chown" a_real_nginx_t
+
+# Round 4 (sec-review TM-SEC-005, CWE-601): the REAL :80 site, served by the
+# REAL nginx on a loopback port, asked with a hostile Host header. The
+# redirect must name the configured server, whatever the client says.
+a_redirect_ignores_the_client_host() {
+    local ngx; ngx="$(command -v nginx 2>/dev/null || true)"
+    [ -x /usr/sbin/nginx ] && ngx=/usr/sbin/nginx
+    [ -n "$ngx" ] || _tm_afail "no real nginx here"
+    local port=18080 d="${TM_TMP}/redir" loc
+    mkdir -p "$d"
+    sed -e "s/^\([[:space:]]*\)listen 80;/\1listen 127.0.0.1:${port};/" \
+        -e 's/YOUR-HOSTNAME.YOUR-DOMAIN.com/tm.example.org/' \
+        "${TM_REPO_ROOT}/nginx/topic-manager-http.conf" > "$d/site.conf"
+    grep -q "listen 127.0.0.1:${port};" "$d/site.conf" || _tm_afail "the :80 site's listen line moved; the case cannot relocate it"
+    cat > "$d/nginx.conf" <<NGX
+pid ${d}/nginx.pid;
+error_log ${d}/error.log;
+events {}
+http {
+    access_log off;
+    client_body_temp_path ${d}/body; proxy_temp_path ${d}/proxy; fastcgi_temp_path ${d}/fcgi;
+    uwsgi_temp_path ${d}/uwsgi; scgi_temp_path ${d}/scgi;
+    include ${d}/site.conf;
+}
+NGX
+    "$ngx" -c "$d/nginx.conf" -p "$d" > "$d/start.out" 2>&1 || _tm_afail "nginx would not start: $(cat "$d/start.out" "$d/error.log" 2>/dev/null)"
+    loc="$(curl -s -o /dev/null -w '%{redirect_url}' -H 'Host: evil.example' "http://127.0.0.1:${port}/api/health?x=1")"
+    "$ngx" -c "$d/nginx.conf" -p "$d" -s stop >/dev/null 2>&1 || kill "$(cat "$d/nginx.pid" 2>/dev/null)" 2>/dev/null
+    tm_assert_eq "https://tm.example.org/api/health?x=1" "$loc" \
+        "the :80 redirect followed the client's Host header instead of the configured name"
+}
+tm_case "the-http-redirect-names-the-configured-host-not-the-clients" "linux" a_redirect_ignores_the_client_host
 
 _loginview() {   # _loginview <status> <content-type> <body> -> the error the page shows
     local js

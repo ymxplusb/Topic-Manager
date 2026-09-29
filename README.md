@@ -482,7 +482,8 @@ apply, a sign-in — the audit database is proved writable (a real write transac
 enough free space). If it is not, the response is `503 {"error": "audit_unavailable"}`,
 nothing happens, and `AUDIT_WRITE_FAILED` goes to syslog at CRIT carrying the whole record.
 Sign-out is never blocked. If the database fails AFTER a change, the response says the
-change **was** made and the record went to syslog.
+change **was** made and where the record went: the host syslog when it accepted it, or —
+when it did not — only the service log, and the response says which.
 
 **Session limit precedence** (owner ruling): Settings wins. `session.max_concurrent` in
 `config.yaml` only seeds the setting the first time the service starts on a database that

@@ -68,9 +68,12 @@ exit 0"
     _fx_stub ufw "
 st=\$(cat '${T}/ufw.state')
 case \"\$1\" in
-  status) printf '%s\n\nTo                         Action      From\n--                         ------      ----\n' \"\$(head -1 '${T}/ufw.state')\"
+  status) [ -f '${T}/fail.ufw' ] && { echo 'ERROR: problem running iptables: stub-injected'; exit 1; }
+          [ -f '${T}/garble.ufw' ] && { echo 'something that is not a status'; exit 0; }
+          printf '%s\n\nTo                         Action      From\n--                         ------      ----\n' \"\$(head -1 '${T}/ufw.state')\"
           grep -q '^80/tcp' '${T}/ufw.state' && printf '80/tcp                     ALLOW       Anywhere\n'
           grep -q '^443/tcp' '${T}/ufw.state' && printf '443/tcp                    ALLOW       Anywhere\n'
+          grep -q '^Nginx Full' '${T}/ufw.state' && printf 'Nginx Full                 ALLOW       Anywhere\n'
           exit 0 ;;
   allow) [ \"\$2\" = 80/tcp ] && { grep -q '^80/tcp' '${T}/ufw.state' || echo 80/tcp >> '${T}/ufw.state'; echo 'Rule added'; exit 0; } ;;
   delete) [ \"\$2 \$3\" = 'allow 80/tcp' ] && { sed -i '/^80\/tcp/d' '${T}/ufw.state'; echo 'Rule deleted'; exit 0; } ;;
@@ -142,7 +145,7 @@ fx_helper() {   # fx_helper <domain> — run the helper; RC and the result in $F
     # FX_RC and FX_RES are read by the calling case.
     local rc=0
     python3 -I "$(tm_apply_helper)" "$1" --root "$FX" --bin "$FXBIN" \
-        --lib "$(tm_py_root)/tm" --svc-user "$FX_SVC_USER" > "${TM_TMP}/helper.out" 2>&1 || rc=$?
+        --lib "${FX_LIB:-$(tm_py_root)/tm}" --svc-user "$FX_SVC_USER" > "${TM_TMP}/helper.out" 2>&1 || rc=$?
     export FX_RC="$rc"
     FX_RES="${FX}/run/topic-manager-apply/$1.result"
 }

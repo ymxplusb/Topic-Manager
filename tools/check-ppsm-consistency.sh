@@ -111,7 +111,12 @@ PINNED = [
     ("Web",     "443",  "TCP",     "Inbound",  ""),
     ("Web",     "80",   "TCP",     "Inbound",  "Enabled by applied http_redirect_enabled"),
     ("Admin",   "22",   "TCP",     "Inbound",  ""),
-    ("App",     "5001", "TCP",     "Loopback", ""),
+    # v1.2.0: gunicorn has no TCP port; nginx reaches it over a Unix socket.
+    ("App",     "N/A (Unix socket)", "Unix stream", "Local", "/run/topic-manager/gunicorn.sock"),
+    # Host services on the port list a scan shows (clean-room, 2026-09-29).
+    ("Host",    "25",   "TCP",     "Loopback", "Not used by the application"),
+    ("Host",    "323",  "UDP",     "Loopback", "chronyc"),
+    ("Host",    "ephemeral (32768-60999)", "UDP", "Outbound", "rsyslog UDP sender sockets"),
     ("Auth",    "636",  "TCP",     "Outbound", ""),
     ("Infra",   "53",   "UDP/TCP", "Outbound", ""),
     ("Infra",   "123",  "UDP",     "Outbound", "Time synchronisation"),
@@ -133,6 +138,9 @@ for sec, port, proto, d, t in PINNED:
 if not any(r[0] == "Kafka" and r[3] == "TCP" and r[4] == "Outbound" and "operator-defined" in r[2] for r in s_cmp):
     fail += 1
     print("FAIL: the Kafka broker row is not TCP outbound at operator-defined ports")
+if any("5001" in r[2] for r in s_cmp):
+    fail += 1
+    print("FAIL: a 5001 row is listed; gunicorn listens on a Unix socket since v1.2.0")
 if any(r[2] == "389" for r in s_cmp):
     fail += 1
     print("FAIL: an LDAP 389 row is listed; the product does not use plain LDAP")

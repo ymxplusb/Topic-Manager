@@ -100,15 +100,61 @@ fail()    { die "$*"; }
 # $CERT_DIR's parent (/opt/topic-manager/data) is app-owned and inside the
 # unit's ReadWritePaths, so the application can replace cluster-certs with a
 # symlink to anything and have root apply an owner and a mode to the target on
-# the next reinstall. Refuse BEFORE the call, so the mutation cannot happen —
-# detecting it afterwards is reporting a chown that already ran.
+# the next reinstall. It is REFUSED, never
+# detected afterwards (that would be reporting a chown that already ran), and
+# never by a path check followed by install -d (round 4: see below).
 safe_install_dir() {   # safe_install_dir <mode> <owner> <group> <path>
-    local m="$1" o="$2" g="$3" p="$4"
-    [[ -L "$p" ]] && fail "${p} is a symlink; refusing to apply ownership through it.
-     install -d would chmod and chown whatever it points at. Remove it, or put
-     the real directory back, and run again."
-    [[ -e "$p" && ! -d "$p" ]] && fail "${p} exists and is not a directory."
-    install -d -m "$m" -o "$o" -g "$g" "$p"
+    # THROUGH FILE DESCRIPTORS (round 4, sec-review TM-SEC-002, CWE-367). The
+    # old guard checked [[ -L ]] and then ran install -d, which resolves the
+    # path AGAIN and chmods/chowns whatever is there by then: a window in
+    # which the service account (it owns ${APP_HOME}) could swap the
+    # directory, or any directory ABOVE it, for a symlink. Here every
+    # component from / is opened relative to its parent's descriptor with
+    # O_NOFOLLOW, and fchown/fchmod act on the descriptor that was opened, so
+    # nothing is resolved twice. A symlink is followed ONLY where root alone
+    # could have put it (a parent owned by root and writable by nobody else);
+    # anywhere else, and as the last component always, it is refused.
+    if ! python3 - "$@" <<'PYSID'
+import errno, grp, os, pwd, stat, sys
+mode, owner, group, path = int(sys.argv[1], 8), sys.argv[2], sys.argv[3], sys.argv[4]
+parts = [c for c in path.split("/") if c]
+if not path.startswith("/") or not parts or ".." in parts:
+    sys.exit("%s is not an absolute path free of '..'; refusing." % path)
+D = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+fd = os.open("/", D)
+for i, name in enumerate(parts):
+    here, last = "/" + "/".join(parts[:i + 1]), i == len(parts) - 1
+    try:
+        st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    except FileNotFoundError:
+        os.mkdir(name, 0o700 if last else 0o755, dir_fd=fd)
+        st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    flags = D | os.O_NOFOLLOW
+    if stat.S_ISLNK(st.st_mode):
+        parent = os.fstat(fd)
+        if last or parent.st_uid != 0 or parent.st_mode & 0o022:
+            sys.exit("%s is a symlink; refusing to apply ownership through it. install -d "
+                     "would chmod and chown whatever it points at. Remove it, or put the real "
+                     "directory back, and run again." % here)
+        flags = D
+    elif not stat.S_ISDIR(st.st_mode):
+        sys.exit("%s exists and is not a directory." % here)
+    try:
+        nfd = os.open(name, flags, dir_fd=fd)
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+            sys.exit("%s is a symlink or not a directory now (it changed while it was being "
+                     "opened); refusing to apply ownership through it." % here)
+        raise
+    os.close(fd)
+    fd = nfd
+os.fchown(fd, pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid)
+os.fchmod(fd, mode)
+os.close(fd)
+PYSID
+    then
+        fail "Could not create ${4} safely (the line above says why). Nothing was chowned or chmodded through a link."
+    fi
 }
 
 # enforce_audit_db_modes — the audit database is private to the service
@@ -808,6 +854,26 @@ if ! id "$APP_USER" &>/dev/null; then
     success "Created system user: ${APP_USER}"
 fi
 
+# ─── a reinstall stops the service FIRST ───────────────────────────────────
+# Round 4 (sec-review TM-SEC-002, CWE-367): BEFORE root creates, chowns or
+# chmods anything the service account can write. The directories below sit
+# under ${APP_HOME}, which that account owns, and a running (or compromised)
+# service could swap one for a symlink between a check and the change. The
+# socket is stopped too: a connection to it would start the service again
+# (socket activation). safe_install_dir below does not trust a path either —
+# this only shrinks what could be racing it to nothing.
+stop_for_reinstall() {
+    local u
+    for u in "${SERVICE_NAME}.service" "${SERVICE_NAME}.socket" \
+             topic-manager-audit-prune.timer topic-manager-apply-audit.path; do
+        if systemctl is-active --quiet "$u" 2>/dev/null; then
+            info "Stopping ${u} for the reinstall (it is started again at the end) ..."
+            systemctl stop "$u"
+        fi
+    done
+}
+stop_for_reinstall
+
 # ─── directories ─────────────────────────────────────────────────────────────
 info "Creating application directories..."
 safe_install_dir 750 "$APP_USER" "$APP_USER" "$APP_HOME"
@@ -868,13 +934,9 @@ deactivate
 success "Python environment ready"
 
 # ─── backend ─────────────────────────────────────────────────────────────────
-# A reinstall stops the running service first (round 2, sec-review): the
-# audit database is re-moded below, and a live service could create or swap a
-# -wal file between the check and the change.
-if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
-    info "Stopping ${SERVICE_NAME} for the reinstall (it is started again at the end) ..."
-    systemctl stop "${SERVICE_NAME}"
-fi
+# The service is already stopped (stop_for_reinstall, before the directories):
+# the audit database is re-moded below, and a live service could create or
+# swap a -wal file between the check and the change (round 2, sec-review).
 info "Installing backend (tm/)..."
 rsync -a --delete "${SCRIPT_DIR}/tm/" "${APP_HOME}/tm/"
 chown -R "$APP_USER:$APP_USER" "${APP_HOME}/tm"
@@ -1057,6 +1119,11 @@ info "Installing systemd service..."
 install -m 644 -o root -g root \
     "${SCRIPT_DIR}/systemd/topic-manager.service" \
     /etc/systemd/system/topic-manager.service
+# v1.2.0: gunicorn's only listener, a Unix socket systemd creates 0660
+# topic-manager:www-data (no TCP port; the unit says why systemd owns it).
+install -m 644 -o root -g root \
+    "${SCRIPT_DIR}/systemd/topic-manager.socket" \
+    /etc/systemd/system/topic-manager.socket
 # The root-side `nginx -t` gate for the Settings restart control. Never
 # enabled, only started on demand; the unit says why it has to be root.
 install -m 644 -o root -g root \
@@ -1066,12 +1133,13 @@ install -m 644 -o root -g root \
 # polkit, never enabled) and the daily audit prune (the service account).
 for u in topic-manager-apply-syslog.service topic-manager-apply-time.service \
          topic-manager-apply-nginx.service topic-manager-apply-tls.service \
-         topic-manager-audit-prune.service topic-manager-audit-prune.timer; do
+         topic-manager-audit-prune.service topic-manager-audit-prune.timer \
+         topic-manager-apply-audit.service topic-manager-apply-audit.path; do
     install -m 644 -o root -g root "${SCRIPT_DIR}/systemd/${u}" "/etc/systemd/system/${u}"
 done
 systemctl daemon-reload
-systemctl enable "${SERVICE_NAME}" --quiet
-success "Service installed: ${SERVICE_NAME} (+ 4 apply units, audit prune timer)"
+systemctl enable "${SERVICE_NAME}.socket" "${SERVICE_NAME}" --quiet
+success "Service installed: ${SERVICE_NAME} on /run/topic-manager/gunicorn.sock (+ 4 apply units, apply-result audit, audit prune timer)"
 
 # ─── the root apply helper (v1.2.0) ─────────────────────────────────────────
 # root:root, and nothing under it writable by anyone else: the helper runs as
@@ -1291,6 +1359,7 @@ success "Permission boundary verified: the app owns clusters.d and cannot write 
 # and nginx has a certificate, so there is nothing left for an operator to
 # fill in before it can start.
 info "Starting ${SERVICE_NAME} and nginx ..."
+systemctl start "${SERVICE_NAME}.socket"
 systemctl restart "${SERVICE_NAME}"
 systemctl enable nginx --quiet
 systemctl reload-or-restart nginx
@@ -1340,6 +1409,10 @@ apply_saved_settings() {
      (each failed domain was rolled back by the helper; its message is above).
      See: journalctl -u topic-manager-apply-<domain> and TROUBLESHOOTING.md -> Apply to host."
 }
+# Every finished apply is audited the moment its verdict lands, whether or not
+# a browser is polling (adversary F-03) — enabled before the first apply.
+systemctl enable --now topic-manager-apply-audit.path --quiet \
+    || warn "topic-manager-apply-audit.path could not be enabled: apply results are audited only when polled, at service start and by the daily prune. Run: systemctl enable --now topic-manager-apply-audit.path"
 apply_saved_settings
 systemctl enable --now topic-manager-audit-prune.timer --quiet \
     || warn "The audit prune timer could not be enabled: systemctl enable --now topic-manager-audit-prune.timer"

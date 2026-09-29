@@ -196,14 +196,14 @@ def check_closure(locked, deps):
         specs = deps(name, version)
         if not specs:
             continue
-        Requirement, Version = _packaging()
+        requirement_cls, version_cls = _packaging()
         extras = wanted_extras.get(name, set()) | {''}
         for spec in specs:
-            r = Requirement(spec)
+            r = requirement_cls(spec)
             if not _applies_to_target(r, extras):
                 continue
             dep = lockparse.norm(r.name)
-            problem = _closure_problem(r, dep, locked, Version, '%s==%s' % (name, version), spec)
+            problem = _closure_problem(r, dep, locked, version_cls, '%s==%s' % (name, version), spec)
             if problem:
                 problems.append(problem)
             wanted_extras.setdefault(dep, set()).update(r.extras)
@@ -229,12 +229,12 @@ def _applies_to_target(r, extras):
         r.marker.evaluate(dict(TARGET_ENV, extra=e)) for e in extras)
 
 
-def _closure_problem(r, dep, locked, Version, requirer, spec):
+def _closure_problem(r, dep, locked, version_cls, requirer, spec):
     """The problem one applicable requirement makes of the lock, or None."""
     if dep not in locked:
         return ('MISSING from requirements.lock: %s (%s requires %s)'
                 % (dep, requirer, spec))
-    if r.specifier and not r.specifier.contains(Version(locked[dep]), prereleases=True):
+    if r.specifier and not r.specifier.contains(version_cls(locked[dep]), prereleases=True):
         return ('INCOMPATIBLE: %s==%s is locked, but %s requires %s'
                 % (dep, locked[dep], requirer, spec))
     return None

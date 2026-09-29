@@ -212,6 +212,10 @@ def main(argv=None):
     from .config import load_config
     cfg = load_config(args.config)
     init_db(cfg)
+    # Belt to the apply-audit .path unit's braces: a finished apply that no
+    # event recorded is recorded here, daily, before anything is pruned.
+    from .apply import audit_all_results
+    audit_all_results(cfg)
     try:
         res = prune(cfg)
     except Exception as exc:

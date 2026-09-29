@@ -137,6 +137,63 @@ s_refuses_a_plain_file() {
 }
 tm_case "a-path-that-is-not-a-directory-is-refused" none s_refuses_a_plain_file
 
+# ─── round 4 (sec-review TM-SEC-002, CWE-367): no path is resolved twice ─────
+# The old guard was `[[ -L "$p" ]]` and then `install -d "$p"`: two separate
+# resolutions of the same name, and only the LAST component was ever checked.
+# A symlink one level up — the service account owns ${APP_HOME}, so it can
+# replace data/ itself — was followed by install -d without a word.
+s_intermediate_symlink_refused() {
+    local f script
+    for f in "$UP" "$INSTALL_SH"; do
+        _prep
+        script="$TM_TMP/up.sh"; [ "$f" = "$INSTALL_SH" ] && script="$TM_TMP/install.sh"
+        # A parent anyone may write (as the service account may write its
+        # own tree): a link placed in it is exactly the kind root must not
+        # follow — whoever runs the suite, root included.
+        chmod 777 "$TM_TMP/w"
+        ln -s "$TARGET" "$TM_TMP/w/parentlink" 2>/dev/null || tm_die "this filesystem will not create symlinks"
+        _do "$script" 777 "$(_owner_now)" "$(_group_now)" "$TM_TMP/w/parentlink/child"
+        tm_assert_ne 0 "$RC" "$(basename "$f") created a directory THROUGH a symlinked parent"
+        tm_assert_grep "is a symlink" "$TM_TMP/out" "$(basename "$f"): the refusal did not say why"
+        tm_assert_nofile "$TARGET/child" "$(basename "$f") created the child inside the symlink's target"
+        tm_assert_mode 700 "$TARGET" "$(basename "$f") changed the mode of the symlink's target"
+    done
+}
+tm_case "a-symlinked-parent-is-refused-and-nothing-is-created-through-it" symlinks,modes s_intermediate_symlink_refused
+
+s_no_path_is_resolved_twice() {
+    local f body base
+    for f in "$INSTALL_SH" "$UP"; do
+        base="$(basename "$f")"
+        body="$(tm_extract_func "$f" safe_install_dir)"
+        grep -qE '^[[:space:]]*install -d' <<<"$body" \
+            && _tm_afail "${base}: safe_install_dir still ends in install -d, which resolves the path a second time"
+        grep -q 'O_NOFOLLOW' <<<"$body" || _tm_afail "${base}: safe_install_dir does not open with O_NOFOLLOW"
+        grep -q 'dir_fd=fd' <<<"$body" || _tm_afail "${base}: safe_install_dir does not walk relative to the parent's descriptor"
+        grep -q 'os.fchown(fd' <<<"$body" || _tm_afail "${base}: ownership is not applied to the opened descriptor"
+        grep -q 'os.fchmod(fd' <<<"$body" || _tm_afail "${base}: the mode is not applied to the opened descriptor"
+    done
+    # The two copies are one rule.
+    cmp -s <(tm_extract_func "$INSTALL_SH" safe_install_dir) <(tm_extract_func "$UP" safe_install_dir) \
+        || _tm_afail "safe_install_dir differs between install.sh and the upgrade"
+}
+tm_case "safe-install-dir-acts-on-descriptors-in-both-scripts" none s_no_path_is_resolved_twice
+
+s_reinstall_stops_before_directories() {
+    # The service (and its socket, which would start it again) is stopped
+    # BEFORE root touches a directory the service account can write.
+    local stop first
+    stop="$(grep -n -m1 '^stop_for_reinstall$' "$INSTALL_SH" | cut -d: -f1)"
+    first="$(grep -n -m1 '^safe_install_dir [0-7]' "$INSTALL_SH" | cut -d: -f1)"
+    [ -n "$stop" ] || _tm_afail "install.sh never calls stop_for_reinstall"
+    [ -n "$first" ] || _tm_afail "install.sh creates no directory through safe_install_dir"
+    [ "$stop" -lt "$first" ] || _tm_afail "install.sh stops the service only AFTER creating the app-writable directories (line ${stop} vs ${first})"
+    local fn; fn="$(tm_extract_func "$INSTALL_SH" stop_for_reinstall)"
+    grep -q '"${SERVICE_NAME}.service"' <<<"$fn" || _tm_afail "stop_for_reinstall does not stop the service"
+    grep -q '"${SERVICE_NAME}.socket"' <<<"$fn" || _tm_afail "stop_for_reinstall leaves the socket up (a connection would restart the service)"
+}
+tm_case "a-reinstall-stops-the-service-before-any-directory-work" none s_reinstall_stops_before_directories
+
 # ─── the guard is actually ON the paths that need it ─────────────────────────
 # The cases above prove the guard works. This one proves it is REACHED. The two
 # directories below are the ones the application itself can influence — it OWNS

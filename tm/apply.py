@@ -26,6 +26,9 @@ saved in tm.db (run as the service account):
     python -m tm.apply stage all --by installer
     python -m tm.apply seed syslog_host=logs.example.org ...
     python -m tm.apply get http_redirect_enabled
+and topic-manager-apply-audit.service's way to record a finished apply the
+moment its result appears, with no browser involved:
+    python -m tm.apply audit
 
 Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 """
@@ -121,7 +124,7 @@ def _read_json(path, limit=STAGE_MAX_BYTES):
         return None
     try:
         doc = json.loads(data.decode('utf-8'))
-    except (ValueError, UnicodeDecodeError):
+    except ValueError:          # UnicodeDecodeError is a ValueError
         return None
     return doc if isinstance(doc, dict) else None
 
@@ -401,11 +404,19 @@ def audit_result(cfg, domain):
 
 
 def audit_all_results(cfg):
+    """Record every finished result not yet recorded, whoever is polling —
+    or nobody (adversary F-03). Run by topic-manager-apply-audit.service the
+    moment the helper writes a result (a .path unit watches the run
+    directory), at every service start (tm/app.py), and by the daily prune.
+    Returns the domains recorded now."""
+    done = []
     for d in STATUS_DOMAINS:
         try:
-            audit_result(cfg, d)
+            if audit_result(cfg, d):
+                done.append(d)
         except Exception:
             log.exception('apply result audit for %s failed', d)
+    return done
 
 
 # ── CLI: the installer and the upgrade, running as the service account ───────
@@ -476,6 +487,7 @@ def main(argv=None):
     s3.add_argument('key')
     s4 = sub.add_parser('result')
     s4.add_argument('domain', choices=STATUS_DOMAINS)
+    sub.add_parser('audit', help='record every finished apply result not yet audited')
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format='%(levelname)s %(message)s')
     from .config import load_config
@@ -497,6 +509,10 @@ def main(argv=None):
     if args.cmd == 'result':
         audit_result(cfg, args.domain)
         print(json.dumps(status(cfg, args.domain)))
+        return 0
+    if args.cmd == 'audit':
+        done = audit_all_results(cfg)
+        print('audited: %s' % (', '.join(done) or 'nothing new'))
         return 0
     return 2
 

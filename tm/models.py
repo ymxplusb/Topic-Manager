@@ -104,12 +104,30 @@ def init_db(cfg):
         )
     ''')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user)')
+    _fold_session_users(cur)
     # v1.2.0: retention prunes by age (tm/audit_retention.py). Without an index
     # on ts every prune and every capacity read is a full scan of a table that
     # is allowed to hold five million rows by default.
     cur.execute('CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)')
     db.commit()
     db.close()
+
+
+def session_user_key(username):
+    """The ONE form a user name takes in the sessions table: lower-case
+    (tm/auth._normalise_sam). Every writer and every lookup goes through it,
+    so "Alice" and "alice" share one concurrent-session count."""
+    return str(username).lower()
+
+
+def _fold_session_users(cur):
+    """v1.2.0 migration: session rows written before user names were
+    lower-cased. Done in Python because SQLite's lower() folds ASCII only."""
+    rows = cur.execute('SELECT DISTINCT user FROM sessions').fetchall()
+    for (user,) in rows:
+        if user != session_user_key(user):
+            cur.execute('UPDATE sessions SET user = ? WHERE user = ?',
+                        (session_user_key(user), user))
 
 
 # ── session helpers ───────────────────────────────────────────────
@@ -127,7 +145,7 @@ def create_session(db, username, timeout_minutes, ip_addr=''):
     expires = now + timedelta(minutes=timeout_minutes)
     db.execute(
         'INSERT INTO sessions (id, user, created_at, last_seen, expires_at, ip_addr) VALUES (?,?,?,?,?,?)',
-        (sid, username, _iso(now), _iso(now), _iso(expires), ip_addr or '')
+        (sid, session_user_key(username), _iso(now), _iso(now), _iso(expires), ip_addr or '')
     )
     db.commit()
     return sid
@@ -161,7 +179,7 @@ def delete_session(db, sid):
 def count_active_sessions(db, username):
     row = db.execute(
         'SELECT COUNT(*) FROM sessions WHERE user=? AND expires_at > ?',
-        (username, _iso(_now()))
+        (session_user_key(username), _iso(_now()))
     ).fetchone()
     return row[0] if row else 0
 
@@ -169,7 +187,7 @@ def count_active_sessions(db, username):
 def list_active_sessions(db, username):
     rows = db.execute(
         'SELECT id, created_at, last_seen, ip_addr FROM sessions WHERE user=? AND expires_at > ? ORDER BY last_seen DESC',
-        (username, _iso(_now()))
+        (session_user_key(username), _iso(_now()))
     ).fetchall()
     return [{'id': r[0], 'created_at': r[1], 'last_seen': r[2], 'ip_addr': r[3]} for r in rows]
 

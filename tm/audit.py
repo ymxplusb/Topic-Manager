@@ -120,20 +120,36 @@ def emit(record, severity=SEV_INFO):
 class AuditUnavailable(RuntimeError):
     """The audit trail cannot be written. The owner's ruling (2026-09-26): an
     action whose audit record cannot be written does not happen — routes turn
-    this into HTTP 503 {"error": "audit_unavailable"}."""
+    this into HTTP 503 {"error": "audit_unavailable"}.
+
+    `syslog_delivered` says whether the AUDIT_WRITE_FAILED copy of the record
+    reached the host syslog, so nothing that reports this failure has to
+    GUESS where the record went (round 4, sec-review TM-SEC-006)."""
+
+    def __init__(self, message, syslog_delivered=False):
+        super().__init__(message)
+        self.syslog_delivered = syslog_delivered
 
 
 def write_failed(record, exc):
-    """The DB write of `record` failed. The record is not lost: it goes to
-    syslog at CRIT as AUDIT_WRITE_FAILED, carrying the whole original row, and
-    to the application log at CRITICAL."""
+    """The DB write of `record` failed. Its whole row goes to syslog at CRIT
+    as AUDIT_WRITE_FAILED. Returns True only when syslog ACCEPTED it; the
+    application log says which happened, because until round 4 it said "sent to
+    syslog instead" before the send was even tried, and said it again when the
+    send then failed."""
     msg = 'action=%s reason=%s original: %s' % (
         _field('AUDIT_WRITE_FAILED'), _field('%s: %s' % (type(exc).__name__, exc), 300),
         format_record(record))
-    log.critical('AUDIT_WRITE_FAILED: the audit database refused a record '
-                 '(%s: %s). The record was sent to syslog instead: %s',
-                 type(exc).__name__, exc, format_record(record))
-    syslog_send(msg, SEV_CRIT)
+    delivered = syslog_send(msg, SEV_CRIT)
+    if delivered:
+        log.critical('AUDIT_WRITE_FAILED: the audit database refused a record (%s: %s). '
+                     'The record was sent to the host syslog instead: %s',
+                     type(exc).__name__, exc, format_record(record))
+    else:
+        log.critical('AUDIT_WRITE_FAILED: the audit database refused a record (%s: %s) AND '
+                     'the host syslog did not accept it either; this log line is the only '
+                     'copy: %s', type(exc).__name__, exc, format_record(record))
+    return delivered
 
 
 def _new_record(user, action, target, detail, cluster_id):
@@ -172,8 +188,8 @@ def require_writable(cfg):
                     probe['detail'], probe['cluster_id']))
         db.rollback()
     except Exception as exc:
-        write_failed(probe, exc)
-        raise AuditUnavailable(str(exc)) from exc
+        delivered = write_failed(probe, exc)
+        raise AuditUnavailable(str(exc), delivered) from exc
     finally:
         if db is not None:
             db.close()
@@ -207,10 +223,10 @@ def log_action(cfg, user, action, target, detail='', cluster_id='', db=None,
         if own:
             db.commit()
     except Exception as exc:
-        write_failed(record, exc)
+        delivered = write_failed(record, exc)
         if best_effort:
             return None
-        raise AuditUnavailable(str(exc)) from exc
+        raise AuditUnavailable(str(exc), delivered) from exc
     finally:
         if own and db is not None:
             db.close()

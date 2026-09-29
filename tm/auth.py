@@ -155,11 +155,18 @@ def _user_record(entry, sam, upn):
 
 
 def _normalise_sam(username):
+    """The sAMAccountName part of what was typed (DOMAIN\\user, user@domain or
+    user), LOWER-CASED. Active Directory matches sAMAccountName and the UPN
+    bind case-insensitively, so "Alice", "alice" and "ALICE" are one account;
+    they must be one session identity too, or each spelling gets its own
+    concurrent-session quota (adversary F-04, sec-review TM-SEC-004).
+    str.lower(), not casefold(): casefold() maps "ß" to "ss", which would
+    bind as a DIFFERENT account."""
     if '\\' in username:
-        return username.split('\\', 1)[1]
-    if '@' in username:
-        return username.split('@', 1)[0]
-    return username
+        username = username.split('\\', 1)[1]
+    elif '@' in username:
+        username = username.split('@', 1)[0]
+    return username.lower()
 
 
 def _ldap_bind(server, user, password):

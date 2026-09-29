@@ -201,7 +201,7 @@ def apply_unit_state(domain):
     """`systemctl is-active` for the domain's unit: 'activating' while the
     helper runs, 'inactive'/'failed' after, 'unknown' when it cannot be asked.
     Reading a unit's state needs no authorisation."""
-    rc, out = _run([_systemctl(), 'is-active', apply_unit(domain)])
+    _, out = _run([_systemctl(), 'is-active', apply_unit(domain)])
     word = (out or '').strip().splitlines()
     return word[-1].strip() if word else 'unknown'
 

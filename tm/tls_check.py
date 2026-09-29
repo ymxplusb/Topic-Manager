@@ -30,6 +30,7 @@ unverifiable chain and an encrypted key.
 Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 """
 import datetime
+import ipaddress
 import os
 import re
 import subprocess
@@ -131,10 +132,10 @@ def _parse_date(value):
 
 def _cert_info(pem, what):
     with _Mem(pem, 'crt') as m:
-        rc, text, err = _openssl(['x509', '-noout', '-text', '-in', m.path], [m.fd])
+        rc, text, _ = _openssl(['x509', '-noout', '-text', '-in', m.path], [m.fd])
         if rc != 0:
             raise CertInvalid('%s does not parse as an X.509 certificate' % what)
-        rc2, dates, _ = _openssl(['x509', '-noout', '-startdate', '-enddate',
+        _, dates, _ = _openssl(['x509', '-noout', '-startdate', '-enddate',
                                   '-subject', '-issuer', '-nameopt', 'RFC2253',
                                   '-in', m.path], [m.fd])
         rc3, pub, _ = _openssl(['x509', '-noout', '-pubkey', '-in', m.path], [m.fd])
@@ -150,17 +151,29 @@ def _cert_info(pem, what):
     return info
 
 
-def validate(cert_pem, key_pem, chain_pem=None, now=None):
+def validate(cert_pem, key_pem, chain_pem=None, now=None, server_name=None):
     """Validate an upload. Returns a dict describing the certificate:
     {subject, issuer, not_after, key_type, sans, chain_count, warnings};
     raises CertInvalid with the reason otherwise. The checks run in a fixed
-    order, so one upload always gets the same (first) reason."""
+    order, so one upload always gets the same (first) reason.
+
+    `server_name` is the name this server is configured to answer to (the
+    root helper reads it from the nginx site). A certificate that does not
+    name it is WARNED about, not refused (decision, round 4, sec-review
+    TM-SEC-011): an operator may install the certificate for a new name
+    before moving DNS and server_name to it, or reach the host by address;
+    clients that use the configured name will refuse it, and the warning
+    in the apply result says exactly that."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     certs = _checked_upload(cert_pem, key_pem, chain_pem)
     leaf = _cert_info(certs[0], 'the certificate')
     not_after = _checked_leaf(leaf, now)
     _check_key_matches(key_pem, leaf)
     chain, warnings = _checked_chain(chain_pem, certs[0], leaf)
+    if server_name and not names_host(leaf['sans'], server_name):
+        warnings.append('the certificate does not name this server (%s) in its subject '
+                        'alternative names: browsers and clients that reach it by that '
+                        'name will refuse it' % _safe_host(server_name))
     return {'subject': leaf.get('subject', ''), 'issuer': leaf.get('issuer', ''),
             'not_after': not_after.isoformat(), 'key_type': leaf['key_type'],
             'sans': leaf['sans'], 'chain_count': len(chain), 'warnings': warnings}
@@ -236,7 +249,7 @@ def _checked_chain(chain_pem, leaf_pem, leaf):
     if chain:
         bundle = b''.join(chain)
         with _Mem(bundle, 'chain') as ch, _Mem(leaf_pem, 'leaf') as lf:
-            rc, out, err = _openssl(['verify', '-partial_chain', '-purpose', 'sslserver',
+            rc, _, _ = _openssl(['verify', '-partial_chain', '-purpose', 'sslserver',
                                      '-CAfile', ch.path, '-untrusted', ch.path, lf.path],
                                     [ch.fd, lf.fd])
         if rc != 0:
@@ -250,6 +263,33 @@ def _checked_chain(chain_pem, leaf_pem, leaf):
     else:
         warnings.append('the certificate is self-signed')
     return chain, warnings
+
+
+def _safe_host(value):
+    return re.sub(r'[^A-Za-z0-9.:*-]', '', str(value))[:253]
+
+
+def _same_name(san, host):
+    """RFC 6125: an exact (case-insensitive) match, or ONE wildcard that is
+    the whole leftmost label and stands for exactly one label. IP addresses
+    compare as addresses (openssl prints IPv6 SANs uncompressed)."""
+    try:
+        return ipaddress.ip_address(san) == ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    san, host = san.lower().rstrip('.'), host.lower().rstrip('.')
+    if san == host:
+        return True
+    if not san.startswith('*.') or '*' in san[2:]:
+        return False
+    head, _, tail = host.partition('.')
+    return bool(head) and tail == san[2:] and '.' in tail
+
+
+def names_host(sans, host):
+    """True when one of the certificate's subject alternative names covers
+    `host`. The subject CN is not consulted: current browsers ignore it."""
+    return any(_same_name(s, host) for s in sans or ())
 
 
 def describe_installed(fullchain_pem):

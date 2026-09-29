@@ -16,6 +16,29 @@ const IDLE_WARN_SECONDS = 60;
 // event reliably missing.
 const LOGOUT_LEAD_MS = 5000;
 
+// CROSS-SITE REQUEST FORGERY (v1.2.0). The backend refuses any request that
+// changes something unless the browser marks it same-origin (Sec-Fetch-Site)
+// or it carries X-TM-Request: 1 (tm/routes.py _refuse_cross_site). Every
+// mutation this app makes goes through fetch(), so the header is added HERE,
+// once, to every non-GET request for this origin's /api/ - not at a dozen call
+// sites where the next one added would be the one that forgot it. The browser
+// still sends Sec-Fetch-Site itself; the header covers a browser that does not.
+const TM_REQUEST_HEADER = 'X-TM-Request';
+function tmMarkRequests(win) {
+    const send = win.fetch.bind(win);
+    win.fetch = (input, init) => {
+        const opts = init || {};
+        const method = String(opts.method || 'GET').toUpperCase();
+        if (method === 'GET' || method === 'HEAD' || typeof input !== 'string' || !input.startsWith('/api/')) {
+            return send(input, init);
+        }
+        const headers = new Headers(opts.headers || {});
+        headers.set(TM_REQUEST_HEADER, '1');
+        return send(input, { ...opts, headers });
+    };
+}
+tmMarkRequests(window);
+
 const App = {
     components: { LoginView, TopBar, TopicsTab, ConsumerGroupsTab, AuditTab, SettingsTab, AboutModal },
     // ClusterModal is registered by SettingsTab, which is the only component

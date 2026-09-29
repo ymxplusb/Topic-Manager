@@ -1,7 +1,10 @@
 [Unit]
 Description=Jarvis Topic Manager (gunicorn)
-After=network.target
+After=network.target topic-manager.socket
 Wants=network-online.target
+# v1.2.0: gunicorn listens ONLY on the Unix socket topic-manager.socket holds
+# (0660 topic-manager:www-data); no TCP port. See that unit for why.
+Requires=topic-manager.socket
 
 [Service]
 Type=exec
@@ -14,9 +17,15 @@ Environment="TM_CONFIG=/etc/topic-manager/config.yaml"
 # ReadWritePaths entry below.
 Environment="TM_CLUSTERS_DIR=/etc/topic-manager/clusters.d"
 Environment="TM_CLUSTER_CERT_DIR=/opt/topic-manager/data/cluster-certs"
+# --bind is IGNORED while the socket unit hands gunicorn its socket
+# (LISTEN_FDS). It is here so that a gunicorn started WITHOUT it fails closed:
+# it would bind its own socket, --umask 0o117 makes that 0660
+# topic-manager:topic-manager, and nginx (www-data) could not connect — never
+# a TCP port, never a socket anyone else can open.
 ExecStart=/opt/topic-manager/venv/bin/gunicorn \
     --workers 4 \
-    --bind 127.0.0.1:5001 \
+    --bind unix:/run/topic-manager/gunicorn.sock \
+    --umask 0o117 \
     --timeout 90 \
     --worker-tmp-dir /tmp \
     --max-requests 1000 \

@@ -240,7 +240,8 @@ T = os.environ['T']
 def upload(crt, key, chain=None):
     data = {'cert': (io.BytesIO(crt), 'server.crt'), 'key': (io.BytesIO(key), 'server.key')}
     if chain is not None: data['chain'] = (io.BytesIO(chain), 'chain.pem')
-    return c.post('/api/system/tls/cert', data=data, content_type='multipart/form-data')
+    return c.post('/api/system/tls/cert', data=data, content_type='multipart/form-data',
+                  headers={'X-TM-Request': '1'})
 $1
 PYEOF
     PATH="${TM_TMP}/bin:${PATH}" PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 T="$TM_TMP" \
@@ -314,7 +315,8 @@ d = db(); rows = ' '.join(str(r) for r in d.execute('SELECT * FROM audit_log').f
 body = key.split(b'\n')[1].decode()
 print('key_in_audit=%s key_in_log=%s' % (body in rows, body in logbuf.getvalue()))
 print('settings_key=%s' % any(b'PRIVATE KEY' in (v or '').encode() for (v,) in db().execute('SELECT value FROM app_settings').fetchall()))
-big = c.post('/api/system/tls/cert', data=b'x' * 300000, content_type='multipart/form-data; boundary=x')
+big = c.post('/api/system/tls/cert', data=b'x' * 300000, content_type='multipart/form-data; boundary=x',
+             headers={'X-TM-Request': '1'})
 print('big=%d %s' % (big.status_code, (big.get_json(silent=True) or {}).get('error')))
 ")"
     tm_assert_eq "code=202 state=queued dom=tls" "$(grep '^code=' <<<"$out")" "a valid upload was not staged: ${out}"
@@ -405,5 +407,59 @@ PYEOF
     tm_assert_nofile "$FX/opt/topic-manager/data/apply/tls.key" "the refused key was left in the staging directory"
 }
 tm_case "helper-refuses-a-mixed-staged-set" "linux,chown,openssl" a_helper_refuses_a_mixed_set
+
+# ─── round 4 (sec-review TM-SEC-011): the certificate against the server's name
+# DECISION: a certificate that does not name the configured server is WARNED
+# about, not refused (tm/tls_check.validate). These pin both halves: the rule
+# itself (RFC 6125 matching, IP SANs as addresses) and that the root helper
+# reads the configured name from the nginx site and puts the warning in the
+# apply result the Settings page shows.
+a_names_host_rule() {
+    local out
+    out="$(PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYEOF' 2>&1 | tr -d '\r'
+from tm.tls_check import names_host as n
+cases = [
+    (['tm.example.org'], 'tm.example.org', True), (['TM.Example.org'], 'tm.example.ORG', True),
+    (['*.example.org'], 'tm.example.org', True), (['*.example.org'], 'a.b.example.org', False),
+    (['*.example.org'], 'example.org', False), (['*.org'], 'example.org', False),
+    (['t*.example.org'], 'tm.example.org', False), (['other.example.org'], 'tm.example.org', False),
+    (['192.0.2.7'], '192.0.2.7', True), (['2001:DB8:0:0:0:0:0:1'], '2001:db8::1', True),
+    (['192.0.2.7'], '192.0.2.8', False), ([], 'tm.example.org', False),
+]
+bad = ['%r %r -> %r' % (s, h, n(s, h)) for s, h, want in cases if n(s, h) != want]
+print('BAD=%d %s' % (len(bad), '; '.join(bad)))
+PYEOF
+)"
+    tm_assert_eq "BAD=0 " "$out" "the subject-alternative-name match rule is wrong"
+}
+tm_case "the-server-name-match-follows-rfc-6125" none a_names_host_rule
+
+a_helper_warns_on_a_foreign_name() {
+    . "${TM_TESTS_DIR}/lib/apply_fixture.sh"
+    local name details
+    for name in other.example.org leaf.example.org; do
+        fx_setup
+        _mk_chain
+        printf 'server {\n    listen 443 ssl;\n    server_name %s _;\n}\n' "$name" > "$FX/etc/nginx/sites-available/topic-manager"
+        PYTHONPATH="$(tm_py_root)" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$FX" "$TM_TMP" <<'PYEOF'
+import sys
+from tm import apply
+fx, t = sys.argv[1], sys.argv[2]
+rd = lambda n: open('%s/%s' % (t, n), 'rb').read()
+apply.write_stage({'audit': {'db_path': fx + '/opt/topic-manager/data/tm.db'}}, 'tls', {}, 'admin',
+                  files={'crt': rd('leaf.crt'), 'key': rd('leaf.key'), 'chain': rd('chain.pem')})
+PYEOF
+        chown -R "$FX_SVC_USER" "$FX/opt/topic-manager/data/apply"
+        fx_helper tls
+        tm_assert_eq "ok" "$(fx_field "d['state']")" "a valid certificate was not installed (${name}): $(cat "$FX_RES")"
+        details="$(fx_field "'|'.join(d['details'])")"
+        case "$name:$details" in
+            other.example.org:*"the certificate does not name this server (other.example.org)"*) ;;
+            other.example.org:*) _tm_afail "a certificate for leaf.example.org installed on other.example.org without a warning: ${details}" ;;
+            leaf.example.org:*"does not name this server"*) _tm_afail "a certificate that DOES name the server was warned about: ${details}" ;;
+        esac
+    done
+}
+tm_case "the-helper-warns-when-the-certificate-does-not-name-the-server" "linux,chown,openssl" a_helper_warns_on_a_foreign_name
 
 tm_finish

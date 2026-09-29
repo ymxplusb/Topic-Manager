@@ -50,12 +50,27 @@ a_shared_helpers_identical() {
     cmp -s "${TM_TMP}/a" "${TM_TMP}/b" || _tm_afail "run_as_app differs between install.sh and the upgrade"
     local u
     for u in topic-manager-apply-syslog.service topic-manager-apply-time.service topic-manager-apply-nginx.service \
-             topic-manager-apply-tls.service topic-manager-audit-prune.service topic-manager-audit-prune.timer; do
+             topic-manager-apply-tls.service topic-manager-audit-prune.service topic-manager-audit-prune.timer \
+             topic-manager-apply-audit.service topic-manager-apply-audit.path; do
         grep -q "$u" "$INSTALL_SH" || _tm_afail "install.sh does not install ${u}"
         grep -q "$u" "$UP" || _tm_afail "the upgrade does not install ${u}"
     done
     grep -q 'systemctl enable --now topic-manager-audit-prune.timer' "$INSTALL_SH" || _tm_afail "install.sh never enables the prune timer"
     grep -q 'systemctl enable --now topic-manager-audit-prune.timer' "$UP" || _tm_afail "the upgrade never enables the prune timer"
+    # Round 4 (adversary F-03): the apply-result audit path unit is enabled by
+    # both, and BEFORE the first apply each of them starts.
+    local f first_apply first_enable
+    for f in "$INSTALL_SH" "$UP"; do
+        first_enable="$(grep -n -m1 'systemctl enable --now topic-manager-apply-audit.path' "$f" | cut -d: -f1)"
+        first_apply="$(grep -n -m1 'systemctl start "topic-manager-apply-${d}.service"' "$f" | cut -d: -f1)"
+        [ -n "$first_enable" ] || _tm_afail "$(basename "$f") never enables topic-manager-apply-audit.path"
+        if [ "$f" = "$UP" ]; then
+            [ "$first_enable" -lt "$first_apply" ] || _tm_afail "the upgrade enables the apply-audit path AFTER it starts an apply"
+        else
+            [ "$first_enable" -lt "$(grep -n -m1 '^apply_saved_settings$' "$f" | cut -d: -f1)" ] \
+                || _tm_afail "install.sh enables the apply-audit path AFTER apply_saved_settings runs"
+        fi
+    done
 }
 tm_case "install-and-upgrade-share-the-helper-installers-and-units" none a_shared_helpers_identical
 
@@ -256,6 +271,8 @@ a_restore_pre_v120_removes_them() {
     tm_assert_nofile "$FR/etc/nginx/conf.d/topic-manager-limits.conf" "a v1.2.0-only file survived a rollback to before v1.2.0"
     grep -q 'systemctl disable --now topic-manager-audit-prune.timer' "${TM_TMP}/calls" \
         || _tm_afail "the prune timer stays enabled for a release that has no tm.audit_retention"
+    grep -q 'topic-manager-apply-audit.path' "${TM_TMP}/calls" \
+        || _tm_afail "the apply-audit path stays enabled for a release that has no tm.apply audit"
 }
 tm_case "restore-to-pre-v120-removes-the-v120-files" symlinks a_restore_pre_v120_removes_them
 
@@ -291,7 +308,7 @@ _phase9() {   # <backup has the v1.2.0 marker: yes|no> — the REAL Phase 9 bloc
         printf 'WORK_DIR=%q BACKUP_DIR=%q PREV_SN="tm.example.org _" APP_USER=topic-manager APP_HOME=/opt/topic-manager\n' \
             "$TM_REPO_ROOT" "${TM_TMP}/bk"
         tm_extract_line "$UP" '^V120_UNITS='
-        tm_extract_between "$UP" '^V120_UNITS=' '^[[:space:]]+topic-manager-audit-prune.service topic-manager-audit-prune.timer\)$' | sed 1d
+        tm_extract_between "$UP" '^V120_UNITS=' '^[[:space:]]+topic-manager-apply-audit.service topic-manager-apply-audit.path\)$' | sed 1d
         tm_extract_between "$UP" '^install_if_absent 644 "\$\{WORK_DIR\}/nginx/tm-limits.conf"' \
             '^success "Apply helper, apply units and the audit prune timer installed; managed files kept"$' \
             | sed "s#/etc/#${FR}/etc/#g"

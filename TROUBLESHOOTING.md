@@ -328,6 +328,16 @@ sudo sed -i "s/CHANGE_ME_GENERATE_A_RANDOM_SECRET/$SECRET/" /etc/topic-manager/c
 sudo systemctl restart topic-manager
 ```
 
+### "Sign-in failed: the user name or password is wrong, or this account may not use Topic Manager."
+Since v1.2.0 this ONE message is what the sign-in page shows for every refused sign-in, so an
+unauthenticated caller cannot learn which accounts exist or what the directory said. The
+specific reason is recorded where an administrator reads it: the `LOGIN_FAILED` row in the
+Audit tab (`reason=...`), which also goes to the host syslog under `topic-manager-audit`:
+```bash
+sudo grep 'topic-manager-audit.*LOGIN_FAILED' /var/log/auth.log | tail -5
+```
+The reasons below are the ones those records carry.
+
 ### "User not found in directory"
 The service account bound successfully but the LDAP search returned no results.
 
@@ -1136,11 +1146,21 @@ The `:80` site came with v1.2.0; re-run the upgrade or `install.sh`.
 The rendered change made the whole configuration fail, and it was put back. The message is
 nginx's own. If `sudo nginx -t` fails NOW, the fault was there before the apply.
 
-### `NOTE: another ufw rule still opens port 80: ...`
+### `ufw rule 80/tcp removed, but port 80 is STILL OPEN through: ...`
 
 The redirect is off and the Topic Manager rule (`80/tcp`) is gone, but another rule (for
-example `Nginx Full`, or a bare `80`) still admits port 80. The helper manages only its own
-rule; remove the other one if nothing else on the host needs it.
+example `Nginx Full`, `80/udp`, or `80,443/tcp`) still admits port 80, so the port is NOT
+closed and the result does not say it is. The helper manages only its own rule; remove the
+other one if nothing else on the host needs it. `ufw 80/tcp closed` appears only when no
+rule admits port 80 any more.
+
+### `ufw status failed (exit N): ...` or `ufw status gave no "Status: active|inactive" line` (failed, step `firewall`)
+
+The helper could not read the firewall, so it did not guess: an unreadable ufw used to be
+treated as "inactive", which skipped the firewall step and reported success. Nothing on the
+host was changed. Run `sudo ufw status` and fix what it reports, then apply again. A host
+with no ufw installed at all is not an error (`ufw is not installed: no firewall rule was
+changed`).
 
 ### `staging file <domain>.json is not owned by topic-manager; refused` (or `is a symlink`, `has 2 links`, `readable or writable by others`)
 
@@ -1166,15 +1186,25 @@ given) that verifies the leaf for server use. Convert an encrypted key with
 ### `503 {"error": "audit_unavailable"}` — "The audit trail cannot be written, so nothing was changed."
 
 The pre-check could not open a write transaction on `tm.db` or found less than 1 MiB free
-on its filesystem. The host syslog has an `AUDIT_WRITE_FAILED` record at CRIT with the
-reason (`sudo grep AUDIT_WRITE_FAILED /var/log/auth.log`). Free space, fix ownership
-(`topic-manager`, 0600) or restore the database, then retry. Sign-out still works.
+on its filesystem. The message then says where the `AUDIT_WRITE_FAILED` record went, and
+it is measured, not assumed:
+
+- `The record was sent to the host syslog as AUDIT_WRITE_FAILED (CRIT).` — `sudo grep
+  AUDIT_WRITE_FAILED /var/log/auth.log`.
+- `The host syslog did NOT accept the record either: its only copy is the
+  AUDIT_WRITE_FAILED line in the service log` — syslog is down too (see
+  `AUDIT_SYSLOG_FAILED` below for why a send fails); `journalctl -u topic-manager | grep
+  AUDIT_WRITE_FAILED` holds the whole record.
+
+Free space, fix ownership (`topic-manager`, 0600) or restore the database, then retry.
+Sign-out still works.
 
 ### `... WAS made, but its audit record could not be written to the audit database`
 
-The database failed between the pre-check and the record. The change happened; its record
-is in syslog as `AUDIT_WRITE_FAILED` with every field. Fix the database before anything
-else.
+The database failed between the pre-check and the record. The change happened. Where its
+record is, with every field, is the second sentence of the message, as above: the host
+syslog, or — when syslog refused it as well — only the service log. Fix the database before
+anything else.
 
 ### `AUDIT_SYSLOG_FAILED: a committed audit record did NOT reach syslog, so it was not forwarded off the host; it is in the audit database: ...`
 

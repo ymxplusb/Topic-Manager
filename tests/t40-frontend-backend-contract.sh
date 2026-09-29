@@ -149,7 +149,13 @@ for (const [label, source] of [['SettingsTab', settings], ['LoginView', login]])
         }
     }
 }
-assert.match(backend, /request\.headers\.get\('Sec-Fetch-Site'\) == 'cross-site'/);
+assert.match(backend, /^@bp\.before_request\ndef _refuse_cross_site\(\):/m);
+assert.match(backend, /if fetch_site == 'same-origin':/);
+assert.match(backend, /CSRF_HEADER = 'X-TM-Request'/);
+// The SPA adds that header to every non-GET /api/ request (app/main.js).
+const mainJs = fs.readFileSync(path.join(root, 'app/main.js'), 'utf8');
+assert.match(mainJs, /const TM_REQUEST_HEADER = 'X-TM-Request';/);
+assert.match(mainJs, /^tmMarkRequests\(window\);$/m);
 assert.match(backend, /if not request\.is_json:/);
 
 // Extract actual error/status pairs from the functions that implement (1)-(4),

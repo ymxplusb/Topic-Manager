@@ -7,12 +7,18 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from .config import config_path, load_config, DEFAULT_SESSION_TIMEOUT_MINUTES
 from .models import init_db, get_db
 from . import audit, settings_schema
+from . import apply as apply_mod
 
-# gunicorn binds 127.0.0.1:5001 and nginx is the only thing that talks to it,
-# so request.remote_addr is 127.0.0.1 for EVERY request. Nothing read nginx's
-# X-Real-IP / X-Forwarded-For, so every session row and every login line in the
-# log recorded the loopback address — an audit trail that cannot say who did
-# anything, which is the one thing it exists to say.
+# nginx is the only thing that talks to gunicorn — since v1.2.0 over a Unix
+# socket only it and the service account can open (systemd/topic-manager.socket),
+# before that over 127.0.0.1:5001 — so the peer address is never the client's.
+# Nothing read nginx's X-Real-IP / X-Forwarded-For, so every session row and
+# every login line recorded the loopback address — an audit trail that cannot
+# say who did anything, which is the one thing it exists to say.
+#
+# THE SOCKET IS WHAT MAKES x_for=1 SAFE. On 127.0.0.1:5001 any local process
+# could connect directly and send an X-Forwarded-For of its choosing, which
+# this would have believed (adversary F-05). Only nginx can send one now.
 #
 # EXACTLY ONE HOP. nginx sets X-Forwarded-For with $proxy_add_x_forwarded_for,
 # which APPENDS the real peer to whatever the client sent; ProxyFix with
@@ -56,11 +62,12 @@ def create_app(config_path_arg=None):
         )
     app.secret_key = _secret
     app.session_interface = Sha256SessionInterface()
-    # CSRF tokens are intentionally omitted: this is a pure JSON REST API
-    # (no HTML form submissions). State-mutation routes enforce Content-Type:
-    # application/json (force=True is not used) and cross-site fetches are
-    # blocked via Sec-Fetch-Site checking in require_auth. SameSite=Lax is
-    # an additional transport-level guard.
+    # CSRF: no token. Every state-changing /api/ request must be marked as
+    # this origin's own - Sec-Fetch-Site: same-origin, or the X-TM-Request: 1
+    # header the SPA adds (tm/routes.py _refuse_cross_site, a before_request
+    # on every route). JSON Content-Type alone was not enough: the TLS
+    # certificate upload is multipart/form-data, which a plain HTML form on
+    # another site can send. SameSite=Lax is an additional transport guard.
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
     app.config['SESSION_COOKIE_SECURE']   = True
@@ -86,6 +93,10 @@ def create_app(config_path_arg=None):
         settings_schema.seed_session_limit(cfg, db)
     finally:
         db.close()
+    # Any "Apply to host" that finished while nothing was polling (the browser
+    # closed, the service restarting) is recorded now. Safe from all four
+    # workers at once: each job is claimed by one conditional UPSERT.
+    apply_mod.audit_all_results(cfg)
 
     from .routes import bp
     app.register_blueprint(bp)

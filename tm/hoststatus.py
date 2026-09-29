@@ -53,7 +53,7 @@ def _run(args):
 
 
 def _active(unit):
-    rc, out = _run(['systemctl', 'is-active', unit])
+    _, out = _run(['systemctl', 'is-active', unit])
     return out.strip() == 'active'
 
 
@@ -135,11 +135,11 @@ def _site_policy():
             text = fh.read()
     except OSError:
         return list(SHIPPED_PROTOCOLS), list(SHIPPED_CIPHERS)
-    m = re.search(r'^\s*ssl_protocols\s+([^;]+);', text, re.M)
+    m = re.search(r'^[ \t]*ssl_protocols[ \t]+([^;\s][^;]*);', text, re.MULTILINE)
     protocols = m.group(1).split() if m else list(SHIPPED_PROTOCOLS)
-    m = re.search(r'^\s*ssl_ciphers\s+([^;]+);', text, re.M)
+    m = re.search(r'^[ \t]*ssl_ciphers[ \t]+([^;\s][^;]*);', text, re.MULTILINE)
     ciphers = [c for c in (m.group(1).strip().strip('"').split(':') if m else []) if c]
-    m = re.search(r'^\s*ssl_conf_command\s+Ciphersuites\s+([^;]+);', text, re.M)
+    m = re.search(r'^[ \t]*ssl_conf_command[ \t]+Ciphersuites[ \t]+([^;\s][^;]*);', text, re.MULTILINE)
     if m:
         ciphers += [c for c in m.group(1).strip().split(':') if c]
     return protocols, ciphers or list(SHIPPED_CIPHERS)

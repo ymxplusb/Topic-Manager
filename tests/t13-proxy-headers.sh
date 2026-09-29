@@ -2,8 +2,9 @@
 # =============================================================================
 # t13 — THE AUDIT TRAIL RECORDS THE REAL CLIENT ADDRESS.
 #
-# gunicorn binds 127.0.0.1:5001 and nginx is the only thing that talks to it,
-# so request.remote_addr is 127.0.0.1 for every request ever made. Nothing read
+# nginx is the only thing that talks to gunicorn (a Unix socket since v1.2.0,
+# 127.0.0.1:5001 before; t44), so the peer address is never the client's and
+# request.remote_addr was 127.0.0.1 for every request ever made. Nothing read
 # nginx's X-Real-IP / X-Forwarded-For, so every session row and every login line
 # in the log said "127.0.0.1" — an audit trail that cannot say who did anything,
 # which is the one thing it exists to say.

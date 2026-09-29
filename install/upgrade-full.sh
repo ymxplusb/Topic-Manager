@@ -162,7 +162,8 @@ V120_MANAGED=(
 # line in this file that is a bare ")", and a second one would break them)
 V120_UNITS=(topic-manager-apply-syslog.service topic-manager-apply-time.service
             topic-manager-apply-nginx.service topic-manager-apply-tls.service
-            topic-manager-audit-prune.service topic-manager-audit-prune.timer)
+            topic-manager-audit-prune.service topic-manager-audit-prune.timer
+            topic-manager-apply-audit.service topic-manager-apply-audit.path)
 
 # ─── flags ───────────────────────────────────────────────────────────────────
 SKIP_OS=false; OFFLINE_FORCED=false; BACKUP_ONLY=false; DRY_RUN=false
@@ -429,15 +430,61 @@ assert_root_owned_path() {
 # $CERT_DIR's parent (/opt/topic-manager/data) is app-owned and inside the
 # unit's ReadWritePaths, so the application can replace cluster-certs with a
 # symlink to anything and have root apply an owner and a mode to the target on
-# the next upgrade or reinstall. Refuse BEFORE the call, so the mutation cannot
-# happen — detecting it afterwards is reporting a chown that already ran.
+# the next upgrade or reinstall. It is REFUSED, never
+# detected afterwards (that would be reporting a chown that already ran), and
+# never by a path check followed by install -d (round 4: see below).
 safe_install_dir() {   # safe_install_dir <mode> <owner> <group> <path>
-    local m="$1" o="$2" g="$3" p="$4"
-    [[ -L "$p" ]] && fail "${p} is a symlink; refusing to apply ownership through it.
-     install -d would chmod and chown whatever it points at. Remove it, or put
-     the real directory back, and run again."
-    [[ -e "$p" && ! -d "$p" ]] && fail "${p} exists and is not a directory."
-    install -d -m "$m" -o "$o" -g "$g" "$p"
+    # THROUGH FILE DESCRIPTORS (round 4, sec-review TM-SEC-002, CWE-367). The
+    # old guard checked [[ -L ]] and then ran install -d, which resolves the
+    # path AGAIN and chmods/chowns whatever is there by then: a window in
+    # which the service account (it owns ${APP_HOME}) could swap the
+    # directory, or any directory ABOVE it, for a symlink. Here every
+    # component from / is opened relative to its parent's descriptor with
+    # O_NOFOLLOW, and fchown/fchmod act on the descriptor that was opened, so
+    # nothing is resolved twice. A symlink is followed ONLY where root alone
+    # could have put it (a parent owned by root and writable by nobody else);
+    # anywhere else, and as the last component always, it is refused.
+    if ! python3 - "$@" <<'PYSID'
+import errno, grp, os, pwd, stat, sys
+mode, owner, group, path = int(sys.argv[1], 8), sys.argv[2], sys.argv[3], sys.argv[4]
+parts = [c for c in path.split("/") if c]
+if not path.startswith("/") or not parts or ".." in parts:
+    sys.exit("%s is not an absolute path free of '..'; refusing." % path)
+D = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+fd = os.open("/", D)
+for i, name in enumerate(parts):
+    here, last = "/" + "/".join(parts[:i + 1]), i == len(parts) - 1
+    try:
+        st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    except FileNotFoundError:
+        os.mkdir(name, 0o700 if last else 0o755, dir_fd=fd)
+        st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    flags = D | os.O_NOFOLLOW
+    if stat.S_ISLNK(st.st_mode):
+        parent = os.fstat(fd)
+        if last or parent.st_uid != 0 or parent.st_mode & 0o022:
+            sys.exit("%s is a symlink; refusing to apply ownership through it. install -d "
+                     "would chmod and chown whatever it points at. Remove it, or put the real "
+                     "directory back, and run again." % here)
+        flags = D
+    elif not stat.S_ISDIR(st.st_mode):
+        sys.exit("%s exists and is not a directory." % here)
+    try:
+        nfd = os.open(name, flags, dir_fd=fd)
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+            sys.exit("%s is a symlink or not a directory now (it changed while it was being "
+                     "opened); refusing to apply ownership through it." % here)
+        raise
+    os.close(fd)
+    fd = nfd
+os.fchown(fd, pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid)
+os.fchmod(fd, mode)
+os.close(fd)
+PYSID
+    then
+        fail "Could not create ${4} safely (the line above says why). Nothing was chowned or chmodded through a link."
+    fi
 }
 
 # enforce_audit_db_modes — the audit database is private to the service
@@ -714,6 +761,27 @@ backup_v120_managed() {   # backup_v120_managed <backup-dir>
     : > "${BD}/system/v120/.present"
 }
 
+# restore_socket_unit <backup-dir> — the gunicorn socket unit, v1.2.0+.
+# A restore point that has one gets it back. One that has NONE is a release
+# whose gunicorn bound 127.0.0.1:5001 itself (v1.1.x and earlier), and the
+# v1.2.0 unit must GO: left enabled it would hold /run/topic-manager/gunicorn.sock
+# and, on the first connection, start the restored service with LISTEN_FDS
+# set — and gunicorn serves a socket systemd hands it INSTEAD of its own
+# --bind, so the restored release would stop listening on the port its restored
+# nginx site proxies to. Measured in gunicorn 26.2.0 sock.create_sockets: with
+# inherited descriptors it returns before binding any configured address.
+restore_socket_unit() {   # restore_socket_unit <backup-dir>
+    local BD="$1"
+    if [[ -f "${BD}/system/topic-manager.socket" ]]; then
+        cp -a "${BD}/system/topic-manager.socket" /etc/systemd/system/topic-manager.socket
+        systemctl enable topic-manager.socket >/dev/null 2>&1 || true
+    else
+        systemctl disable --now topic-manager.socket >/dev/null 2>&1 || true
+        rm -f /etc/systemd/system/topic-manager.socket
+        rm -f /etc/systemd/system/sockets.target.wants/topic-manager.socket
+    fi
+}
+
 # restore_v120_managed <backup-dir> — put them back exactly; from a restore
 # point older than v1.2.0 remove them (the old site file has its own :80
 # block, and an enabled topic-manager-http beside it would be a duplicate).
@@ -727,7 +795,8 @@ restore_v120_managed() {   # restore_v120_managed <backup-dir>
         fi
     done
     if [[ ! -f "${BD}/system/v120/.present" ]]; then
-        systemctl disable --now topic-manager-audit-prune.timer >/dev/null 2>&1 || true
+        systemctl disable --now topic-manager-audit-prune.timer topic-manager-apply-audit.path \
+            >/dev/null 2>&1 || true
     fi
     systemctl try-restart rsyslog.service >/dev/null 2>&1 || true
 }
@@ -918,6 +987,7 @@ restore_from_backup() {
 
     warn "Restoring from ${BD} ..."
     systemctl stop "$SERVICE" 2>/dev/null || true
+    systemctl stop "${SERVICE}.socket" 2>/dev/null || true
 
     [[ -f "${BD}/etc/config.yaml" ]] && cp -a "${BD}/etc/config.yaml" "${CONFIG_DIR}/config.yaml"
     if [[ -d "${BD}/etc/tls" ]]; then
@@ -949,6 +1019,7 @@ restore_from_backup() {
     [[ -f "${BD}/system/nginx.conf" ]] && cp -a "${BD}/system/nginx.conf" /etc/nginx/nginx.conf
     [[ -f "${BD}/system/topic-manager.service" ]] && \
         cp -a "${BD}/system/topic-manager.service" /etc/systemd/system/
+    restore_socket_unit "$BD"
     restore_dropin "$BD"
     restore_cluster_store "$BD"
     [[ -f "${BD}/system/logrotate-topic-manager" ]] && \
@@ -1829,6 +1900,10 @@ fi
 [[ -f /etc/nginx/nginx.conf ]] && cp -a /etc/nginx/nginx.conf "${BACKUP_DIR}/system/nginx.conf"
 [[ -f /etc/systemd/system/topic-manager.service ]] && \
     cp -a /etc/systemd/system/topic-manager.service "${BACKUP_DIR}/system/"
+# v1.2.0+: the gunicorn socket unit. Its ABSENCE in a restore point is what
+# tells a rollback the restored release listened on TCP (restore_socket_unit).
+[[ -f /etc/systemd/system/topic-manager.socket ]] && \
+    cp -a /etc/systemd/system/topic-manager.socket "${BACKUP_DIR}/system/"
 backup_dropin "$BACKUP_DIR"
 [[ -f /etc/logrotate.d/topic-manager ]] && \
     cp -a /etc/logrotate.d/topic-manager "${BACKUP_DIR}/system/logrotate-topic-manager"
@@ -2006,6 +2081,9 @@ phase "Phase 7 — Stop service and replace application"
 
 DESTRUCTIVE_STARTED=true
 systemctl stop "$SERVICE" 2>/dev/null || true
+# v1.2.0: and its socket, or the next request through nginx would start the
+# service again in the middle of the replacement (socket activation).
+systemctl stop "${SERVICE}.socket" 2>/dev/null || true
 info "Removing previous application files (config, data and certs are NOT touched) ..."
 rm -rf "$VENV" "${APP_HOME}/tm" "${APP_HOME}/wsgi.py"
 rm -rf "${FRONTEND_DIR:?}"/*
@@ -2145,6 +2223,11 @@ success "Apply helper, apply units and the audit prune timer installed; managed 
 
 info "Installing systemd unit and logrotate ..."
 cp "${WORK_DIR}/systemd/topic-manager.service" /etc/systemd/system/
+# v1.2.0: gunicorn's only listener is the Unix socket this unit creates, 0660
+# topic-manager:www-data; the TCP port 127.0.0.1:5001 of v1.1.x is gone. The
+# nginx site installed above proxies to the socket.
+install -m 644 -o root -g root "${WORK_DIR}/systemd/topic-manager.socket" \
+    /etc/systemd/system/topic-manager.socket
 # New in v1.0.4: the root-side `nginx -t` gate the Settings restart control
 # calls before it touches nginx. Measured on prod 2026-09-01 — `nginx -t`
 # as the topic-manager account dies on /run/nginx.pid (13: Permission
@@ -2166,7 +2249,7 @@ fi
 [[ -f "${WORK_DIR}/install/logrotate.d/topic-manager" ]] && \
     cp "${WORK_DIR}/install/logrotate.d/topic-manager" /etc/logrotate.d/topic-manager
 systemctl daemon-reload
-systemctl enable "$SERVICE" --quiet
+systemctl enable "${SERVICE}.socket" "$SERVICE" --quiet
 success "Application deployed"
 
 # =============================================================================
@@ -2408,6 +2491,7 @@ success "nginx config test passed"
 phase "Phase 12 — Start and verify"
 # =============================================================================
 
+systemctl start "${SERVICE}.socket"
 systemctl start "$SERVICE"
 systemctl reload nginx
 sleep 6
@@ -2494,6 +2578,11 @@ fi
 # Settings > "Apply to host". NOT a rollback trigger: each domain's helper
 # rolls itself back, the application is verified healthy above, and a
 # failure here names the domain and the fix.
+# The apply results are audited the moment they land (the .path unit), so it
+# is enabled BEFORE the re-apply below starts any.
+systemctl enable --now topic-manager-apply-audit.path >/dev/null 2>&1 \
+    && success "Apply results are audited as they finish: topic-manager-apply-audit.path" \
+    || warn "topic-manager-apply-audit.path could not be enabled: apply results are audited only when polled, at service start and by the daily prune. Run: systemctl enable --now topic-manager-apply-audit.path"
 info "Re-applying the saved host settings (syslog, time, nginx) ..."
 REAPPLY_FAILED=""
 if run_as_app stage all >/dev/null; then
