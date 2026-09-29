@@ -206,8 +206,10 @@ def log_action(cfg, user, action, target, detail='', cluster_id='', db=None,
     emit(record) after its commit — a row that is rolled back is never sent.
     Without it, the row gets its own connection and commit, and is emitted.
 
-    A failed write is AUDIT_WRITE_FAILED at CRIT in syslog (with the whole
-    record), then AuditUnavailable is raised — unless `best_effort`, for the
+    A failed write is sent as AUDIT_WRITE_FAILED at CRIT to syslog (with the
+    whole record; write_failed reports whether syslog took it, and the
+    AuditUnavailable carries that as syslog_delivered), then AuditUnavailable
+    is raised — unless `best_effort`, for the
     few records whose action cannot be refused (a failed login is already a
     refusal; a sign-out must never be blocked), which return None instead.
     Returns the record on success.

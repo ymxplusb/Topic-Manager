@@ -79,7 +79,8 @@ def _max_sessions(db):
 # host) PROVE the audit trail is writable before they act (audit_gate), and
 # refuse with 503 when it is not. If the record still fails AFTER the change —
 # the database broke in between — the response says the change WAS made, and
-# the record itself has gone to syslog at CRIT as AUDIT_WRITE_FAILED.
+# where its AUDIT_WRITE_FAILED record went: the host syslog at CRIT when that
+# accepted it, otherwise only the service log (_where_the_record_went).
 
 def _where_the_record_went(exc):
     """Where the failed record actually went — never a guess (round 4,
