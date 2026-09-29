@@ -483,23 +483,19 @@
   ],
   "clean_room": {
     "date": "2026-09-29",
-    "target": "tm-qc (offline, STIG+FIPS Ubuntu 24.04)",
-    "build": "2565a11",
-    "verdict": "FAIL",
-    "summary": "Offline upgrade 1.1.0->1.2.0 PASS twice (audit-only exit 1 = 3 expected warnings; backup-only 0; upgrade 0; install.sh --packages-only 0). Socket /run/topic-manager/gunicorn.sock 0660 topic-manager:www-data, TCP 5001 closed, nginx upstream unix:. TLS 1.0/1.1 refused. Units and polkit as documented. STIG 209 pass / 8 fail before and after, the same 8, no new failure. --restore 20260929-082821 exit 0, back on 1.1.0 on TCP 5001. FAIL on rollback residue and docs.",
+    "target": "tm-qc 192.168.202.92 (offline, STIG+FIPS), from v110-installed (reverted by James; no revert by this run, left INSTALLED at 1.2.0 per instruction)",
+    "build": "4a02d78927ce4d45b513eb303e6ea17781b9d1b3",
+    "bundle_sha256": "af3e432cc07bfc8945e59ce080a4ac1d76f2540395d2e12543a8fcab411d1806",
+    "verdict": "FAIL (strict bar: one operator intervention); functionally PASS",
+    "summary": "Upgrade 1: audit 1 (3 expected warnings), backup 0, upgrade 0, packages-only 1 then 0 after unattended-upgrade released the dpkg lock. Restore 20260929-190045 exit 0: 1.1.0 on TCP 5001, 9 v1.2.0 units retired, polkit rule back to the 1.1.0 copy, /usr/libexec/topic-manager and /run/topic-manager gone, no timer/path, prune units not found, no topic-manager unit failed. Upgrade 2: audit 1 (2 warnings), backup 0, upgrade 0, packages-only 0. Both upgrades: 1.2.0, socket 0660 topic-manager:www-data, 5001 closed, unix upstream, TLS1.0/1.1 refused from .81, tm.db 0600/data 0700. STIG 209/8 after each, same 8 rules as the v110 baseline. R1, R2, D1-D8 all fixed.",
     "deviations": [
-      "R1 rollback: --restore to 1.1.x left topic-manager-audit-prune.timer and topic-manager-apply-audit.path ENABLED; they run tm.audit_retention / tm.apply, absent in 1.1.x, so a unit fails daily",
-      "R2 rollback: stale /run/topic-manager/gunicorn.sock after --restore",
-      "D1 INSTALL 5a prerequisites use sudo but name the ubuntu:24.04 container, which has no sudo",
-      "D2 TROUBLESHOOTING.md:783 probes TLS 1.1 from localhost; a FIPS client refuses locally",
-      "D3 INSTALL 7 probe needs OpenSSL 3; LibreSSL 3.3.6 errors on @SECLEVEL=0",
-      "D4 the probe's expected output: a refused handshake also prints 'Cipher is (NONE)'",
-      "D5 PPSM Postfix row says loopback; the host listens 0.0.0.0:25 and [::]:25 (inet_interfaces=all)",
-      "D6 README Rolling back + TROUBLESHOOTING use a relative install/upgrade-full.sh --restore; the tool prints an absolute path",
-      "D7 README Offline Install contradicts INSTALL 5b and prepare-offline.sh's printed text",
-      "D8 README:104 unit list misses topic-manager.socket and topic-manager-apply-audit.path"
+      "N1 install.sh --packages-only exit 1: unattended-upgrade (air-gapped, trying security.ubuntu.com for ~4.5 min) held the dpkg lock; installer does not wait for the lock, and its FAIL text + TROUBLESHOOTING route to dpkg --audit (clean) with no lock guidance. Re-run after it exited: 0",
+      "N2 README/INSTALL never say to run the upgrade detached (setsid nohup + log); only the internal contract does",
+      "N3 INSTALL s1 says the polkit rule has three unit/verb pairs; the rule has 8 pairs over 7 units; install/README says seven pairs and lists 8",
+      "N4 README Installing says ufw opens 80 and 443; INSTALL s6.14/s11 say 80 only while the redirect is on",
+      "N5 --restore prints '8 unit(s) retired' after listing 9; and leaves /run/topic-manager-apply (v1.2.0 result files) though the docs say retired units' runtime files are removed",
+      "N6 PPSM systemd-resolved row names 127.0.0.53 only; host also listens 127.0.0.54:53"
     ],
-    "addressed_by": "builder round 5 (cdf0597 R1/R2, 71bbb78 D1-D8, 5ae9530); re-run on tm-qc owed to the assure lane",
     "history": [
       {
         "date": "2026-09-29",
@@ -508,6 +504,25 @@
         "upgrade": "PASS 1.1.0->1.2.0 exit 0 (audit 1: 3 warnings; backup 0, 48-record baseline)",
         "stig": "209/8 before and after, same 8 rules",
         "verdict": "FAIL (docs): 11 documentation defects"
+      },
+      {
+        "date": "2026-09-29",
+        "target": "tm-qc (offline, STIG+FIPS Ubuntu 24.04)",
+        "build": "2565a11",
+        "verdict": "FAIL",
+        "summary": "Offline upgrade 1.1.0->1.2.0 PASS twice (audit-only exit 1 = 3 expected warnings; backup-only 0; upgrade 0; install.sh --packages-only 0). Socket /run/topic-manager/gunicorn.sock 0660 topic-manager:www-data, TCP 5001 closed, nginx upstream unix:. TLS 1.0/1.1 refused. Units and polkit as documented. STIG 209 pass / 8 fail before and after, the same 8, no new failure. --restore 20260929-082821 exit 0, back on 1.1.0 on TCP 5001. FAIL on rollback residue and docs.",
+        "deviations": [
+          "R1 rollback: --restore to 1.1.x left topic-manager-audit-prune.timer and topic-manager-apply-audit.path ENABLED; they run tm.audit_retention / tm.apply, absent in 1.1.x, so a unit fails daily",
+          "R2 rollback: stale /run/topic-manager/gunicorn.sock after --restore",
+          "D1 INSTALL 5a prerequisites use sudo but name the ubuntu:24.04 container, which has no sudo",
+          "D2 TROUBLESHOOTING.md:783 probes TLS 1.1 from localhost; a FIPS client refuses locally",
+          "D3 INSTALL 7 probe needs OpenSSL 3; LibreSSL 3.3.6 errors on @SECLEVEL=0",
+          "D4 the probe's expected output: a refused handshake also prints 'Cipher is (NONE)'",
+          "D5 PPSM Postfix row says loopback; the host listens 0.0.0.0:25 and [::]:25 (inet_interfaces=all)",
+          "D6 README Rolling back + TROUBLESHOOTING use a relative install/upgrade-full.sh --restore; the tool prints an absolute path",
+          "D7 README Offline Install contradicts INSTALL 5b and prepare-offline.sh's printed text",
+          "D8 README:104 unit list misses topic-manager.socket and topic-manager-apply-audit.path"
+        ]
       }
     ]
   },
