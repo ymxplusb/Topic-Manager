@@ -286,6 +286,17 @@
       "where": "install/upgrade-full.sh, install.sh, systemd/topic-manager.socket",
       "disposition": "owed by the assure lane on tm-qc (the builder was told not to touch it): upgrade from v110-installed, --packages-only for rsyslog-openssl, and a --restore to 1.1.x proving the socket unit is removed and TCP 5001 serves again. Tested here only by t44 (real gunicorn with systemd-style socket activation, unit/nginx/installer structure, relocated restore_socket_unit) and t38/t11",
       "status": "open"
+    },
+    {
+      "id": "REG-0028",
+      "date": "2026-09-29",
+      "source": "dast ZAP 2.17.0 AUTHENTICATED active scan of tm-qc (v1.2.0 @ 4a02d78, STIG+FIPS) as svc-tm-zap",
+      "severity": "Low",
+      "finding": "Private IP Disclosure (x4) on /api/audit and /api/audit/export",
+      "where": "tm/routes.py audit list and export: the audit record's client address field",
+      "why": "the audit trail records the source address of every event by design (STIG AU-3 content of audit records; Database SRG). Both routes require sign-in, and every authenticated user is an administrator by design (contract principle)",
+      "disposition": "accepted by design, NOT remediated: masking the address in the export would strip it from the one copy an auditor takes off the host; the routes are authenticated and the scan found no unauthenticated path to them",
+      "status": "accepted"
     }
   ]
 }

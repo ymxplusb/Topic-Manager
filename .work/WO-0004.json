@@ -479,6 +479,46 @@
         "A restore point taken before the inventory (every one taken by 2565a11 or earlier) cannot retire the 1.2.0 units; it lists them for the operator.",
         "No authenticated DAST, no prod. Top-level status left to the coordinator."
       ]
+    },
+    {
+      "by": "builder (round 6: clean-room round 5 N1-N6 + gatekeeper round-5 non-blocking a-e)",
+      "date": "2026-09-29",
+      "worktree": "/Users/jamesrodman/Scripts/topic-manager-v120, branch release/v1.2.0 (base 07ca753)",
+      "commits": [
+        "224b6f7 v1.2.0 round 6: package-lock wait, restore verdict, location inventory, sonar coverage floor"
+      ],
+      "root_cause": "(N1) no apt/dpkg step waited for the package lock: apt fails at once on a held lock, and on an air-gapped host unattended-upgrades holds it for minutes; the failure text pointed at dpkg --audit. (a) sonar-local judged only the gate conditions, and a tree the scan did not read has no new issues; its PASS line counted all seven conditions though security_hotspots_reviewed is never judged, and an overall measure with no value passed as 'nothing new'. (b) the inventory globbed the unit and polkit directories by the service-name prefix, and skipped every directory, so a product unit under another name and any drop-in directory were invisible to the rollback. (c) the restore's verdict was grep '\"ok\"' on /api/health: any process answering ok passed as the restored version. (d) retire_unit discarded systemctl's exit code and a missing saved copy was a warn line, so neither reached the verdict. (N5) the retired count was the local added_units array, which does not include the socket unit restore_socket_unit retired first; RuntimeDirectoryPreserve=yes kept /run/topic-manager-apply after the units were removed and nothing removed it. (e) the contract's repo-tests command lacked --strict. (N2-N4, N6) docs written without being reconciled: detached running existed only in the contract; 'three'/'seven' pairs (the rule has 8 pairs over 7 units); README's ufw line predated the v1.2.0 redirect rule; the PPSM resolved row predated the 127.0.0.54 stub.",
+      "files_changed": [
+        "install.sh: DPKG_LOCKS/APT_LOCKS/DPKG_LOCK_WAIT_S, dpkg_lock_holder, wait_for_dpkg_lock (byte-identical in the upgrade); waits in apt_install_from_bundle, install_required_packages (online), install_time_daemon (online); every locking apt-get carries -o DPkg::Lock::Timeout; failure texts name the lock",
+        "install/upgrade-full.sh: the same lock helpers, waits in Phase 5 (git) and Phase 6 before DESTRUCTIVE_STARTED; OWNED_RUNTIME_DIR, RETIRED_UNITS/RETIRED_RUNTIME/RESTORE_PROBLEMS; unit_runtime_dirs, retire_unit (problems, drop-in dir, runtime dirs, global count), remove_retired_runtime, owned_inventory by location, owned_artefact/owned_unit_file, same_artefact, restore_owned_artefacts (ownership filter both ways, foreign list, problems); restore_verdict (health + restored version + no problems) as restore_from_backup's return value",
+        "tools/sonar-local.sh: MIN_FILES_PCT=80, indexed_files, judge_coverage, verdict combines coverage and gate, overall measures must have a value, PASS line names judged / no-value / reported conditions",
+        "systemd/topic-manager-audit-prune.timer: a comment naming the service (every shipped unit and rule now names it; t45 holds it)",
+        "README.md, docs/INSTALL.md, install/README.md, TROUBLESHOOTING.md, install/polkit/50-topic-manager.rules (comment), PPSM.csv + app/components/SettingsTab.js, tools/check-ppsm-consistency.sh (two resolved pins), CHANGELOG.md",
+        "tests: t45 (location inventory, ownership, runtime dirs, drop-ins, problems, restore_verdict), t46 (coverage floor, PASS line, overall no-value), NEW t47 (lock wait for real, identical helpers, every apt call bounded, held lock stops each path, docs derived counts); t23/t26/t38 drivers stub the lock wait; mutations.txt: M103 M125 M341 M342 M348 M352 M354 M358 M380 re-anchored, M384-M428 new",
+        ".claude/project.yml: repo-tests cmd is --strict; sonar-local note"
+      ],
+      "amendments": [
+        "systemd/topic-manager-audit-prune.timer: a comment line only. Required by (b): a rollback now decides a unit is the product's by its name OR what it says, and t45 holds every shipped unit and rule to naming the service; the timer was the one file that did not.",
+        "tests/t23, t26, t38, tools/check-ppsm-consistency.sh: their drivers extract functions that now call the lock wait / the pins now include the resolved row. Not named by the brief; required by it."
+      ],
+      "decisions_made": [
+        "(b) LOCATION records, OWNERSHIP decides. The restore point records every unit file, drop-in directory (<unit>.d/) and link in /etc/systemd/system (DROPIN_DIR excepted: restore_dropin owns it), every polkit rule and the whole helper tree, whatever the name. A pure location rollback would stop a snap-*.mount a snap refresh wrote after the restore point, or revert another tool's unit, so a restore retires or puts back only the PRODUCT's: a name starting topic-manager (a polkit rule: containing it), or a file that names it, or a link/drop-in of such a unit. Anything else that changed there is listed 'not the product's' and left alone. The restore point now carries copies of other services' unit files and drop-ins; it is root 0700, the same trust domain.",
+        "(d) EXIT NON-ZERO, not a WARN summary: a systemctl disable failure, a recorded artefact with no saved copy, an unhealthy service, or the wrong/unknown version = 'RESTORE INCOMPLETE - N problem(s)' listed one per line, restore_verdict returns 1, --restore exits 1 (via its existing fail). reset-failed stays ignored (it errs on a unit with no failed state). Documented in README Rolling back and TROUBLESHOOTING.",
+        "(c) the version compared is manifest/state.env topic_manager_version (tm/VERSION at the upgrade) against /api/health's version (every release since 1.0.0 serves it); an absent or 'unknown' recorded version is a problem, never a match.",
+        "(a) floor = ceil(80% of the base's indexed files), and never 0. Below it = exit 1 (a real change to the tree's scan scope); no count, or a base of 0 = exit 2. A release that deletes a fifth of the tree will fail here and must say why in review.",
+        "(N1) the lock holder is read from /proc/locks (no fuser/lslocks dependency), bound TM_DPKG_LOCK_WAIT_S default 600 s; apt also gets DPkg::Lock::Timeout for the race after the wait. Phase 6 waits BEFORE DESTRUCTIVE_STARTED, so a held lock changes nothing.",
+        "REG-0028 (ZAP Low, Private IP Disclosure on /api/audit and /api/audit/export): ACCEPTED BY DESIGN, not remediated. The client address is the audit record's source field (STIG AU-3 / Database SRG), both routes are authenticated and every authenticated user is an administrator by design (contract principle); masking it in the export would remove it from the one copy an auditor takes off the host."
+      ],
+      "sonar_local": "224b6f7 vs v1.1.1 (89f8c53) on 192.168.202.81: gate copy 7 conditions read back identical; files indexed head 145 / base 101 (floor 81); new_violations 0, new_duplicated_lines_density 0.0, bugs 0, vulnerabilities 1 = S4502 tm/app.py:46 KNOWN DIFFERENCE, reliability_rating 1 (5 of 7 judged); new_security_hotspots_reviewed no value; security_hotspots_reviewed reported, not judged; VERDICT PASS exit 0.",
+      "mutation_controls": "tests/mutate.sh in python:3.12-bookworm on .81 (working tree = 224b6f7): 54 run (M103 M125 M341 M342 M348 M352 M354 M358 M380 re-anchored + M384-M428 new): 52 killed, 0 SURVIVED, 0 aborted, 2 documented equivalents (M103 EXIT-trap cleanup, pre-existing; M388 h==0 clause, the base>0 guard makes the floor >= 1). Killed only by a STRUCTURAL assertion (no behavioural case reaches the line): M415 restore_verdict discarded, M416 restore record not reset, M417 Phase 6 wait removed, M425 Phase 5 wait removed. Manual cp/sha256-restored controls on docs/PPSM (not harness targets): D1 README ufw, D2 INSTALL pair count, D3 PPSM row, D4 detached command, D5/D6 one-sided PPSM edit, D7 a ninth polkit pair in the RULE (docs stay eight), D8 TROUBLESHOOTING lock row, D9 a CONSISTENT edit of both PPSM copies (the pin): all 9 RED. Pre-existing: 14 older controls (M48-M52, M174, M177, M190, M191, M202, M214, M275, M289, M290, M329) were already stale at 07ca753 (anchor matches 0); not run, not touched (outside this round).",
+      "suite_final": "working tree = 224b6f7, python:3.12-bookworm on 192.168.202.81, CI TEST_SETUP: check-requirements-lock --require-online PASS (15 releases); tests/run.sh --strict 484 passed, 0 failed, 0 skipped, exit 0; python-syntax, shell-syntax, frontend-syntax, config-example, heredoc-python, sbom-consistency, sca, ppsm-consistency (37 rows), pipefail-consumers (54 files), env-neutral (146 files), version-surfaces, requirements-lock all exit 0; sonar-local exit 0. After: .81 has 0 containers, 132 volumes (132 before; 0 tm-sonar/labelled), networks bridge/host/none only, no scratch dirs; disk 84%.",
+      "self_check": "bash -n every shell file (t14 fails only under macOS bash 3.2, pre-existing); py_compile tm/*.py + tm-apply; git diff re-read; the lock helpers byte-identical (t47); no early-exit pipe consumer (gate).",
+      "not_done": [
+        "No re-run on tm-qc (.92) of the lock wait, the restore verdict or the location inventory against real systemd/unattended-upgrades: NOT allowed this round. The lock detection is proven against a real POSIX lock in a container (/dev/shm); the rollback against a fake root with a stubbed systemctl.",
+        "(e) has no test: .claude/ is export-ignored and the contract is not in the tree the suite ships; verified by reading.",
+        "REG-0027 left open for the assure lane (clean-room round 5 re-ran the offline upgrade/restore on tm-qc, functionally PASS; closing it is not the builder's call).",
+        "14 stale pre-existing mutation controls (listed above) not repaired: outside this round's scope."
+      ]
     }
   ],
   "clean_room": {
@@ -534,7 +574,20 @@
       "surface": "24 URLs, UNAUTHENTICATED (login page + static assets only; no API route behind sign-in was attacked)",
       "result": "High 0 / Medium 6 / Low 0 / Info 82",
       "mediums": "CSP script-src unsafe-eval + style-src unsafe-inline x3 URLs = existing REG-0001/REG-0002 (deferred to precompile release); no new tickets",
-      "next": "re-scan after round 4 WITH an authenticated context (needs a test AD account)"
+      "next": "re-scan after round 4 WITH an authenticated context (needs a test AD account)",
+      "status": "SUPERSEDED 2026-09-29 by the AUTHENTICATED scan of 4a02d78 (next dast record): this one attacked only the login page and static assets"
+    },
+    {
+      "date": "2026-09-29",
+      "target": "tm-qc https://192.168.202.92/ (v1.2.0 @ 4a02d78, STIG+FIPS)",
+      "tool": "ZAP 2.17.0 AUTHENTICATED active scan, bar Medium",
+      "auth": "as svc-tm-zap (X-TM-Request header); 30 seeded API routes; excluded logout, login and service-restart",
+      "scan_only_changes": "tm-qc rate limits raised to their maximum and session limit 0 for the scan only. At the defaults the v1.2.0 login rate limit, and then the 5-session STIG limit, refused ZAP's re-logins until ZAP's Insights feature shut ZAP down: the controls worked",
+      "coverage": "54 URLs in scope, 127 attacked, 7633 attack requests, 1.1% answered 401/403",
+      "result": "High 0 / Medium 24 / Low 4 / Info 291",
+      "mediums": "24 = CSP script-src unsafe-eval + style-src unsafe-inline x12 URLs: existing REG-0001/REG-0002 (deferred to the precompile release); no new ticket",
+      "lows": "4 = Private IP Disclosure on /api/audit and /api/audit/export: the audit trail records the client address by design (STIG AU-3 source of the event), on authenticated routes only; REG-0028, accepted by design (not remediated: see REG-0028)",
+      "supersedes": "the unauthenticated scan of 3cfdedb above"
     }
   ]
 }
