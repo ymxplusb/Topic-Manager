@@ -181,6 +181,10 @@ a_ufw_status_failure_fails_closed() {
     local before mode
     for mode in fail garble; do
         fx_setup
+        # One failure mode at a time: fx_setup keeps TM_TMP, and a fail.ufw
+        # left from the first pass would answer for "garble" too (M317 lived
+        # through exactly that).
+        rm -f "${TM_TMP}/fail.ufw" "${TM_TMP}/garble.ufw"
         echo 80/tcp >> "${TM_TMP}/ufw.state"
         : > "${TM_TMP}/${mode}.ufw"
         before="$(fx_hash_managed)"

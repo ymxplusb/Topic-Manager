@@ -207,6 +207,38 @@ PYEOF
 }
 tm_case "every-validator-accepts-its-range-and-refuses-injection" none a_validators
 
+# Round 4: the IP rule has TWO layers — the character set, then "parses with
+# no scope id" — and each covers the other's inputs, so a test through
+# valid_host() alone could not tell either layer was gone (M302 and M303
+# lived). Each layer is proven here with the OTHER one removed.
+a_each_ip_layer_holds_alone() {
+    local out
+    out="$(_py - <<'PYEOF'
+import re
+from tm import settings_schema as s
+chars = s._IP_CHARS_RE
+s._IP_CHARS_RE = re.compile(r'(?s).+')          # the character rule removed
+print('scope_layer=%s' % [s.valid_host(v) for v in ('2001:db8::1%eth0', '2001:db8::1%a\nb', '2001:db8::1')])
+s._IP_CHARS_RE = chars
+
+
+class _Parsed:
+    scope_id = None
+
+
+real = s.ipaddress.ip_address
+s.ipaddress.ip_address = lambda v: _Parsed()    # a parser that accepts anything
+print('char_layer=%s' % [s.valid_host(v) for v in ('2001:db8::1%eth0', '1:2::x;y', '1:2::a b', '2001:db8::1')])
+s.ipaddress.ip_address = real
+PYEOF
+)"
+    tm_assert_eq "scope_layer=[False, False, True]" "$(grep '^scope_layer=' <<<"$out")" \
+        "with the character rule gone, a scope id is accepted: the scope layer does not hold on its own (${out})"
+    tm_assert_eq "char_layer=[False, False, False, True]" "$(grep '^char_layer=' <<<"$out")" \
+        "with a permissive parser, a character outside [0-9A-Fa-f:.] is accepted: the character layer does not hold on its own (${out})"
+}
+tm_case "each-layer-of-the-ip-rule-holds-alone" none a_each_ip_layer_holds_alone
+
 a_cross_field() {
     local out
     out="$(_py -c "
