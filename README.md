@@ -100,8 +100,8 @@ The script, in order:
 - Creates `/etc/topic-manager/clusters.d/` (owned by `topic-manager`) and `/opt/topic-manager/data/cluster-certs/` (mode 0700) — the only two directories the application may write outside its own data and log directories. `/etc/topic-manager` itself stays `root:topic-manager 0750`; see [Cluster profiles](#cluster-profiles) for why that split is not arbitrary
 - Writes `/etc/topic-manager/config.yaml` (0640 `root:topic-manager`) with your directory settings and a random secret key — or, on a reinstall, keeps the existing one and **refuses to continue** if it lacks `auth.ldap_server`, `ldap_base_dn` or `ldap_domain`
 - Creates an **empty** cluster store at `/etc/topic-manager/clusters.d/clusters.yaml` (or, on a reinstall over an older host, moves the existing `clusters:` block out of `config.yaml`). `config/clusters.yaml.example` is a format reference; it is never installed as live clusters
-- Installs the systemd service (`topic-manager.service`, `UMask=0077`), the on-demand `topic-manager-nginx-test.service`, and `/etc/polkit-1/rules.d/50-topic-manager.rules`, which is what lets the Settings restart control act
-- v1.2.0: installs the root apply helper (`/usr/libexec/topic-manager/tm-apply`), its four one-shot units, the daily `topic-manager-audit-prune.timer`, and the Settings-managed nginx/rsyslog files (release defaults, only where absent); keeps `systemd-timesyncd` or installs `chrony` (see [Host settings](#host-settings-v120)); then APPLIES the saved host settings through the same path as the Settings button, so what is live is recorded from the first minute. Optional flags seed those settings: `--syslog-host/--syslog-port/--syslog-protocol/--syslog-app-id/--syslog-ca`, `--ntp-server`, `--no-http-redirect`, `--install-chrony`; a bad value stops the install before anything is changed
+- Installs the systemd service (`topic-manager.service`, `UMask=0077`) and its socket (`topic-manager.socket`: gunicorn listens only on `/run/topic-manager/gunicorn.sock`, 0660 `topic-manager:www-data`), the on-demand `topic-manager-nginx-test.service`, and `/etc/polkit-1/rules.d/50-topic-manager.rules`, which is what lets the Settings restart control act
+- v1.2.0: installs the root apply helper (`/usr/libexec/topic-manager/tm-apply`), its four one-shot units, the daily `topic-manager-audit-prune.timer`, `topic-manager-apply-audit.path` (audits each apply result as it lands, through `topic-manager-apply-audit.service`), and the Settings-managed nginx/rsyslog files (release defaults, only where absent); keeps `systemd-timesyncd` or installs `chrony` (see [Host settings](#host-settings-v120)); then APPLIES the saved host settings through the same path as the Settings button, so what is live is recorded from the first minute. Optional flags seed those settings: `--syslog-host/--syslog-port/--syslog-protocol/--syslog-app-id/--syslog-ca`, `--ntp-server`, `--no-http-redirect`, `--install-chrony`; a bad value stops the install before anything is changed
 - Installs the nginx site, the certificate (yours, an existing one, or the self-signed placeholder) and sets `ssl_protocols TLSv1.2 TLSv1.3` in `/etc/nginx/nginx.conf` — backed up, `nginx -t`'d, and put back if the test fails
 - Opens ufw ports 80 and 443 if ufw is active
 - Verifies, as the service account, that the app can write `clusters.d` and cannot write `config.yaml`
@@ -744,12 +744,20 @@ Then open Settings and check that Cluster Profiles lists what it listed before.
 Every run leaves a verified restore point. Nothing is deleted by a rollback that is not put back from it.
 
 ```bash
-sudo bash install/upgrade-full.sh --list-backups
+# By the ABSOLUTE path the upgrade printed at its end ("Rollback:  sudo bash <path> --restore
+# <TS>") — the script that took the restore point, wherever it was run from. After an
+# offline upgrade that is the staged tree:
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --list-backups
 # 20260830-141205  v1.0.0  412M  verified OK  perms recorded
 
-sudo bash install/upgrade-full.sh --restore 20260830-141205
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --restore 20260830-141205
 ```
-`--restore` verifies the backup's `SHA256SUMS` before it restores from it, puts back the recorded ownership and modes, and reports the health of what it restored. A vCSA snapshot revert remains the fastest option if the host itself is in doubt.
+`--restore` verifies the backup's `SHA256SUMS` before it restores from it, puts back the recorded ownership and modes, and reports the health of what it restored. It also makes the product's host units, polkit rules and root helper what the restore point
+recorded: every unit, timer, path or socket unit the newer release added is stopped, disabled
+and removed (with its socket file), its helper and rules deleted, the older copies put back,
+and systemd reloaded — so no timer of the newer release keeps firing into code the restored
+one does not have. A restore point taken before v1.2.0's inventory cannot say what its release
+shipped; `--restore` then changes none of them and lists what it left. A vCSA snapshot revert remains the fastest option if the host itself is in doubt.
 
 ### Offline (air-gapped) upgrade
 
@@ -777,7 +785,7 @@ sha256sum -c topic-manager-offline-<version>.tar.gz.sha256
 sha256sum topic-manager-offline-<version>.tar.gz      # must equal the out-of-band value
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/offline-src
 # Straight into the root-owned destination. --strip-components=1 drops the
-# repo-checkout directory the tarball wraps everything in, so nothing is ever
+# topic-manager-<version>/ directory the tarball wraps everything in, so nothing is ever
 # staged in /tmp, where the directory root reads from would be created by
 # whoever got there first.
 sudo tar xzf topic-manager-offline-<version>.tar.gz   -C /var/lib/topic-manager/offline-src --strip-components=1
@@ -842,7 +850,8 @@ sudo tar xzf topic-manager-offline-<version>.tar.gz   -C /var/lib/topic-manager/
 sudo bash /var/lib/topic-manager/install-src/install.sh --ldap-url ... --ldap-base-dn ... --ldap-group ...
 ```
 
-It auto-detects offline mode. See [docs/INSTALL.md](docs/INSTALL.md) section 5.
+It auto-detects offline mode. This is the one fresh-install procedure: docs/INSTALL.md section
+5b and the text `prepare-offline.sh` prints give the same commands.
 
 ---
 

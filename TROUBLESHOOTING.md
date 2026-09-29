@@ -779,8 +779,21 @@ Phase 4 restore point, i.e. with whatever `ssl_protocols` it had before the upgr
 host, TLSv1 and TLSv1.1 enabled again). Re-run the upgrade, or set the line by hand, after
 a rollback.
 
-Check it: `grep -E '^\s*ssl_protocols' /etc/nginx/nginx.conf`, and
-`openssl s_client -connect localhost:443 -tls1_1 </dev/null` must fail the handshake.
+Check it on the host: `sudo nginx -T 2>/dev/null | grep -E '^[[:space:]]*ssl_protocols'` (every
+line `TLSv1.2 TLSv1.3`). Then prove the SERVER refuses TLS 1.1, from a machine that is **not**
+in FIPS mode and has **OpenSSL 3** — never from `localhost` on a FIPS host, whose own client
+refuses TLS 1.1 before sending a byte ("no protocols available"), which says nothing about
+the server; LibreSSL (macOS `/usr/bin/openssl`) cannot run the probe at all (it rejects
+`@SECLEVEL=0`):
+
+```bash
+openssl s_client -connect <server-name>:443 -tls1_1 -cipher 'DEFAULT:@SECLEVEL=0' </dev/null 2>&1 \
+    | grep -E 'alert protocol version|handshake failure|no protocols available|Cipher is'
+```
+
+Pass = `alert protocol version` or `handshake failure` (a refused handshake also prints
+`Cipher is (NONE)`); fail = `Cipher is <a cipher name>`; `no protocols available` = your
+client refused, no result. Full reading: docs/INSTALL.md section 7.
 
 ---
 
@@ -945,14 +958,22 @@ this if the host itself is in doubt.
 
 **From a restore point** — this is the supported path:
 ```bash
-sudo bash install/upgrade-full.sh --list-backups
+# By the ABSOLUTE path the upgrade printed at its end ("Rollback:  sudo bash <path> --restore
+# <TS>") — the script that took the restore point, wherever it was run from. After an
+# offline upgrade that is the staged tree:
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --list-backups
 # 20260830-141205  v1.0.0  412M  verified OK  perms recorded
 
-sudo bash install/upgrade-full.sh --restore 20260830-141205
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --restore 20260830-141205
 ```
 It verifies the backup's `SHA256SUMS` before restoring from it, refuses to restore a backup
 that fails that check, puts back the recorded ownership and modes, and then reports the
-health of what it restored.
+health of what it restored. It also makes the product's host units, polkit rules and root helper what the restore point
+recorded: every unit, timer, path or socket unit the newer release added is stopped, disabled
+and removed (with its socket file), its helper and rules deleted, the older copies put back,
+and systemd reloaded — so no timer of the newer release keeps firing into code the restored
+one does not have. A restore point taken before v1.2.0's inventory cannot say what its release
+shipped; `--restore` then changes none of them and lists what it left.
 
 **By hand**, if the script cannot run at all. A restore point is laid out as:
 ```
@@ -965,6 +986,8 @@ health of what it restored.
   system/topic-manager.nginx         system/tm-security-headers.conf
   system/logrotate-topic-manager     venv.tar.gz
   manifest/state.env                 manifest/permissions.baseline
+  manifest/owned-artefacts.list      system/owned/<absolute path>   (v1.2.0+: units,
+                                     polkit rules, /usr/libexec/topic-manager, byte-exact)
   SHA256SUMS
 ```
 ```bash

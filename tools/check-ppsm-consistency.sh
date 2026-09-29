@@ -114,7 +114,13 @@ PINNED = [
     # v1.2.0: gunicorn has no TCP port; nginx reaches it over a Unix socket.
     ("App",     "N/A (Unix socket)", "Unix stream", "Local", "/run/topic-manager/gunicorn.sock"),
     # Host services on the port list a scan shows (clean-room, 2026-09-29).
-    ("Host",    "25",   "TCP",     "Loopback", "Not used by the application"),
+    # Postfix as a STIG baseline installs it listens on every interface
+    # (inet_interfaces = all, measured on the clean-room host 2026-09-29);
+    # the row said Loopback. The product does not touch it, so the row
+    # describes the host as found and names the hardening option.
+    ("Host",    "25",   "TCP",     "Inbound",  "Not used by the application"),
+    ("Host",    "25",   "TCP",     "Inbound",  "inet_interfaces = all"),
+    ("Host",    "25",   "TCP",     "Inbound",  "inet_interfaces = loopback-only"),
     ("Host",    "323",  "UDP",     "Loopback", "chronyc"),
     ("Host",    "ephemeral (32768-60999)", "UDP", "Outbound", "rsyslog UDP sender sockets"),
     ("Auth",    "636",  "TCP",     "Outbound", ""),

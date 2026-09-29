@@ -104,6 +104,26 @@ Database SRG V4R5 applied to SQLite.)
 - `install.sh` flags: `--syslog-host`, `--syslog-port`, `--syslog-protocol`,
   `--syslog-app-id`, `--syslog-ca`, `--ntp-server`, `--no-http-redirect`, `--install-chrony`.
 
+### Clean-room round 5 (WO-0004): rollback and documentation
+- **`--restore` to 1.1.x retires what 1.2.0 added.** The restore point now records every
+  product host artefact (units and their enablement links, polkit rules,
+  `/usr/libexec/topic-manager`) with a byte-exact copy (`manifest/owned-artefacts.list`,
+  `system/owned/`). A restore stops, disables and removes every unit the newer release added
+  (the audit-prune timer and apply-audit path unit kept firing into modules 1.1.x does not
+  have), deletes its helper and rules, puts the older copies back and reloads systemd. A
+  retired socket unit's socket file (`/run/topic-manager/gunicorn.sock`) goes with it.
+- Docs: INSTALL 5a gives the build-host prerequisites with and without `sudo` (the
+  `ubuntu:24.04` container has none); the TLS 1.1 probe is server-side only, needs OpenSSL 3,
+  and reads `Cipher is (NONE)` as a refusal; `--restore` is documented by absolute path; ONE
+  fresh offline install procedure (root-owned `/var/lib/topic-manager/install-src`) in README,
+  INSTALL 5b and `prepare-offline.sh`; README names `topic-manager.socket` and
+  `topic-manager-apply-audit.path`; the PPSM Postfix row describes Postfix as installed (all
+  interfaces) and names the loopback-only hardening, which the installer does not apply.
+- Tools: `tools/sonar-local.sh` holds the project to a copy of the estate gate (Jarvis
+  Standard, all seven conditions), removes its volumes and network, fails at once on a dead
+  server and refuses a docker disk at 90%; `check-version-surfaces.sh` no longer prints OK
+  after a changelog-date FAIL.
+
 ### Changed
 
 - `_ALL_KEYS` is a NEW set (`_PUBLIC_KEYS | ADMIN_KEYS`, `_PUBLIC_KEYS` frozen). It used to

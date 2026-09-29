@@ -174,10 +174,17 @@ architecture-specific), with a clone of the release. It must be at least as patc
 target: the bundle can only upgrade the target to versions the build host could download.
 
 **Build-host prerequisites.** A stock Ubuntu 24.04 (a server, or the `ubuntu:24.04`
-container) has none of these; install them first:
+container) has none of these; install them first. On a server, as an administrator:
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git python3 python3-pip curl apt-utils
+```
+
+In the `ubuntu:24.04` container you are already root and the image has **no `sudo`**
+(`sudo: command not found`), so drop it:
+
+```bash
+apt-get update && apt-get install -y git python3 python3-pip curl apt-utils
 ```
 
 `git` (the bundle is `git archive` of the checkout), `python3` and `python3-pip` (the lock
@@ -233,10 +240,18 @@ out of band** — from the release record, or read off the build host by a secon
 only against the `.sha256` that travelled with the bundle, which proves integrity in transit
 but not origin. Then:
 
+Root runs `install.sh`, so the tree it runs from is created **root-owned** first and the
+bundle is unpacked straight into it (`--strip-components=1` drops the `topic-manager-<version>/`
+directory the tarball wraps everything in); nothing is staged where another account could
+change it before root reads it. This is the same procedure `prepare-offline.sh` prints and
+README.md -> *Offline Install* gives:
+
 ```bash
 sha256sum -c topic-manager-offline-<version>.tar.gz.sha256
-tar xzf topic-manager-offline-<version>.tar.gz && cd topic-manager-<version>
-sudo bash install.sh \
+sha256sum topic-manager-offline-<version>.tar.gz      # must equal the out-of-band value
+sudo install -d -m 700 -o root -g root /var/lib/topic-manager/install-src
+sudo tar xzf topic-manager-offline-<version>.tar.gz -C /var/lib/topic-manager/install-src --strip-components=1
+sudo bash /var/lib/topic-manager/install-src/install.sh \
     --ldap-url ldaps://dc1.example.org:636 --ldap-base-dn "DC=example,DC=org" \
     --ldap-group "CN=Kafka-Admins,OU=Groups,DC=example,DC=org" --server-name topics.example.org
 ```
@@ -341,11 +356,17 @@ grep -E '^\s*ssl_protocols' /etc/nginx/nginx.conf
 # TLS 1.0 / 1.1 must be refused BY THE SERVER. Probe from a machine that is NOT in FIPS
 # mode: a FIPS client (this host, if FIPS is on) refuses TLS 1.1 ITSELF and prints
 # "no protocols available" without sending a byte — that proves nothing about the server.
+# The probe needs OpenSSL 3 (`openssl version` -> "OpenSSL 3.x"): @SECLEVEL=0 is what lets
+# a modern client OFFER TLS 1.1 at all, and LibreSSL (the macOS /usr/bin/openssl, e.g.
+# 3.3.6) does not understand it and errors before connecting — no result either way.
 openssl s_client -connect <server-name>:443 -tls1_1 -cipher 'DEFAULT:@SECLEVEL=0' </dev/null 2>&1 \
-    | grep -E 'alert protocol version|no protocols available|Cipher is'
-#   ...:error:...:tlsv1 alert protocol version...   <- the SERVER refused (TLS alert 70): pass
-#   ...no protocols available...                    <- YOUR client refused: no result; use another client
-#   New, TLSv1.1, Cipher is ...                     <- the server ACCEPTED TLS 1.1: fail
+    | grep -E 'alert protocol version|handshake failure|no protocols available|Cipher is'
+# Read the "Cipher is" line by its VALUE — a refused handshake prints one too:
+#   ...tlsv1 alert protocol version...  or  ...handshake failure...
+#   New, (NONE), Cipher is (NONE)                <- the SERVER refused: pass
+#   ...no protocols available...                 <- YOUR client refused: no result; use another client
+#   New, TLSv1.1, Cipher is <a cipher name>      <- the server ACCEPTED TLS 1.1: fail
+# Only a real cipher name (not "(NONE)") after "Cipher is" means TLS 1.1 was accepted.
 # The configuration half, on the host: every ssl_protocols nginx will use is TLSv1.2 TLSv1.3
 sudo nginx -T 2>/dev/null | grep -E '^[[:space:]]*ssl_protocols'
 
@@ -432,6 +453,20 @@ If `ufw` is active, `install.sh` opens 443/tcp, and 80/tcp while the HTTP redire
 reason, and does not claim the ports are open. Otherwise open them yourself, and
 nothing else is needed inbound except SSH for administration. The complete inventory is
 `PPSM.csv`.
+
+**Postfix (25/tcp), a host service this product does not use.** A STIG baseline installs
+Postfix for audit alerts, and as installed it listens on **every** interface (`ss -ltn` shows
+`0.0.0.0:25` and `[::]:25`; `postconf inet_interfaces` answers `all`). `install.sh` leaves
+it alone: the MTA belongs to the host baseline, not to this product, and the product relies
+on no mail at all. If the host only ever sends mail by local submission (the audit-alert case),
+narrow it:
+
+```bash
+sudo postconf -e inet_interfaces=loopback-only && sudo systemctl restart postfix
+ss -ltn | grep ':25 '      # 127.0.0.1:25 and [::1]:25 only
+```
+
+or leave it and block 25/tcp at the host firewall. `PPSM.csv` lists it as found (Inbound).
 
 ---
 
