@@ -641,7 +641,7 @@ promote:
     user: claude_admin
     key: "~/.ssh/tm_qc_ecdsa384 (ECDSA P-384 — the FIPS host REFUSES Ed25519)"
     sudo: "password; Vault KV creds/data/infra-accounts/local/tm-qc-claude_admin field password (Vault LDAP login from the operator credential; never print it)"
-    platform: "Ubuntu 24.04.4 + Ubuntu Pro, FIPS on (fips_enabled=1), USG STIG (cis/disa profile as hardened), umask 0007, AIR-GAPPED (no internet)"
+    platform: "Ubuntu 24.04.4 + Ubuntu Pro, FIPS on (fips_enabled=1), USG STIG (disa_stig), umask 0007. NOT air-gapped: it reaches pypi.org and the Ubuntu archive (measured 2026-09-30), and unattended-upgrades runs. Offline tests must use --offline (upgrade) or block egress first (fresh install; install.sh auto-detects, REG-0034)."
     datastore: "Host_1_Localv2 (esxi-1 local)"
     snapshots: "clean-ubuntu -> stig-fips -> v110-installed (v1.1.0 installed; STIG audit 209 pass / 8 fail)"
     revert: >-

@@ -348,6 +348,16 @@
       "finding": "--list-backups lists /var/backups/topic-manager/apply (the settings helper's own backups) as a restore point: 'v? unverified no perms'.",
       "where": "install/upgrade-full.sh --list-backups",
       "repro": "tm-qc after an apply + upgrade: upgrade-full.sh --list-backups"
+    },
+    {
+      "id": "REG-0034",
+      "severity": "Medium",
+      "status": "open",
+      "source": "clean-room FRESH install of released v1.2.0 on tm-qc (stig-fips), 2026-09-30",
+      "finding": "install.sh chooses online vs offline by probing pypi.org (install.sh:918) with no flag to force offline; INSTALL §5b / install/README present the bundle as THE offline install without saying so. On a host with internet the bundle is silently ignored. Offline FRESH install therefore never proven (tm-qc turned out NOT air-gapped).",
+      "where": "install.sh:918; docs/INSTALL.md §5b; install/README.md",
+      "repro": "tm-qc stig-fips (has internet): install.sh from the staged bundle logs 'Install mode: ONLINE' and pulls debs/wheels from the internet",
+      "closes_when": "install.sh --offline forces bundle-only (fails if anything is missing), docs say so, and a fresh install on a host with egress blocked passes"
     }
   ]
 }

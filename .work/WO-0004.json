@@ -696,5 +696,13 @@
     "build": "ee694f8",
     "bundle_sha256": "609965c38efbba7740125ab48af24a2dbbc6e29c971e288f85bcd621cc0adbca",
     "verdict": "ownership PASS on the real host (foreign files byte-identical, site-backup enabled, 17 retired = list, polkit 1.1.0 byte-exact, manifest 34 entries); FAIL only on REG-0031 (no RESULT line on success path)"
+  },
+  "clean_room_fresh_install": {
+    "date": "2026-09-30",
+    "source": "tag v1.2.0 = 2c4a267",
+    "target": "tm-qc from stig-fips (no product)",
+    "mode": "ONLINE (host has internet; install.sh auto-detects)",
+    "verdict": "YES - a person can install v1.2.0 from scratch from the docs (online path), no intervention; all checks pass incl. AD sign-in 200/401; STIG 209/8 -> 207/10, both new failures from unattended-upgrade systemd update before the install, none from the product",
+    "open": "offline fresh install unproven (REG-0034)"
   }
 }
