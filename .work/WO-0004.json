@@ -4,7 +4,7 @@
   "project": "Topic Manager",
   "release": "minor",
   "opened": "2026-09-26",
-  "status": "assuring",
+  "status": "done",
   "depends_on": "WO-0003 (v1.1.0) is the baseline. Its builder is mid-edit on release/v1.1.0: HEAD moved 36576f3 -> 7d05e56 during this scout, 19 files staged (tm/routes.py, tm/auth.py, install.sh, install/upgrade-full.sh, prepare-offline.sh, config examples, tests, tools). Every line number below is measured on that working tree and WILL move; re-anchor before building.",
   "scout": {
     "method": "Read-through of every file in scope; python ast over tm/*.py for every log_action call (16) and every audit_log SQL site (1 writer); grep across naming variants for max_concurrent/_max_sessions, listen 80/ufw 80, server.crt/server.key/ssl_certificate, PPSM rows, rsyslog/chrony/timesyncd, and test/gate bindings (tests/*.sh, tests/lib/*, tests/mutations.txt, tools/*.sh, .gitlab-ci.yml). Frontend and shell reachability established by reading guards, not by AST (no JS or bash language server): INCOMPLETE for sites reached through string-built names.",
@@ -689,6 +689,12 @@
       "meaning": "passed",
       "verdict": "Prod .90 upgraded 1.1.1 -> 1.2.0 2026-09-30 ~03:33Z (online, read-only deploy key, v1.2.0 @ 2c4a267), by Claude on James's standing go-ahead. audit exit 1 (1 warning: rsyslog-openssl absent -> installed after via apt) -> snapshot pre-v1.2.0-upgrade-20260930 -> backup 20260930-033149 exit 0 -> full upgrade phases 1-12 'Upgrade complete' (no RESULT line: REG, see register). Host verified: version/health 1.2.0; topic-manager + socket + nginx active; gunicorn.sock 0660 topic-manager:www-data, 0 listeners on 5001, nginx -> socket upstream; TLS1.0/1.1 refused; 4 security headers; 14 assets ?v=1200 all 200; tm.db 0600/data 0700; manifest 35 entries root 0600; 11 units; no reboot needed; journal clean. sssd socket units failed after OS patch (host config, REG). Rollback: --restore 20260930-033204. Snapshot kept until James's sign-in check.",
       "at": "2026-09-30T04:04:17Z"
+    },
+    "wrap": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "WO-0004 done: v1.2.0 live on prod .90; fresh install proven (online). OpenProject #109 closed with evidence. Lesson approved: reference-zap-stops-itself-on-an-auth-failure-insight (3 others rejected by James). Session file session-2026-09-30, index line both copies, claude repo 908abaf pushed. Pending for later (parked by James): v1.3.0-v1.5.0, REG-0021..0034, tm-apply complexity WO, ci-templates 0-file Sonar gap, disable svc-tm-zap, remove pre-v1.2.0 snapshot after James's sign-in.",
+      "at": "2026-09-30T19:23:49Z"
     }
   },
   "clean_room_restore_r7": {
