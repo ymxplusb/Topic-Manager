@@ -198,6 +198,12 @@
       "date": "2026-09-28",
       "id": "qc-host-declared",
       "ruling": "tm-qc 192.168.202.92 declared as this project's QC host in .claude/project.yml (3cfdedb)."
+    },
+    {
+      "by": "James",
+      "date": "2026-09-29",
+      "id": "ship-and-deploy-preauthorized",
+      "ruling": "'please deploy 1.2.0 once completed asap' - standing go-ahead to push, tag v1.2.0 and deploy to prod .90 once the assure lane clears on the written bar (no HIGH, no failed/blocked gate); stop on anything red. Then verify a fresh install from scratch works, then /wrap with v1.3-v1.5 + register recorded as pending."
     }
   ],
   "builder_backend": {
@@ -652,5 +658,25 @@
       "lows": "4 = Private IP Disclosure on /api/audit and /api/audit/export: the audit trail records the client address by design (STIG AU-3 source of the event), on authenticated routes only; REG-0028, accepted by design (not remediated: see REG-0028)",
       "supersedes": "the unauthenticated scan of 3cfdedb above"
     }
-  ]
+  ],
+  "stages": {
+    "decide": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "BACKFILLED 2026-09-30 (pre-lane WO; same 'Backfill, marked' ruling as WO-0003). Scope = the 7 owner-approved STIG settings from the decision board 1agar5Rm (75 rules decided) + v1.2.0 rulings (audit failure BLOCKS, prune by age/capacity, login 10/min + API 300/min, sessions default 3 Settings wins, redirect-off closes ufw 80). Later rulings in decisions[]: authz keep, gunicorn unix socket, qc host, ship+deploy pre-authorized.",
+      "at": "2026-09-30T03:20:25Z"
+    },
+    "build": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "BACKFILLED 2026-09-30. Builder rounds 1-7 recorded in builder_rounds (merges of v1.1.0/v1.1.1, Sonar pre-check, REG-0014..0019, round-4 security fixes + socket + sonar-local gate, round-5 rollback inventory + docs, round-6 final fixes, round-7 install manifest). Linux strict 494/0/0; full mutate 503/493 killed/0 survived/10 equivalent.",
+      "at": "2026-09-30T03:20:26Z"
+    },
+    "assure": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "v1.2.0 @ ee694f8: final gatekeeper CONFIRMED on the no-HIGH bar (14 gates pass incl. sonar-local 0 new vs v1.1.1 on 5/7 judged conditions; B1 rollback ownership falsified with foreign fixtures; CI tag fetch verified). Adversary (Codex daybreak-blue): no HIGH; F-03/F-04/F-07 fixed, F-05 fixed via unix socket, F-02/F-08 disclosed-by-design, F-01/F-06 FALSE. sec-review: HIGH config injection + CSRF + installer race fixed and re-attacked (30+ payloads). DAST: authenticated ZAP on tm-qc, 127 URLs / 7633 requests / 1.1% 401-403: High 0, Medium 24 = REG-0001/0002 CSP (deferred), Low 4 REG-0028 accepted. Render proof RENDERS (7 panes). Clean-room on real STIG+FIPS tm-qc @ 34230aa PASS (upgrade/restore/upgrade, STIG 209/8 no new). Restore retest @ ee694f8 running in parallel.",
+      "at": "2026-09-30T03:20:26Z"
+    }
+  }
 }
