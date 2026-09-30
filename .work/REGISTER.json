@@ -297,6 +297,28 @@
       "why": "the audit trail records the source address of every event by design (STIG AU-3 content of audit records; Database SRG). Both routes require sign-in, and every authenticated user is an administrator by design (contract principle)",
       "disposition": "accepted by design, NOT remediated: masking the address in the export would strip it from the one copy an auditor takes off the host; the routes are authenticated and the scan found no unauthenticated path to them",
       "status": "accepted"
+    },
+    {
+      "id": "REG-0029",
+      "date": "2026-09-30",
+      "source": "builder round 7 (WO-0004), found by the first FULL tests/mutate.sh run of v1.2.0",
+      "severity": "Medium",
+      "finding": "test harness: a failure message containing a TAB was written into the TAB-separated result record, so the runner reported HARNESS ERROR instead of FAIL; mutation controls M68 and M144-M158 could only ABORT, and no full mutate run could complete",
+      "where": "tests/lib/harness.sh _tm_record",
+      "why": "t18 and t26 assertions quote apt/awk output lines that contain tabs",
+      "disposition": "fixed: tabs in the message become spaces; t00 runner-counts-a-failure-whose-message-holds-a-tab",
+      "status": "fixed-unreleased"
+    },
+    {
+      "id": "REG-0030",
+      "date": "2026-09-30",
+      "source": "gatekeeper round 6 (WO-0004) B1/N2/N3",
+      "severity": "High",
+      "finding": "a rollback judged a host file the product's by its name or its TEXT: another tool's unit that mentioned /opt/topic-manager was stopped, disabled and deleted, an operator's drop-in naming the product in a comment was deleted unlisted; a product unit that did not name the service survived; a restore point with no inventory exited 0",
+      "where": "install/upgrade-full.sh owned_artefact/owned_unit_file/restore_owned_artefacts (round 6)",
+      "why": "ownership was inferred, never recorded",
+      "disposition": "fixed in round 7: install manifest written by install.sh and the upgrade; restore by record only; v1.1.x by its shipped list (re-derived from the tags); unknown release without a manifest retires nothing and fails the verdict",
+      "status": "fixed-unreleased"
     }
   ]
 }

@@ -519,24 +519,87 @@
         "REG-0027 left open for the assure lane (clean-room round 5 re-ran the offline upgrade/restore on tm-qc, functionally PASS; closing it is not the builder's call).",
         "14 stale pre-existing mutation controls (listed above) not repaired: outside this round's scope."
       ]
+    },
+    {
+      "by": "builder (round 7: gatekeeper round-6 verdict B1 N1-N3 + clean-room round 6 M1 M2)",
+      "date": "2026-09-30",
+      "worktree": "/Users/jamesrodman/Scripts/topic-manager-v120, branch release/v1.2.0 (base 34230aa)",
+      "commits": [
+        "a434ba0 v1.2.0 round 7: rollback ownership by install manifest; detached-run verdict; timer stamps",
+        "9cdbd24 tests (v1.2.0 round 7): restore the restore-verdict cases; a tab in a failure message is not a harness error"
+      ],
+      "root_cause": "(B1) ownership had no record: owned_artefact inferred 'the product's' from a file's NAME or TEXT (grep topic-manager), so any file that mentioned the product - another tool's backup unit, an operator's drop-in comment - was stopped/disabled/deleted, and a deleted drop-in of an unowned unit was removed in the added_other loop without being listed. (N2) the same inference missed a product unit that did not name the service (tm-exporter.timer: Unit= only). (N3) a restore point without an inventory had no defined rule, so it warned and exited 0. (N1) 14 controls' anchors had drifted since round 4, and a mutate run stops on the first unmatched anchor. (found in round 7) the test harness wrote a failure message containing a TAB into its TAB-separated result record, so t18/t26 failures that quoted apt/awk lines were counted as HARNESS ERROR and 7 controls (M68, M144-M158) could only ABORT - no full mutate run could have completed. (M1) a detached run's exit code went nowhere, yet the docs judged the run by it. (M2) retire_unit never removed the persistent-timer stamp systemd keeps after the unit is gone.",
+      "files_changed": [
+        "install.sh + install/upgrade-full.sh: ONE byte-identical block (t45) - INSTALL_MANIFEST=/var/lib/topic-manager/installed-files.manifest, OWNED_* dirs, APPLY_HELPER_FILES (install_apply_helper now loops it), HOST_FILES, HOST_LINKS, V120_MANAGED (moved in), host_artefacts <tree> (every systemd/* unit + its WantedBy/RequiredBy link, every install/polkit/* rule, the helper tree, HOST_FILES/LINKS, operator state), write_install_manifest <tree> [pending] (present artefacts only, sha256 as on disk, root 0600 in a 0700 dir). install.sh writes it after the last enable.",
+        "install/upgrade-full.sh: LEGACY_V11X_VERSIONS/ARTEFACTS (v1.1.0/1.1.1 shipped list, data); legacy_artefacts; location_inventory (lists, decides nothing); backup_owned_artefacts <BD> <installed-version> (host manifest, or a '# derived:' one for v1.1.x, or none + warning; byte copies of every recorded path); restore_point_copy (Phase-4 copy, or the legacy fixed copies); set_aside_if_changed (SET_ASIDE_DIR); restore_owned_artefacts rewritten on the two manifests (retire now-not-then, put back then, foreign listed as added/removed/changed, host manifest replaced by the restore point's, .pending removed; unknown release without a manifest = RESTORE_PROBLEMS per artefact, nothing retired); retire_unit no longer deletes unrecorded drop-ins/links, removes a timer's stamp (TIMER_STAMP_DIR); restore_socket_unit and restore_v120_managed no longer retire/disable units by NAME; Phase 9 writes .pending before its first host write and the manifest after deploy; the end of the upgrade rewrites it (enable links) and drops .pending; result_line + early EXIT trap and _on_exit print 'RESULT: exit <N>' last.",
+        "README.md, TROUBLESHOOTING.md: the restore paragraph (ownership by record, set-aside, v1.1.x shipped list, unknown = RESTORE INCOMPLETE) and the restore-point layout; README + docs/INSTALL.md: reading a detached run's RESULT line; CHANGELOG round 7.",
+        "tests: t45 rewritten on the gatekeeper's fixtures (site-backup.service with /opt/topic-manager in ExecStart, enabled; nginx.service.d/50-limits.conf with a topic-manager comment; tm-exporter.service/.timer by record vs not; an edited recorded file; .pending only; unknown and legacy restore points; a symlink where the helper dir was; timer stamps) + manifest cases run on BOTH scripts' copies + the v1.1.x list re-derived from the v1.1.0/v1.1.1 tags + this tree's install/cp/ln destinations held to the lists; t11 behaviour cases run both scripts; t47 RESULT line vs docs; t44/t38 socket/prune-timer assertions moved to 'by record'; t01 extracts result_line; harness: gittags requirement, TAB-safe result records; t00 case for it.",
+        "tests/mutations.txt: 12 stale controls re-anchored (M48 M49 M50 M52 M174 M177 M190 M191 M202 M214 M289 M290), 2 retired with reasons (M275 M329); round-5/6 rollback controls re-anchored (M342 M345 M349 M351-M358 M360) or retired with reasons (M338 M343 M346 M348 M361 M397-M404 M427 M428); M429-M520 new.",
+        ".gitlab-ci.yml: GIT_DEPTH 0 + --tags (t45's gittags case); .claude/project.yml: repo-tests note (needs a clone with tags)."
+      ],
+      "amendments": [
+        "tests/lib/harness.sh + tests/t00-selftest.sh: (a) the gittags requirement - required by the gatekeeper's 'a test that reads that tag's install.sh'; (b) TAB-safe result records - required by 'a FULL tests/mutate.sh run completes': 7 controls could only ABORT without it.",
+        "tests/t01, t11, t38, t44, t47: t01 must extract result_line (M1); t11 per the N1 ask (X50/X52-type killed by behaviour); t38/t44 asserted the name-based disables B1 removes.",
+        ".gitlab-ci.yml (GIT_DEPTH 0, --tags): without it CI's --strict fails on the gittags SKIP. NOT verified in a pipeline (nothing pushed).",
+        ".claude/project.yml: one sentence in repo-tests (the suite now needs a clone with tags; --remote/git archive SKIPs that case)."
+      ],
+      "decisions_made": [
+        "Manifest format: '<field> <absolute path>' per line; field = sha256 (file), dir, link, state (V120_MANAGED: recorded, never hash-checked, restored by restore_v120_managed), pending (.pending file only). Only PRESENT artefacts are recorded; .pending lists everything the upgrade is about to install.",
+        "Single source of truth: units and rules are read from the tree the release installs FROM (systemd/*, install/polkit/*); the helper from APPLY_HELPER_FILES, which install_apply_helper loops; HOST_FILES/HOST_LINKS are held to every literal install/cp/ln destination of install.sh + upgrade Phase 9 by a parser in t45 (both directions), the same parser that re-derives the v1.1.x list from the tags.",
+        "v1.1.x: LEGACY_V11X_VERSIONS=(1.1.0 1.1.1) - both tags install the identical 8 artefacts (t45 checks each tag). Phase 4 on such a host writes a '# derived:' manifest into the restore point; a restore never installs a derived manifest on the host. Any other version with no manifest: Phase 4 warns; a restore retires and puts back nothing and every product artefact present is a RESTORE_PROBLEM (exit 1). 1.0.x therefore counts as unknown.",
+        "Modified manifest file (sha mismatch) and .pending files (no hash): copied to /var/backups/topic-manager/set-aside-<TS>/<path> (0700) and named, then retired. Reported as a WARN list, NOT a restore problem (the rollback did what it should).",
+        "Drop-in directories and links nobody recorded are never removed (reverses round 5 b): they are the operator's. systemctl disable removes its own [Install] links.",
+        "Timer stamps: retire_unit removes /var/lib/systemd/timers/stamp-<unit> for a retired *.timer only (derived state of a unit retired by record).",
+        "M1: the script prints 'RESULT: exit <N>' as its last line (early EXIT trap before option parsing; _on_exit after the rollback) rather than changing the documented command line."
+      ],
+      "mutation_controls": "FULL tests/mutate.sh at 9cdbd24 in python:3.12-bookworm on .81, all 503 controls in six chunks (each with its own green baseline, run 3 at a time under timeout 3600): 503 run, 493 killed, 0 SURVIVED, 0 aborted, 10 documented equivalents (M14 M45 M87 M103 M141 M142 M183 M254 M388 pre-existing; M462 new: a recorded directory copied by cp -a instead of mkdir+reference - the extra nested copy is never read). Every chunk exit 0. FOUND ON THE WAY (all closed, re-run RED): M485 and M489 SURVIVED the first targeted pass (the restore-point and legacy cases did not assert the exact problem set; now they do); M412/M413 SURVIVED the first full pass because the t45 rewrite had dropped the restore_verdict cases (restored in 9cdbd24); M68 and M144-M158 ABORTED because a TAB in a failure message split the result record (harness fixed, REG-0029). Install.sh behaviour: M49 M448-M452 M519 M520 each killed by a BEHAVIOUR case that runs install.sh's copy (t11 / t45 _both), not only by the scripts-carry-the-same-code check. Killed only STRUCTURALLY (whole-script flow, no behaviour case can reach it): M511 (Phase 9 pending write), M512 (end-of-upgrade manifest write), M513 (install.sh manifest write).",
+      "suite_final": "Linux (python:3.12-bookworm on .81, git bundle with tags) at 9cdbd24: tools/check-requirements-lock.sh --require-online PASS (15 releases); tests/run.sh --strict 494 passed / 0 failed / 0 skipped. At a434ba0: shell-syntax (Linux bash) clean, frontend-syntax 0, ppsm-consistency 0 (37 rows), sca 0. Workstation at 9cdbd24: python-syntax, config-example, heredoc-python, sbom-consistency, pipefail-consumers, env-neutral, version-surfaces all 0. sonar-local at 9cdbd24 vs v1.1.1: PASS exit 0 (head 145 / base 101 files, new_violations 0, 5 of 7 judged).",
+      "self_check": "bash -n every shell file (Linux); py_compile; git diff re-read (found and fixed: dead socket mapping, a cosmetic 'legacy' relabel, three pipefail consumers in t45); the shared block and install_apply_helper byte-identical (t45, t38); .81 left with no container/volume/network of this run.",
+      "not_done": [
+        "No run on tm-qc (.92) or prod (.90): the manifest, set-aside, stamp removal and RESULT line are proven on a fake root / real script early exits in a container, not on a real systemd host. Phase 9's pending/manifest writes and install.sh's manifest write are held STRUCTURALLY only (M511-M513: m_wired), because neither whole script can run in the suite.",
+        "CI: the GIT_DEPTH/--tags change is unverified until the next pipeline; tests/run.sh --remote (git archive, no tags) now SKIPs one case, which --strict fails.",
+        "1.0.x restore points are 'unknown' by the rule given: a rollback to one retires nothing and exits RESTORE INCOMPLETE with the list.",
+        "A 1.2.0 host upgraded by a pre-round-7 build (tm-qc now) has no manifest; its first round-7 upgrade records one, but a --restore run BEFORE that retires nothing it did not record."
+      ]
     }
   ],
   "clean_room": {
     "date": "2026-09-29",
-    "target": "tm-qc 192.168.202.92 (offline, STIG+FIPS), from v110-installed (reverted by James; no revert by this run, left INSTALLED at 1.2.0 per instruction)",
-    "build": "4a02d78927ce4d45b513eb303e6ea17781b9d1b3",
-    "bundle_sha256": "af3e432cc07bfc8945e59ce080a4ac1d76f2540395d2e12543a8fcab411d1806",
-    "verdict": "FAIL (strict bar: one operator intervention); functionally PASS",
-    "summary": "Upgrade 1: audit 1 (3 expected warnings), backup 0, upgrade 0, packages-only 1 then 0 after unattended-upgrade released the dpkg lock. Restore 20260929-190045 exit 0: 1.1.0 on TCP 5001, 9 v1.2.0 units retired, polkit rule back to the 1.1.0 copy, /usr/libexec/topic-manager and /run/topic-manager gone, no timer/path, prune units not found, no topic-manager unit failed. Upgrade 2: audit 1 (2 warnings), backup 0, upgrade 0, packages-only 0. Both upgrades: 1.2.0, socket 0660 topic-manager:www-data, 5001 closed, unix upstream, TLS1.0/1.1 refused from .81, tm.db 0600/data 0700. STIG 209/8 after each, same 8 rules as the v110 baseline. R1, R2, D1-D8 all fixed.",
+    "target": "tm-qc 192.168.202.92 (offline, STIG+FIPS), from v110-installed (reverted by James; no revert/snapshot by this run; left INSTALLED at 1.2.0 per instruction)",
+    "path": "offline bundle, README 'Offline (air-gapped) upgrade', detached per README",
+    "build": "34230aa9fb8ad98bbbd9d0aaba0f9119fc958258",
+    "bundle_sha256": "7baa3e062a5e6f78b8ee87f4baf8849da7c6a222362a2c1301270c9649019a87",
+    "verdict": "PASS (strict bar): no operator intervention; 2 minor non-blocking findings",
+    "summary": "Build 0 (ubuntu:24.04 on .81, 373 lockstep siblings; .81 left with no container/volume/network of this run). Upgrade 1: audit 1 (3 expected warnings), backup 0 (48 paths), detached upgrade complete (Rollback line absolute), packages-only 0 (rsyslog-openssl NEW + rsyslog UPGRADE). Restore 20260929-233531 exit 0: 9 listed / '9 unit(s) retired', /run/topic-manager-apply removed, no /run/topic-manager*, no /usr/libexec/topic-manager, only 1.1.0 units + polkit rule, 1.1.0 on 127.0.0.1:5001 healthy. Upgrade 2: audit 1 (2 warnings), backup 0, upgrade EXITCODE=0, packages-only 0. Both upgrades: 1.2.0, socket 0660 topic-manager:www-data, 5001 closed, unix upstream, TLS1.0/1.1 alert 70 from .81 (OpenSSL 3.0.13), tm.db 0600/data 0700, apply results ok, listeners all in PPSM. STIG 209/8 after each, same 8 as 0926 baseline. dpkg lock: NOT held at either packages-only (apt-daily 'update' held only the lists lock at run 2), so the 600 s wait was not exercised on the host.",
     "deviations": [
-      "N1 install.sh --packages-only exit 1: unattended-upgrade (air-gapped, trying security.ubuntu.com for ~4.5 min) held the dpkg lock; installer does not wait for the lock, and its FAIL text + TROUBLESHOOTING route to dpkg --audit (clean) with no lock guidance. Re-run after it exited: 0",
-      "N2 README/INSTALL never say to run the upgrade detached (setsid nohup + log); only the internal contract does",
-      "N3 INSTALL s1 says the polkit rule has three unit/verb pairs; the rule has 8 pairs over 7 units; install/README says seven pairs and lists 8",
-      "N4 README Installing says ufw opens 80 and 443; INSTALL s6.14/s11 say 80 only while the redirect is on",
-      "N5 --restore prints '8 unit(s) retired' after listing 9; and leaves /run/topic-manager-apply (v1.2.0 result files) though the docs say retired units' runtime files are removed",
-      "N6 PPSM systemd-resolved row names 127.0.0.53 only; host also listens 127.0.0.54:53"
+      "M1 (doc, minor) README/INSTALL define the upgrade and --restore verdicts by exit code, but the prescribed detached form (setsid nohup ... &) discards it and no doc says how to read it; the printed banner/RESTORE INCOMPLETE text is the only verdict. This run wrapped runs 2-3 with 'echo EXITCODE=$?'",
+      "M2 (product, low) --restore leaves /var/lib/systemd/timers/stamp-topic-manager-audit-prune.timer (Persistent timer stamp of a retired unit)"
     ],
+    "previous_status": {
+      "N1": "fixed in code+TROUBLESHOOTING; wait NOT exercised (no holder)",
+      "N2": "fixed",
+      "N3": "fixed (8 pairs/7 units everywhere)",
+      "N4": "fixed",
+      "N5": "fixed",
+      "N6": "fixed"
+    },
     "history": [
+      {
+        "date": "2026-09-29",
+        "target": "tm-qc 192.168.202.92 (offline, STIG+FIPS), from v110-installed (reverted by James; no revert by this run, left INSTALLED at 1.2.0 per instruction)",
+        "build": "4a02d78927ce4d45b513eb303e6ea17781b9d1b3",
+        "bundle_sha256": "af3e432cc07bfc8945e59ce080a4ac1d76f2540395d2e12543a8fcab411d1806",
+        "verdict": "FAIL (strict bar: one operator intervention); functionally PASS",
+        "summary": "Upgrade 1: audit 1 (3 expected warnings), backup 0, upgrade 0, packages-only 1 then 0 after unattended-upgrade released the dpkg lock. Restore 20260929-190045 exit 0: 1.1.0 on TCP 5001, 9 v1.2.0 units retired, polkit rule back to the 1.1.0 copy, /usr/libexec/topic-manager and /run/topic-manager gone, no timer/path, prune units not found, no topic-manager unit failed. Upgrade 2: audit 1 (2 warnings), backup 0, upgrade 0, packages-only 0. Both upgrades: 1.2.0, socket 0660 topic-manager:www-data, 5001 closed, unix upstream, TLS1.0/1.1 refused from .81, tm.db 0600/data 0700. STIG 209/8 after each, same 8 rules as the v110 baseline. R1, R2, D1-D8 all fixed.",
+        "deviations": [
+          "N1 install.sh --packages-only exit 1: unattended-upgrade (air-gapped, trying security.ubuntu.com for ~4.5 min) held the dpkg lock; installer does not wait for the lock, and its FAIL text + TROUBLESHOOTING route to dpkg --audit (clean) with no lock guidance. Re-run after it exited: 0",
+          "N2 README/INSTALL never say to run the upgrade detached (setsid nohup + log); only the internal contract does",
+          "N3 INSTALL s1 says the polkit rule has three unit/verb pairs; the rule has 8 pairs over 7 units; install/README says seven pairs and lists 8",
+          "N4 README Installing says ufw opens 80 and 443; INSTALL s6.14/s11 say 80 only while the redirect is on",
+          "N5 --restore prints '8 unit(s) retired' after listing 9; and leaves /run/topic-manager-apply (v1.2.0 result files) though the docs say retired units' runtime files are removed",
+          "N6 PPSM systemd-resolved row names 127.0.0.53 only; host also listens 127.0.0.54:53"
+        ]
+      },
       {
         "date": "2026-09-29",
         "target": "tm-qc from v110-installed",
