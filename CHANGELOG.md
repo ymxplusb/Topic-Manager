@@ -124,6 +124,25 @@ Database SRG V4R5 applied to SQLite.)
   server and refuses a docker disk at 90%; `check-version-surfaces.sh` no longer prints OK
   after a changelog-date FAIL.
 
+### Round 7 (WO-0004): the gatekeeper's round-6 verdict and clean-room round 6
+- **A rollback touches only what the product recorded installing.** Round 6 judged a file the
+  product's when its text mentioned `topic-manager`: a rollback stopped, disabled and deleted
+  another tool's `site-backup.service` (it backs up `/opt/topic-manager`) and silently deleted an
+  operator's `nginx.service.d/50-limits.conf` that named the product in a comment. `install.sh`
+  and the upgrade now write `/var/lib/topic-manager/installed-files.manifest` (root `0600`, one
+  path per line with its sha256) from the same lists and source tree they install from; a
+  restore retires only what the host's manifest names and the restore point's does not, puts
+  back only what the restore point's names, and leaves everything else — listing what changed.
+  A retired file that was edited since it was installed is kept in
+  `/var/backups/topic-manager/set-aside-<TIMESTAMP>/`. A v1.1.x host (no manifest) is judged by
+  v1.1.x's shipped list, which the tests re-derive from the v1.1.0 and v1.1.1 tags; a restore
+  point of any other release with no manifest retires nothing and ends `RESTORE INCOMPLETE`.
+  Drop-in directories of retired units are no longer removed (no manifest records them).
+- A retired timer's stamp (`/var/lib/systemd/timers/stamp-<timer>`) goes with it.
+- **A detached run reports its exit code.** Every run of `upgrade-full.sh` ends with
+  `RESULT: exit <N>` in its output and its log; README and INSTALL say to read it with
+  `tail -n 1 ~/tm-upgrade.out`.
+
 ### Round 6 (WO-0004): clean-room round 5 and the gatekeeper's round-5 notes
 - **`install.sh` and the upgrade wait for the package lock.** On the air-gapped QC host
   unattended-upgrades held dpkg's lock for ~4.5 minutes and `install.sh --packages-only`
@@ -139,7 +158,8 @@ Database SRG V4R5 applied to SQLite.)
 - **The rollback inventory is by location.** The restore point records every unit file,
   drop-in directory and link in `/etc/systemd/system` and every polkit rule, whatever its
   name; a restore changes only the product's (what the file names, not only its name), and
-  lists anything else that changed as not the product's.
+  lists anything else that changed as not the product's. (Replaced in round 7: ownership by
+  what a file names was wrong; it is now the install manifest.)
 - `tools/sonar-local.sh` fails a head whose scan indexed fewer than 80% of the base's files
   (an exclusion of the whole tree printed PASS on 0 files), and its PASS line names the
   conditions actually judged.

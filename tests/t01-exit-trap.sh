@@ -40,6 +40,7 @@ _build() {   # _build <path>
         echo 'restore_from_backup() { echo "ROLLBACK-RAN $1" >> "$MARKER"; return 0; }'
         echo
         tm_extract_line "$UP" '^fail\(\)'
+        tm_extract_line "$UP" '^result_line\(\) \{'
         tm_extract_line "$UP" '^RESTORE_POINT_READY=false$'
         tm_extract_line "$UP" '^DESTRUCTIVE_STARTED=false$'
         echo

@@ -403,30 +403,26 @@ REPLACE|    return 0
 # ─── v1.0.4 security pass: install -d through a symlink (t11) ────────────────
 
 --- M48
-DESC|THE SECURITY MUTATION — the upgrade script applies ownership through a symlink again
+DESC|THE SECURITY MUTATION — the upgrade script follows a symlink it did not get from root (ownership applied through it)
 TESTS|t11-safe-install-dir.sh
 EQUIV|no
-ANCHOR|    [[ -L "$p" ]] && fail "${p} is a symlink; refusing to apply ownership through it.
-ANCHOR|     install -d would chmod and chown whatever it points at. Remove it, or put
-ANCHOR|     the real directory back, and run again."
-REPLACE|    true
+ANCHOR|        if last or parent.st_uid != 0 or parent.st_mode & 0o022:
+REPLACE|        if False:
 
 --- M49
-DESC|THE SECURITY MUTATION — install.sh applies ownership through a symlink again
+DESC|THE SECURITY MUTATION — install.sh follows a symlink it did not get from root (ownership applied through it)
 TESTS|t11-safe-install-dir.sh
 TARGET|install
 EQUIV|no
-ANCHOR|    [[ -L "$p" ]] && fail "${p} is a symlink; refusing to apply ownership through it.
-ANCHOR|     install -d would chmod and chown whatever it points at. Remove it, or put
-ANCHOR|     the real directory back, and run again."
-REPLACE|    true
+ANCHOR|        if last or parent.st_uid != 0 or parent.st_mode & 0o022:
+REPLACE|        if False:
 
 --- M50
-DESC|the guard no longer refuses a path that exists and is not a directory
+DESC|the guard no longer refuses a path that exists and is not a directory (the O_DIRECTORY open still refuses it, with the wrong reason)
 TESTS|t11-safe-install-dir.sh
 EQUIV|no
-ANCHOR|    [[ -e "$p" && ! -d "$p" ]] && fail "${p} exists and is not a directory."
-REPLACE|    true
+ANCHOR|    elif not stat.S_ISDIR(st.st_mode):
+REPLACE|    elif False:
 
 --- M51
 DESC|the cert directory is created with a bare install -d again, bypassing the guard entirely
@@ -440,10 +436,8 @@ REPLACE|install -d -m 700 -o "$APP_USER" -g "$APP_USER" "$CERT_DIR"
 DESC|safe_install_dir stops applying the mode, so a widened directory stays widened
 TESTS|t11-safe-install-dir.sh
 EQUIV|no
-ANCHOR|    install -d -m "$m" -o "$o" -g "$g" "$p"
-REPLACE|    install -d -o "$o" -g "$g" "$p"
-
-# ─── v1.0.4 security pass: the boundary is ASSERTED (t09) ────────────────────
+ANCHOR|os.fchmod(fd, mode)
+REPLACE|pass
 
 --- M53
 DESC|install.sh stops checking that the app cannot WRITE config.yaml — the reinstall path is blind again
@@ -1426,12 +1420,12 @@ REPLACE|        die "ufw is active but could NOT open:${failed}"
 # written (scratchpad gen_mutations.py); tests/mutate.sh re-checks it on every run.
 
 --- M174
-DESC|settings: a host name may start with a dash (an option to the tools root runs)
+DESC|settings: a host name label may start with a dash (an option to the tools root runs)
 TESTS|t31-settings-keys.sh
 TARGET|py:settings_schema
 EQUIV|no
-ANCHOR|    return bool(_HOSTNAME_RE.match(value)) and value[0] not in '-.'
-REPLACE|    return bool(_HOSTNAME_RE.match(value))
+ANCHOR|_LABEL_RE = re.compile(r'[A-Za-z\d](?:[A-Za-z\d-]{0,61}[A-Za-z\d])?', re.ASCII)
+REPLACE|_LABEL_RE = re.compile(r'[A-Za-z\d-](?:[A-Za-z\d-]{0,61}[A-Za-z\d])?', re.ASCII)
 
 --- M175
 DESC|settings: syslog port 0 and 65536 accepted
@@ -1454,8 +1448,8 @@ DESC|settings: the app id may carry a space or a quote
 TESTS|t31-settings-keys.sh t34-apply-helper.sh
 TARGET|py:settings_schema
 EQUIV|no
-ANCHOR|_APP_ID_RE = re.compile(r'^[A-Za-z0-9._-]{1,48}$')
-REPLACE|_APP_ID_RE = re.compile(r'^[^\n]{1,48}$')
+ANCHOR|_APP_ID_RE = re.compile(r'[\w.-]{1,48}', re.ASCII)
+REPLACE|_APP_ID_RE = re.compile(r'[^\n]{1,48}')
 
 --- M178
 DESC|settings: six NTP servers accepted
@@ -1559,12 +1553,12 @@ TESTS|t32-audit-syslog.sh
 TARGET|py:routes
 EQUIV|no
 ANCHOR|        audit.require_writable(cfg)
-ANCHOR|    except audit.AuditUnavailable:
-ANCHOR|        return _audit_unavailable()
+ANCHOR|    except audit.AuditUnavailable as exc:
+ANCHOR|        return _audit_unavailable(exc)
 ANCHOR|    db  = get_db(cfg)
 REPLACE|        pass
-REPLACE|    except audit.AuditUnavailable:
-REPLACE|        return _audit_unavailable()
+REPLACE|    except audit.AuditUnavailable as exc:
+REPLACE|        return _audit_unavailable(exc)
 REPLACE|    db  = get_db(cfg)
 
 --- M191
@@ -1575,8 +1569,8 @@ EQUIV|no
 ANCHOR|        db = get_db(cfg)
 ANCHOR|        delete_session(db, sid)
 ANCHOR|        db.close()
-ANCHOR|        return _audit_unavailable()
-REPLACE|        return _audit_unavailable()
+ANCHOR|        return _audit_unavailable(exc)
+REPLACE|        return _audit_unavailable(exc)
 
 --- M192
 DESC|routes: sign-out is blocked by an audit failure
@@ -1671,8 +1665,8 @@ DESC|audit: a failed write is not reported at CRIT
 TESTS|t32-audit-syslog.sh
 TARGET|py:audit
 EQUIV|no
-ANCHOR|    syslog_send(msg, SEV_CRIT)
-REPLACE|    pass
+ANCHOR|    delivered = syslog_send(msg, SEV_CRIT)
+REPLACE|    delivered = syslog_send(msg, SEV_INFO)
 
 --- M203
 DESC|audit: best_effort inverted — a refused action passes silently
@@ -1781,9 +1775,9 @@ DESC|retention: the timer entry point exits 0 on a failed prune
 TESTS|t33-audit-retention.sh
 TARGET|py:audit_retention
 EQUIV|no
-ANCHOR|        log.error('audit prune FAILED; nothing was deleted: %s: %s', type(exc).__name__, exc)
+ANCHOR|        log.exception('audit prune FAILED; nothing was deleted: %s: %s', type(exc).__name__, exc)
 ANCHOR|        return 1
-REPLACE|        log.error('audit prune FAILED; nothing was deleted: %s: %s', type(exc).__name__, exc)
+REPLACE|        log.exception('audit prune FAILED; nothing was deleted: %s: %s', type(exc).__name__, exc)
 REPLACE|        return 0
 
 --- M215
@@ -2273,13 +2267,6 @@ EQUIV|no
 ANCHOR|    : > "${BD}/system/v120/.present"
 REPLACE|    true
 
---- M275
-DESC|upgrade: a pre-1.2.0 rollback leaves the prune timer enabled
-TESTS|t38-install-upgrade-v120.sh
-EQUIV|no
-ANCHOR|        systemctl disable --now topic-manager-audit-prune.timer >/dev/null 2>&1 || true
-REPLACE|        true
-
 --- M276
 DESC|upgrade: Phase 12 does not re-apply
 TESTS|t38-install-upgrade-v120.sh
@@ -2388,16 +2375,16 @@ DESC|routes: the session limit admits one more
 TESTS|t31-settings-keys.sh t42-route-characterisation.sh
 TARGET|py:routes
 EQUIV|no
-ANCHOR|    if 0 < max_s <= active:          # 0 = unlimited
-REPLACE|    if 0 < max_s < active:          # 0 = unlimited
+ANCHOR|    if 0 < max_s <= active:          # a limit of zero means unlimited
+REPLACE|    if 0 < max_s < active:          # a limit of zero means unlimited
 
 --- M290
 DESC|routes: a limit of 0 is enforced instead of unlimited
 TESTS|t31-settings-keys.sh t42-route-characterisation.sh
 TARGET|py:routes
 EQUIV|no
-ANCHOR|    if 0 < max_s <= active:          # 0 = unlimited
-REPLACE|    if 0 <= max_s <= active:          # 0 = unlimited
+ANCHOR|    if 0 < max_s <= active:          # a limit of zero means unlimited
+REPLACE|    if 0 <= max_s <= active:          # a limit of zero means unlimited
 
 --- M291
 DESC|routes: LOGIN_REFUSED is not audited
@@ -2715,14 +2702,6 @@ EQUIV|no
 ANCHOR|    server unix:/run/topic-manager/gunicorn.sock;
 REPLACE|    server 127.0.0.1:5001;
 
---- M329
-DESC|A10: a rollback to a TCP release leaves the socket unit enabled
-TESTS|t44-backend-socket.sh
-TARGET|upgrade
-EQUIV|no
-ANCHOR|        systemctl disable --now topic-manager.socket >/dev/null 2>&1 || true
-REPLACE|        :
-
 --- M330
 DESC|A10: Phase 7 leaves the socket listening while the application is replaced
 TESTS|t44-backend-socket.sh
@@ -2788,13 +2767,6 @@ ANCHOR|step() { STEP=$((STEP + 1)); echo "  ${STEP}. $*"; }
 REPLACE|step() { STEP=$((STEP + 2)); echo "  ${STEP}. $*"; }
 
 # ─── round 5: a rollback retires what the newer release added (R1, R2) ─────
---- M338
-DESC|R2: a rollback to a TCP release never retires the socket unit
-TESTS|t44-backend-socket.sh
-EQUIV|no
-ANCHOR|    elif [[ -e "${OWNED_UNIT_DIR}/topic-manager.socket" || -L "${OWNED_UNIT_DIR}/topic-manager.socket" ]]; then
-REPLACE|    elif false; then
-
 --- M339
 DESC|R2: the socket unit's listen paths are never read (socket_unit_paths returns nothing)
 TESTS|t44-backend-socket.sh t45-rollback-host-artefacts.sh
@@ -2818,18 +2790,11 @@ REPLACE|    if ! out="$(true)"; then
 
 --- M342
 DESC|R1: a retired unit's file is left in place
-TESTS|t44-backend-socket.sh t45-rollback-host-artefacts.sh
+TESTS|t45-rollback-host-artefacts.sh t44-backend-socket.sh
 EQUIV|no
 ANCHOR|    rm -f -- "$f"
-ANCHOR|    if [[ -d "${f}.d" && ! -L "${f}.d" && "${f}.d" != "${DROPIN_DIR:-}" ]]; then
-REPLACE|    if [[ -d "${f}.d" && ! -L "${f}.d" && "${f}.d" != "${DROPIN_DIR:-}" ]]; then
-
---- M343
-DESC|R1: a retired unit's enablement links are left in place
-TESTS|t44-backend-socket.sh t45-rollback-host-artefacts.sh
-EQUIV|no
-ANCHOR|    for l in "${OWNED_UNIT_DIR}"/*.wants/"$u" "${OWNED_UNIT_DIR}"/*.requires/"$u"; do rm -f -- "$l"; done
-REPLACE|    :
+ANCHOR|    if [[ "$u" == *.timer ]]; then rm -f -- "${TIMER_STAMP_DIR}/stamp-${u}"; fi
+REPLACE|    if [[ "$u" == *.timer ]]; then rm -f -- "${TIMER_STAMP_DIR}/stamp-${u}"; fi
 
 --- M344
 DESC|R2: the stale socket file is kept (guard inverted)
@@ -2840,17 +2805,10 @@ REPLACE|        [[ ! -S "$s" ]] && rm -f -- "$s"
 
 --- M345
 DESC|R2: the emptied socket directory is kept
-TESTS|t44-backend-socket.sh
+TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
 ANCHOR|        rmdir -- "$(dirname "$s")" 2>/dev/null || true
 REPLACE|        :
-
---- M346
-DESC|R1: the inventory takes directories in the unit dir (the operator drop-in) as units
-TESTS|t45-rollback-host-artefacts.sh
-EQUIV|no
-ANCHOR|            [[ -d "$p" && ! -L "$p" ]] && continue
-REPLACE|            :
 
 --- M347
 DESC|R1: the root-helper tree is never inventoried (guard inverted)
@@ -2859,19 +2817,12 @@ EQUIV|no
 ANCHOR|        if [[ -d "$OWNED_LIBEXEC_DIR" && ! -L "$OWNED_LIBEXEC_DIR" ]]; then
 REPLACE|        if [[ ! -d "$OWNED_LIBEXEC_DIR" && ! -L "$OWNED_LIBEXEC_DIR" ]]; then
 
---- M348
-DESC|R1: the inventory omits polkit rules
-TESTS|t45-rollback-host-artefacts.sh
-EQUIV|no
-ANCHOR|        for p in "${OWNED_POLKIT_DIR}"/*; do
-REPLACE|        for p in; do
-
 --- M349
-DESC|R1: Phase 4 records an EMPTY inventory
+DESC|B1: the restore point records an EMPTY copy of the host's install manifest
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|    owned_inventory > "${BD}/manifest/owned-artefacts.list"
-REPLACE|    : > "${BD}/manifest/owned-artefacts.list"
+ANCHOR|        cp -- "$INSTALL_MANIFEST" "$rec"
+REPLACE|        : > "$rec"
 
 --- M350
 DESC|R1: the restore point holds no copy of a recorded file
@@ -2881,64 +2832,63 @@ ANCHOR|            mkdir -p -- "$(dirname "$d")"; cp -a -- "$p" "$d"
 REPLACE|            mkdir -p -- "$(dirname "$d")"
 
 --- M351
-DESC|R1: a restore point without the inventory is read as one with an empty inventory
+DESC|B1/N3: a restore point without a manifest is read as one with (and the reverse)
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|    if [[ ! -f "$list" ]]; then
-REPLACE|    if [[ -f "$list" ]]; then
+ANCHOR|    if [[ -f "$rec" ]]; then
+REPLACE|    if [[ ! -f "$rec" ]]; then
 
 --- M352
-DESC|R1: the legacy branch falls through into the inventory path
+DESC|N3: the unknown-release branch falls through and retires against an empty record
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|        warn "  Retire any the restored release does not ship: sudo systemctl disable --now <unit>; delete the file; sudo systemctl daemon-reload"
-ANCHOR|        remove_retired_runtime
-ANCHOR|        return 0
-REPLACE|        warn "  Retire any the restored release does not ship: sudo systemctl disable --now <unit>; delete the file; sudo systemctl daemon-reload"
-REPLACE|        remove_retired_runtime
+ANCHOR|            warn "The restore point (v${v:-unknown}) has no install manifest: no unit, rule or helper was retired or put back."
+ANCHOR|            return 0
+REPLACE|            warn "The restore point (v${v:-unknown}) has no install manifest: no unit, rule or helper was retired or put back."
 
 --- M353
-DESC|R1: what the restore point held is treated as added (the 'had' check dropped)
+DESC|R1: what the restore point recorded is retired too (the 'had' check dropped)
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|        [[ -n "${had[$p]+x}" ]] && continue
-REPLACE|        :
+ANCHOR|        [[ -n "$p" && -z "${had[$p]+x}" ]] || continue
+REPLACE|        [[ -n "$p" ]] || continue
 
 --- M354
-DESC|R1: an enablement link (or a drop-in, rule, helper) is sent to retire_unit as if it were a unit
+DESC|R1: a recorded enablement link is sent to retire_unit as if it were a unit
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|            added_other+=("$p")      # a link, a drop-in, a rule, the helper tree
-REPLACE|            added_units+=("$p")      # a link, a drop-in, a rule, the helper tree
+ANCHOR|        if [[ "$h" != link && "${p%/*}" == "$OWNED_UNIT_DIR" && ! -L "$p" ]]; then
+REPLACE|        if [[ "${p%/*}" == "$OWNED_UNIT_DIR" || -L "$p" ]]; then
 
 --- M355
-DESC|R1: no added unit is retired
+DESC|R1: no recorded unit is retired
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|    for p in "${added_units[@]}"; do retire_unit "$p"; done
+ANCHOR|    for p in "${units[@]}"; do retire_unit "$p"; done
 REPLACE|    :
 
 --- M356
-DESC|R1: added helpers and rules are not deleted
+DESC|R1: recorded files, links and rules the newer release added are not deleted
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|        if [[ -d "$p" && ! -L "$p" ]]; then rm -rf -- "$p"; else rm -f -- "$p"; fi
-REPLACE|        :
+ANCHOR|        rm -f -- "$p"
+ANCHOR|        # The bytecode Python wrote beside a retired module of the helper's.
+REPLACE|        # The bytecode Python wrote beside a retired module of the helper's.
 
 --- M357
 DESC|R1: recorded files are not put back from the restore point
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|            rm -rf -- "$p"; cp -a -- "$src" "$p"
-REPLACE|            :
+ANCHOR|                rm -rf -- "$p"; cp -a -- "$c" "$p"
+REPLACE|                :
 
 --- M358
 DESC|R1: no daemon-reload after the units are retired
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
 ANCHOR|    systemctl daemon-reload >/dev/null 2>&1 || true
-ANCHOR|    info "Host units, rules and helpers restored to the restore point's inventory (${#RETIRED_UNITS[@]} unit(s) retired${RETIRED_UNITS[*]:+: ${RETIRED_UNITS[*]}})"
-REPLACE|    info "Host units, rules and helpers restored to the restore point's inventory (${#RETIRED_UNITS[@]} unit(s) retired${RETIRED_UNITS[*]:+: ${RETIRED_UNITS[*]}})"
+ANCHOR|    # The host's record is now the restore point's (none, for a release that kept none).
+REPLACE|    # The host's record is now the restore point's (none, for a release that kept none).
 
 --- M359
 DESC|R1: restore_from_backup (--restore and the rollback) never uses the inventory
@@ -2948,22 +2898,12 @@ ANCHOR|    restore_owned_artefacts "$BD"
 REPLACE|    :
 
 --- M360
-DESC|R1: Phase 4 takes no inventory
+DESC|R1: Phase 4 takes no record of the product's host artefacts
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|backup_owned_artefacts "$BACKUP_DIR"
+ANCHOR|backup_owned_artefacts "$BACKUP_DIR" "$INSTALLED_VER"
 REPLACE|:
 
---- M361
-DESC|R1: the libexec guard is written as test && find again (pipefail aborts Phase 4 on a 1.1.x host)
-TESTS|t45-rollback-host-artefacts.sh
-EQUIV|no
-ANCHOR|        if [[ -d "$OWNED_LIBEXEC_DIR" && ! -L "$OWNED_LIBEXEC_DIR" ]]; then
-ANCHOR|            find "$OWNED_LIBEXEC_DIR" -print0
-ANCHOR|        fi
-REPLACE|        [[ -d "$OWNED_LIBEXEC_DIR" && ! -L "$OWNED_LIBEXEC_DIR" ]] && find "$OWNED_LIBEXEC_DIR" -print0
-
-# ─── round 5: sonar-local is the estate gate and leaves nothing ─────────────
 --- M362
 DESC|sonar-local removes containers without their volumes again (rm -f, no -v)
 TESTS|t46-round5-gates-and-docs.sh
@@ -3246,62 +3186,6 @@ EQUIV|no
 ANCHOR|            novalue.append(metric)
 REPLACE|            pass
 
---- M397
-DESC|b: the unit inventory is a name prefix again
-TESTS|t45-rollback-host-artefacts.sh
-EQUIV|no
-ANCHOR|        for p in "${OWNED_UNIT_DIR}"/*; do
-REPLACE|        for p in "${OWNED_UNIT_DIR}"/"${SERVICE}"*; do
-
---- M398
-DESC|b: drop-in directories are not inventoried
-TESTS|t45-rollback-host-artefacts.sh
-EQUIV|no
-ANCHOR|        for p in "${OWNED_UNIT_DIR}"/*.d; do
-REPLACE|        for p in; do
-
---- M399
-DESC|b: retire_unit leaves the unit's drop-in directory
-TESTS|t45-rollback-host-artefacts.sh
-EQUIV|no
-ANCHOR|        rm -rf -- "${f}.d"
-REPLACE|        :
-
---- M400
-DESC|b: the service's own drop-in (secrets) is inventoried and judged
-TESTS|t45-rollback-host-artefacts.sh
-EQUIV|no
-ANCHOR|            [[ -d "$p" && ! -L "$p" && "$p" != "$DROPIN_DIR" ]] || continue
-REPLACE|            [[ -d "$p" && ! -L "$p" ]] || continue
-
---- M401
-DESC|b: ownership by content is gone (only the name counts)
-TESTS|t45-rollback-host-artefacts.sh
-EQUIV|no
-ANCHOR|    [[ -f "${2}${1}" && ! -L "${2}${1}" ]] && grep -qF -- "$SERVICE" "${2}${1}"
-REPLACE|    false
-
---- M402
-DESC|b: ownership by name is gone (only the content counts)
-TESTS|t45-rollback-host-artefacts.sh
-EQUIV|no
-ANCHOR|    [[ "${1##*/}" == "${SERVICE}"* ]] && return 0
-REPLACE|    :
-
---- M403
-DESC|b: every ADDED artefact is retired, the product's or not (a snap mount is stopped)
-TESTS|t45-rollback-host-artefacts.sh
-EQUIV|no
-ANCHOR|        if ! owned_artefact "$p"; then
-REPLACE|        if false; then
-
---- M404
-DESC|b: every RECORDED artefact is put back, the product's or not (another tool's unit reverted)
-TESTS|t45-rollback-host-artefacts.sh
-EQUIV|no
-ANCHOR|        if ! owned_artefact "$p" "${BD}/system/owned"; then
-REPLACE|        if false; then
-
 --- M405
 DESC|N5: the retired units' runtime directories are never removed
 TESTS|t45-rollback-host-artefacts.sh
@@ -3469,20 +3353,728 @@ EQUIV|no
 ANCHOR|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" -o "DPkg::Lock::Timeout=${DPKG_LOCK_WAIT_S}" \
 REPLACE|    DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" \
 
---- M427
-DESC|b: a polkit rule with the service in its name is not the product's
+# ─── round 7 (WO-0004): gatekeeper round 6 — ownership by RECORD (B1, N2, N3) ─
+# The install manifest decides what a rollback may retire or put back. Every
+# guard, comparison and write in host_artefacts, write_install_manifest,
+# legacy_artefacts, backup_owned_artefacts, restore_point_copy,
+# set_aside_if_changed, restore_owned_artefacts and location_inventory, one
+# control each; install.sh's copy of the shared block by BEHAVIOUR (t45 runs
+# both copies), not only by the scripts-carry-the-same-block check.
+#
+# RETIRED in round 7 (the anchor matched nothing; each reason is the code's):
+#   M275  restore_v120_managed no longer disables the prune timer and the apply-audit path BY NAME: they are units, retired by record (restore_owned_artefacts); a name-based disable would also have fired for a restore point of an UNKNOWN release, which must retire nothing (gatekeeper round 6, N3). Covered by M353-M355 and M429+.
+#   M329  the socket-specific `systemctl disable --now topic-manager.socket` went in round 5 (retire_unit); its disable is M341.
+#   M338  restore_socket_unit no longer retires the socket unit by name: the host manifest records it and a restore point without it retires it by record (t45 round trip, M353-M355).
+#   M343  retire_unit no longer deletes every *.wants/*.requires link by NAME: the links a manifest records are removed by restore_owned_artefacts (M356), `systemctl disable` removes its own, and an unrecorded link is not the product's (gatekeeper round 6, B1).
+#   M346  owned_inventory is gone; location_inventory decides nothing (it only lists what others changed), see M505-M510.
+#   M348  owned_inventory is gone; location_inventory lists polkit rules for the foreign report only (M507).
+#   M361  the libexec guard now feeds find through a process substitution, whose status never reaches pipefail: neutralising it is equivalent (find on a missing directory prints nothing), so the control proves nothing.
+#   M397  owned_inventory (the unit NAME prefix it replaced) is gone; ownership is by record.
+#   M398  drop-in directories are not the product's by record and are never removed; location_inventory lists them (M508).
+#   M399  retire_unit no longer removes <unit>.d/: a drop-in no manifest records is the operator's (gatekeeper round 6, B1 — reverses round 5 b).
+#   M400  the DROPIN_DIR exclusion moved to location_inventory (M505).
+#   M401  owned_unit_file (ownership by CONTENT) is gone — that was the B1 defect.
+#   M402  owned_unit_file (ownership by NAME) is gone; ownership is by record.
+#   M403  owned_artefact is gone; "is it the product's" is the manifest lookup (M353).
+#   M404  owned_artefact is gone; put-back is driven by the restore point's manifest (M357, M485-M492).
+#   M427  owned_artefact's polkit NAME rule is gone; ownership is by record.
+#   M428  owned_artefact's polkit CONTENT rule is gone — ownership by content was the B1 defect.
+
+--- M429
+DESC|B1: host_artefacts records no WantedBy= enablement link
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|        [[ "${p##*/}" == *"${SERVICE}"* ]] && return 0
+ANCHOR|        for t in "${ts[@]}"; do printf 'link %s\n' "${OWNED_UNIT_DIR}/${t}.wants/${u}"; done
 REPLACE|        :
 
---- M428
-DESC|b: a polkit rule that names the service account (under another name) is not the product's
+--- M430
+DESC|B1: host_artefacts records no RequiredBy= link
 TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
-ANCHOR|    if [[ "$p" == "${OWNED_POLKIT_DIR}"/* ]]; then
-ANCHOR|        [[ "${p##*/}" == *"${SERVICE}"* ]] && return 0
-ANCHOR|        [[ -f "${pre}${p}" && ! -L "${pre}${p}" ]] && grep -qF -- "$SERVICE" "${pre}${p}"
-REPLACE|    if [[ "$p" == "${OWNED_POLKIT_DIR}"/* ]]; then
-REPLACE|        [[ "${p##*/}" == *"${SERVICE}"* ]] && return 0
-REPLACE|        false
+ANCHOR|        for t in "${ts[@]}"; do printf 'link %s\n' "${OWNED_UNIT_DIR}/${t}.requires/${u}"; done
+REPLACE|        :
+
+--- M431
+DESC|B1: host_artefacts records no polkit rule
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    for f in "${src}"/install/polkit/*; do printf 'file %s\n' "${OWNED_POLKIT_DIR}/${f##*/}"; done
+REPLACE|    :
+
+--- M432
+DESC|B1: the helper directory is not recorded
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    printf 'dir %s\n' "$OWNED_LIBEXEC_DIR"
+REPLACE|    :
+
+--- M433
+DESC|B1: the helper's lib/ directory is not recorded
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if [[ "$d" == */* ]]; then printf 'dir %s\n' "${OWNED_LIBEXEC_DIR}/${d%/*}"; fi
+REPLACE|        :
+
+--- M434
+DESC|B1: the helper files are not recorded
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        printf 'file %s\n' "${OWNED_LIBEXEC_DIR}/${d}"
+REPLACE|        :
+
+--- M435
+DESC|B1: HOST_FILES are not recorded
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    for f in "${HOST_FILES[@]}"; do printf 'file %s\n' "$f"; done
+REPLACE|    :
+
+--- M436
+DESC|B1: HOST_LINKS are not recorded
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    for f in "${HOST_LINKS[@]}"; do printf 'link %s\n' "$f"; done
+REPLACE|    :
+
+--- M437
+DESC|B1: operator state is not recorded as state
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    for f in "${V120_MANAGED[@]}"; do printf 'state %s\n' "$f"; done
+REPLACE|    :
+
+--- M438
+DESC|B1: the pending record is written as the finished one (and the reverse)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            if [[ "$mode" == pending ]]; then
+REPLACE|            if [[ "$mode" != pending ]]; then
+
+--- M439
+DESC|B1: a pending file is recorded as "file", not "pending"
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                h="$kind"; [[ "$kind" == file ]] && h=pending
+REPLACE|                h="$kind"
+
+--- M440
+DESC|B1: operator state that is absent is recorded
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                [[ -e "$p" || -L "$p" ]] || continue
+ANCHOR|                h=state
+REPLACE|                h=state
+
+--- M441
+DESC|B1: an absent link is recorded
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                [[ -L "$p" ]] || continue
+REPLACE|                :
+
+--- M442
+DESC|B1: an absent directory is recorded
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                [[ -d "$p" && ! -L "$p" ]] || continue
+ANCHOR|                h=dir
+REPLACE|                h=dir
+
+--- M443
+DESC|B1: an absent file is hashed (the manifest write dies)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                [[ -f "$p" && ! -L "$p" ]] || continue
+REPLACE|                :
+
+--- M444
+DESC|B1: the manifest records no hash
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                h="$(sha256sum < "$p")"; h="${h%% *}"
+REPLACE|                h=unrecorded
+
+--- M445
+DESC|B1: the manifest is world-readable
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    chmod 600 -- "$tmp"
+REPLACE|    chmod 644 -- "$tmp"
+
+--- M446
+DESC|B1: the manifest's directory is not private
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    safe_install_dir 700 root root "${INSTALL_MANIFEST%/*}"
+ANCHOR|    tmp="$(mktemp "${out}.XXXXXX")"
+REPLACE|    safe_install_dir 755 root root "${INSTALL_MANIFEST%/*}"
+REPLACE|    tmp="$(mktemp "${out}.XXXXXX")"
+
+--- M447
+DESC|B1: a path is recorded twice
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            [[ -z "${seen[$p]+x}" ]] || continue
+REPLACE|            :
+
+--- M448
+DESC|B1 (install.sh): host_artefacts records no WantedBy= enablement link
+TESTS|t45-rollback-host-artefacts.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        for t in "${ts[@]}"; do printf 'link %s\n' "${OWNED_UNIT_DIR}/${t}.wants/${u}"; done
+REPLACE|        :
+
+--- M449
+DESC|B1 (install.sh): a pending file is recorded as "file"
+TESTS|t45-rollback-host-artefacts.sh
+TARGET|install
+EQUIV|no
+ANCHOR|                h="$kind"; [[ "$kind" == file ]] && h=pending
+REPLACE|                h="$kind"
+
+--- M450
+DESC|B1 (install.sh): the manifest records no hash
+TESTS|t45-rollback-host-artefacts.sh
+TARGET|install
+EQUIV|no
+ANCHOR|                h="$(sha256sum < "$p")"; h="${h%% *}"
+REPLACE|                h=unrecorded
+
+--- M451
+DESC|B1 (install.sh): the manifest's directory is not private
+TESTS|t45-rollback-host-artefacts.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    safe_install_dir 700 root root "${INSTALL_MANIFEST%/*}"
+ANCHOR|    tmp="$(mktemp "${out}.XXXXXX")"
+REPLACE|    safe_install_dir 755 root root "${INSTALL_MANIFEST%/*}"
+REPLACE|    tmp="$(mktemp "${out}.XXXXXX")"
+
+--- M452
+DESC|B1 (install.sh): install_apply_helper installs every helper file 0755
+TESTS|t45-rollback-host-artefacts.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        install -m "$m" -o root -g root "${src}/${s}" "${lx}/${d}"
+REPLACE|        install -m 755 -o root -g root "${src}/${s}" "${lx}/${d}"
+
+--- M453
+DESC|B1: install_apply_helper installs every helper file 0755
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        install -m "$m" -o root -g root "${src}/${s}" "${lx}/${d}"
+REPLACE|        install -m 755 -o root -g root "${src}/${s}" "${lx}/${d}"
+
+--- M454
+DESC|N3: the shipped-list version test is inverted (any version is "known")
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if [[ "$1" == "$v" ]]; then
+REPLACE|        if [[ "$1" != "$v" ]]; then
+
+--- M455
+DESC|N3: an unknown version is "known" with an empty list
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            return 0
+ANCHOR|        fi
+ANCHOR|    done
+ANCHOR|    return 1
+REPLACE|            return 0
+REPLACE|        fi
+REPLACE|    done
+REPLACE|    return 0
+
+--- M456
+DESC|B1: a v1.1.x host gets no derived record
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    elif legacy_artefacts "$v" >/dev/null; then
+REPLACE|    elif false; then
+
+--- M457
+DESC|B1: the derived record omits the links v1.1.x shipped
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                if [[ "$kind" == link && -L "$p" ]]; then
+REPLACE|                if false; then
+
+--- M458
+DESC|B1: the derived record omits the files v1.1.x shipped
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                elif [[ "$kind" == file && -f "$p" && ! -L "$p" ]]; then
+REPLACE|                elif false; then
+
+--- M459
+DESC|N3: Phase 4 on a host with no record and no shipped list falls through (and dies)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        warn "  so it will retire none of them and report RESTORE INCOMPLETE with the list."
+ANCHOR|        return 0
+REPLACE|        warn "  so it will retire none of them and report RESTORE INCOMPLETE with the list."
+
+--- M460
+DESC|B1: operator state is copied as a release file
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        [[ -n "$h" && "$h" != \#* && "$h" != state && "$h" != pending ]] || continue
+REPLACE|        [[ -n "$h" && "$h" != \#* ]] || continue
+
+--- M461
+DESC|B1: Phase 4 copies a recorded artefact that is gone (and dies)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        [[ -e "$p" || -L "$p" ]] || continue
+ANCHOR|        d="${BD}/system/owned${p}"
+REPLACE|        d="${BD}/system/owned${p}"
+
+--- M462
+DESC|B1: a recorded directory is copied with cp -a (all of it) instead of recreated
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|yes
+ANCHOR|        if [[ -d "$p" && ! -L "$p" ]]; then
+ANCHOR|            mkdir -p -- "$d"; chmod --reference="$p" -- "$d"; chown --reference="$p" -- "$d"
+REPLACE|        if false; then
+REPLACE|            mkdir -p -- "$d"; chmod --reference="$p" -- "$d"; chown --reference="$p" -- "$d"
+
+--- M463
+DESC|B1: a restore point older than the manifest never uses the copies it kept
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ ! -e "$c" && ! -L "$c" ]]; then
+REPLACE|    if false; then
+
+--- M464
+DESC|B1: a legacy copy that does not exist is handed back as one
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ -e "$c" || -L "$c" ]]; then printf '%s' "$c"; fi
+REPLACE|    printf '%s' "$c"
+
+--- M465
+DESC|B1: every retired product file is set aside, edited or not
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    [[ "$want" =~ ^[0-9a-f]{64}$ && "$got" == "$want" ]] && return 0
+REPLACE|    :
+
+--- M466
+DESC|B1: an EDITED product file is deleted without a copy (comparison flipped)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    [[ "$want" =~ ^[0-9a-f]{64}$ && "$got" == "$want" ]] && return 0
+REPLACE|    [[ "$want" =~ ^[0-9a-f]{64}$ && "$got" != "$want" ]] && return 0
+
+--- M467
+DESC|B1: a file of an unfinished upgrade is not said to be one
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    [[ "$want" == pending ]] && why="installed by an upgrade that did not finish; no hash was recorded"
+REPLACE|    :
+
+--- M468
+DESC|B1: the set-aside copy is not made
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    cp -a -- "$p" "${SET_ASIDE_DIR}${p}"
+REPLACE|    :
+
+--- M469
+DESC|B1: the set-aside directory is not private
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    mkdir -p -- "${SET_ASIDE_DIR}${p%/*}"; chmod 700 -- "$SET_ASIDE_DIR"
+REPLACE|    mkdir -p -- "${SET_ASIDE_DIR}${p%/*}"
+
+--- M470
+DESC|B1: a kept copy is not named
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    SET_ASIDE+=("${p} (${why}) -> ${SET_ASIDE_DIR}${p}")
+REPLACE|    :
+
+--- M471
+DESC|B1: a stale pending record overrides the finished manifest's hashes
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    for f in "${INSTALL_MANIFEST}.pending" "$INSTALL_MANIFEST"; do
+REPLACE|    for f in "$INSTALL_MANIFEST" "${INSTALL_MANIFEST}.pending"; do
+
+--- M472
+DESC|B1: the restore point's comment lines are read as recorded paths
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            if [[ -n "$h" && "$h" != \#* ]]; then had["$p"]="$h"; fi
+REPLACE|            if [[ -n "$h" ]]; then had["$p"]="$h"; fi
+
+--- M473
+DESC|B1: a v1.1.x restore point with no manifest is not judged by the shipped list
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if legacy_artefacts "$v" >/dev/null; then
+REPLACE|        if false; then
+
+--- M474
+DESC|N3: operator state is listed as not retired
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                [[ -n "$p" && "${now[$p]}" != state ]] || continue
+REPLACE|                [[ -n "$p" ]] || continue
+
+--- M475
+DESC|N3: a recorded artefact already gone is listed as not retired
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                [[ -e "$p" || -L "$p" ]] || continue
+ANCHOR|                RESTORE_PROBLEMS+=("not retired: ${p} — the restore point (v${v:-unknown}) has no install manifest and this script carries no shipped list for that version, so nothing says its release did not ship it")
+REPLACE|                RESTORE_PROBLEMS+=("not retired: ${p} — the restore point (v${v:-unknown}) has no install manifest and this script carries no shipped list for that version, so nothing says its release did not ship it")
+
+--- M476
+DESC|N3: what an unknown restore point could not retire is not a restore problem
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                RESTORE_PROBLEMS+=("not retired: ${p} — the restore point (v${v:-unknown}) has no install manifest and this script carries no shipped list for that version, so nothing says its release did not ship it")
+REPLACE|                :
+
+--- M477
+DESC|B1: operator state is retired by the unit rollback
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        [[ "$h" != state ]] || continue
+ANCHOR|        [[ -e "$p" || -L "$p" ]] || continue
+ANCHOR|        if [[ "$h" == dir ]]; then
+REPLACE|        [[ -e "$p" || -L "$p" ]] || continue
+REPLACE|        if [[ "$h" == dir ]]; then
+
+--- M478
+DESC|B1: a recorded artefact already gone is retired (and the rollback dies)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        [[ "$h" != state ]] || continue
+ANCHOR|        [[ -e "$p" || -L "$p" ]] || continue
+REPLACE|        [[ "$h" != state ]] || continue
+
+--- M479
+DESC|B1: recorded directories are not removed
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            if [[ -d "$p" && ! -L "$p" ]]; then dirs+=("$p"); fi
+REPLACE|            :
+
+--- M480
+DESC|B1: a directory where a recorded file was is not a problem (and is deleted)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if [[ -d "$p" && ! -L "$p" ]]; then
+ANCHOR|            RESTORE_PROBLEMS+=("${p} is a directory, but the install manifest does not record a directory there: left as it is")
+ANCHOR|            continue
+ANCHOR|        fi
+
+--- M481
+DESC|B1: a retired product file is never compared with its record
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if [[ "$h" != link && ! -L "$p" ]]; then set_aside_if_changed "$p" "$h"; fi
+REPLACE|        :
+
+--- M482
+DESC|B1: the bytecode of a retired helper module is left (its directory survives)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            for c in "${p%/*}/__pycache__/${f%.py}".*.pyc; do rm -f -- "$c"; done
+REPLACE|            :
+
+--- M483
+DESC|B1: directories are removed shallowest first
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    for (( i=${#dirs[@]}-1; i>=0; i-- )); do
+REPLACE|    for (( i=0; i<${#dirs[@]}; i++ )); do
+
+--- M484
+DESC|B1: a product directory left behind is not named
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            foreign+=("${p}/ (the newer release's directory, left: it holds files no manifest records)")
+REPLACE|            :
+
+--- M485
+DESC|B1: operator state is put back as a release file
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        [[ "$h" != state && "$h" != pending ]] || continue
+ANCHOR|        c="$(restore_point_copy "$BD" "$p")"
+REPLACE|        c="$(restore_point_copy "$BD" "$p")"
+
+--- M486
+DESC|THE SECURITY MUTATION: a symlink where the product's directory was is followed (its target re-moded)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            [[ -L "$p" ]] && rm -f -- "$p"
+REPLACE|            :
+
+--- M487
+DESC|B1: a recorded directory gets no recorded mode
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            if [[ -n "$c" && -d "$c" ]]; then chmod --reference="$c" -- "$p"; chown --reference="$c" -- "$p"; fi
+REPLACE|            :
+
+--- M488
+DESC|B1: nothing that differs is put back (same_artefact inverted)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            if ! same_artefact "$c" "$p"; then
+REPLACE|            if false; then
+
+--- M489
+DESC|B1: a recorded link that is present is re-created (and the rollback dies)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        elif [[ "$h" == link && -L "$p" ]]; then
+REPLACE|        elif false; then
+
+--- M490
+DESC|B1: a shipped enablement link that is gone is not re-created
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        elif [[ "$h" == link && "$p" == "${OWNED_UNIT_DIR}"/*.wants/* ]]; then
+REPLACE|        elif false; then
+
+--- M491
+DESC|B1: an unchanged recorded file with no copy is a problem
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        elif [[ "$h" =~ ^[0-9a-f]{64}$ && -f "$p" && ! -L "$p" ]] && [[ "$(sha256sum < "$p")" == "$h "* ]]; then
+REPLACE|        elif false; then
+
+--- M492
+DESC|B1: a CHANGED recorded file with no copy passes as unchanged
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        elif [[ "$h" =~ ^[0-9a-f]{64}$ && -f "$p" && ! -L "$p" ]] && [[ "$(sha256sum < "$p")" == "$h "* ]]; then
+REPLACE|        elif [[ "$h" =~ ^[0-9a-f]{64}$ && -f "$p" && ! -L "$p" ]] && [[ "$(sha256sum < "$p")" != "$h "* ]]; then
+
+--- M493
+DESC|B1: what others changed is never listed
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ -f "${BD}/manifest/host-locations.list" ]]; then
+REPLACE|    if false; then
+
+--- M494
+DESC|B1: the product's own artefacts are listed as another tool's
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            [[ -n "$p" && -z "${now[$p]+x}" && -z "${had[$p]+x}" ]] || continue
+REPLACE|            [[ -n "$p" ]] || continue
+
+--- M495
+DESC|B1: added and removed are confused
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            if [[ -z "${then_loc[$p]+x}" ]]; then
+REPLACE|            if [[ -n "${then_loc[$p]+x}" ]]; then
+
+--- M496
+DESC|B1: a foreign file removed since the restore point is not listed
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                foreign+=("${p} (removed since the restore point)")
+REPLACE|                :
+
+--- M497
+DESC|B1: changed and unchanged are confused
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            elif [[ "${then_loc[$p]}" != "${now_loc[$p]}" ]]; then
+REPLACE|            elif [[ "${then_loc[$p]}" == "${now_loc[$p]}" ]]; then
+
+--- M498
+DESC|B1: the foreign list is never printed
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ ${#foreign[@]} -gt 0 ]]; then
+REPLACE|    if [[ ${#foreign[@]} -lt 0 ]]; then
+
+--- M499
+DESC|B1: the kept copies are never named
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ ${#SET_ASIDE[@]} -gt 0 ]]; then
+REPLACE|    if [[ ${#SET_ASIDE[@]} -lt 0 ]]; then
+
+--- M500
+DESC|B1: a DERIVED record is installed on the host as if the release had written it
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ -f "$rec" ]] && ! grep -q '^# derived:' "$rec"; then
+REPLACE|    if [[ -f "$rec" ]]; then
+
+--- M501
+DESC|B1: the host's record is not replaced by the restore point's
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        cp -- "$rec" "$INSTALL_MANIFEST"; chmod 600 -- "$INSTALL_MANIFEST"
+REPLACE|        chmod 600 -- "$INSTALL_MANIFEST"
+
+--- M502
+DESC|B1: the restored host record is world-readable
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        cp -- "$rec" "$INSTALL_MANIFEST"; chmod 600 -- "$INSTALL_MANIFEST"
+REPLACE|        cp -- "$rec" "$INSTALL_MANIFEST"; chmod 644 -- "$INSTALL_MANIFEST"
+
+--- M503
+DESC|B1: the newer release's record survives a rollback to a release that kept none
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        rm -f -- "$INSTALL_MANIFEST"
+ANCHOR|    fi
+REPLACE|        :
+REPLACE|    fi
+
+--- M504
+DESC|B1: the pending record survives the rollback
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    rm -f -- "${INSTALL_MANIFEST}.pending"
+ANCHOR|    info "Host units, rules and helpers restored to the restore point's manifest (${#RETIRED_UNITS[@]} unit(s) retired${RETIRED_UNITS[*]:+: ${RETIRED_UNITS[*]}})"
+REPLACE|    info "Host units, rules and helpers restored to the restore point's manifest (${#RETIRED_UNITS[@]} unit(s) retired${RETIRED_UNITS[*]:+: ${RETIRED_UNITS[*]}})"
+
+--- M505
+DESC|B1: the service's own drop-in (secrets) is listed as another tool's
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            [[ "$p" == "$DROPIN_DIR" || "$p" == "$DROPIN_DIR"/* || "$p" == *$'\n'* ]] && continue
+REPLACE|            :
+
+--- M506
+DESC|B1: a re-pointed foreign link is not seen as changed (links hashed by target content)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            if [[ -L "$p" ]]; then
+ANCHOR|                printf 'link:%s %s\n' "$(readlink -- "$p")" "$p"
+ANCHOR|            elif [[ -f "$p" ]]; then
+REPLACE|            if false; then
+REPLACE|                printf 'link:%s %s\n' "$(readlink -- "$p")" "$p"
+REPLACE|            elif [[ -f "$p" ]]; then
+
+--- M507
+DESC|B1: foreign unit files are not inventoried
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            elif [[ -f "$p" ]]; then
+ANCHOR|                f="$(sha256sum < "$p")"; printf '%s %s\n' "${f%% *}" "$p"
+ANCHOR|            elif [[ -d "$p" && "$p" == *.d ]]; then
+REPLACE|            elif false; then
+REPLACE|                f="$(sha256sum < "$p")"; printf '%s %s\n' "${f%% *}" "$p"
+REPLACE|            elif [[ -d "$p" && "$p" == *.d ]]; then
+
+--- M508
+DESC|B1: foreign drop-in directories are not inventoried
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            elif [[ -d "$p" && "$p" == *.d ]]; then
+REPLACE|            elif false; then
+
+--- M509
+DESC|B1: foreign files in the helper tree are not inventoried
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                if [[ -f "$p" && ! -L "$p" ]]; then
+ANCHOR|                    f="$(sha256sum < "$p")"; printf '%s %s\n' "${f%% *}" "$p"
+REPLACE|                if false; then
+REPLACE|                    f="$(sha256sum < "$p")"; printf '%s %s\n' "${f%% *}" "$p"
+
+--- M510
+DESC|B1: foreign directories in the helper tree are not inventoried
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                elif [[ -d "$p" && ! -L "$p" ]]; then
+ANCHOR|                    printf 'dir %s\n' "$p"
+REPLACE|                elif false; then
+REPLACE|                    printf 'dir %s\n' "$p"
+
+--- M511
+DESC|B1: Phase 9 writes no pending record before its first host write (structural)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|write_install_manifest "$WORK_DIR" pending
+REPLACE|:
+
+--- M512
+DESC|B1: the upgrade never records the enablement links at the end (structural)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|# Again now every unit is enabled: the enablement links are recorded as they are.
+ANCHOR|write_install_manifest "$WORK_DIR"
+REPLACE|# Again now every unit is enabled: the enablement links are recorded as they are.
+REPLACE|:
+
+--- M513
+DESC|B1: install.sh writes no manifest (structural)
+TESTS|t45-rollback-host-artefacts.sh
+TARGET|install
+EQUIV|no
+ANCHOR|write_install_manifest "$SCRIPT_DIR"
+REPLACE|:
+
+# ─── round 7: clean-room round 6 M1 (the detached run's verdict) and M2 (timer stamps) ─
+--- M514
+DESC|M2: a retired timer's stamp is left in /var/lib/systemd/timers
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ "$u" == *.timer ]]; then rm -f -- "${TIMER_STAMP_DIR}/stamp-${u}"; fi
+REPLACE|    :
+
+--- M515
+DESC|M2: the stamp of a retired SERVICE is looked for instead of a timer's
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ "$u" == *.timer ]]; then rm -f -- "${TIMER_STAMP_DIR}/stamp-${u}"; fi
+REPLACE|    if [[ "$u" == *.service ]]; then rm -f -- "${TIMER_STAMP_DIR}/stamp-${u}"; fi
+
+--- M516
+DESC|M1: an early exit (a bad option, a refused mode) prints no RESULT line
+TESTS|t47-round6-lock-and-docs.sh
+EQUIV|no
+ANCHOR|trap 'result_line "$?"' EXIT
+REPLACE|:
+
+--- M517
+DESC|M1: the RESULT line reports 0 whatever the exit code
+TESTS|t47-round6-lock-and-docs.sh
+EQUIV|no
+ANCHOR|result_line() { echo "RESULT: exit $1"; }
+REPLACE|result_line() { echo "RESULT: exit 0"; }
+
+--- M518
+DESC|M1: a run that reached the destructive phases prints no RESULT line (after its rollback)
+TESTS|t47-round6-lock-and-docs.sh
+EQUIV|no
+ANCHOR|    result_line "$rc"
+ANCHOR|    exit $rc
+REPLACE|    exit $rc
+
+# ─── round 7 (gatekeeper round 6, N1): install.sh's copy of safe_install_dir, by BEHAVIOUR ─
+# X50i / X52i in the gatekeeper's run: the install.sh copies of M50 and M52
+# were killed only by the scripts-carry-the-same-code comparison. t11's
+# behaviour cases now run both copies; these must name a behaviour case.
+--- M519
+DESC|install.sh: the guard no longer refuses a path that exists and is not a directory
+TESTS|t11-safe-install-dir.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    elif not stat.S_ISDIR(st.st_mode):
+REPLACE|    elif False:
+
+--- M520
+DESC|install.sh: safe_install_dir stops applying the mode, so a widened directory stays widened
+TESTS|t11-safe-install-dir.sh
+TARGET|install
+EQUIV|no
+ANCHOR|os.fchmod(fd, mode)
+REPLACE|pass

@@ -35,6 +35,12 @@ variables:
   # first with --require-online: offline, or with a closure it cannot verify,
   # the tag does not publish.
   TEST_COMMAND: "bash tools/check-requirements-lock.sh --require-online && bash tests/run.sh --strict"
+  # WO-0004 round 7: t45 re-derives the v1.1.x shipped file list (the rollback's
+  # record for a host with no install manifest) from the v1.1.0 and v1.1.1 TAGS
+  # (requirement "gittags"). A shallow clone has neither, the case would SKIP,
+  # and --strict fails a SKIP. So the test job fetches full history and tags.
+  GIT_DEPTH: "0"
+  GIT_FETCH_EXTRA_FLAGS: "--prune --quiet --tags"
 
   # No SonarQube here yet: this project has no SONAR_TOKEN or SONAR_HOST_URL CI
   # variable, and the template's scan job exits 2 - could not run, which is not

@@ -93,29 +93,159 @@ SERVICE="topic-manager"
 # `systemctl show`, which reports the merged unit), so this directory is
 # configuration and secret material, not a system file that install re-creates.
 DROPIN_DIR="/etc/systemd/system/${SERVICE}.service.d"
-# Where a release lays down HOST artefacts outside its own trees: systemd
-# units (and their enablement links), polkit rules, root helpers. Phase 4
-# records every product artefact found here into the restore point
-# (owned_inventory); a restore removes what is present now and was not then,
-# and puts back what was — so a rollback retires whatever units, timers,
-# paths, sockets, rules and helpers the NEWER release added, without this
-# script carrying a list of their names (clean-room 2026-09-29, R1).
+# >>> the product's host artefacts — byte-identical in install.sh and install/upgrade-full.sh (t45)
+# What this release lays down OUTSIDE its own trees, recorded POSITIVELY
+# (gatekeeper round 6, B1). The installer and the upgrade write
+# INSTALL_MANIFEST (root 0600) from these lists and from the source tree they
+# install from: every unit in systemd/ and the enablement link its [Install]
+# section asks for, every rule in install/polkit/, the helper tree
+# APPLY_HELPER_FILES describes, HOST_FILES, HOST_LINKS, and the operator state
+# in V120_MANAGED. A rollback retires or puts back ONLY what a manifest names
+# (restore_owned_artefacts); anything else is another tool's or the
+# operator's, and is never stopped, disabled, deleted or changed. Round 6
+# judged a file the product's when its TEXT mentioned topic-manager, and a
+# rollback stopped, disabled and deleted another tool's backup unit (its
+# ExecStart backed up /opt/topic-manager) and silently deleted an operator's
+# nginx drop-in that named the product in a comment.
+# One line per artefact, "<field> <absolute path>": the sha256 of a file as
+# installed, "dir", "link", "state" (operator state the Settings apply
+# rewrites: recorded, never hash-checked) or, in INSTALL_MANIFEST.pending
+# only, "pending" (a file an upgrade is about to install). "#" starts a comment.
+INSTALL_MANIFEST="/var/lib/topic-manager/installed-files.manifest"
 OWNED_UNIT_DIR="/etc/systemd/system"
 OWNED_POLKIT_DIR="/etc/polkit-1/rules.d"
-OWNED_LIBEXEC_DIR="/usr/libexec/${SERVICE}"
+OWNED_LIBEXEC_DIR="/usr/libexec/topic-manager"
+# The root apply helper: "<mode> <source in the tree> <path under OWNED_LIBEXEC_DIR>".
+APPLY_HELPER_FILES=("755 install/libexec/tm-apply tm-apply"
+                    "644 tm/settings_schema.py lib/settings_schema.py"
+                    "644 tm/tls_check.py lib/tls_check.py")
+# Release files and links at fixed paths elsewhere. t45 parses every install,
+# cp and ln both scripts run and holds them to these lists.
+HOST_FILES=(/etc/nginx/snippets/tm-security-headers.conf
+            /etc/nginx/sites-available/topic-manager /etc/logrotate.d/topic-manager)
+HOST_LINKS=(/etc/nginx/sites-enabled/topic-manager)
+# v1.2.0: the files Settings > "Apply to host" manages (rendered by the root
+# helper /usr/libexec/topic-manager/tm-apply). They are OPERATOR STATE, like
+# config.yaml: an upgrade keeps them (the release's copies are laid down only
+# where absent), backs them up in Phase 4, puts them back on a rollback, and
+# re-applies what tm.db holds at the end (Phase 12) — it never reverts an
+# operator's choice to the release default.
+V120_MANAGED=(
+  /etc/nginx/conf.d/topic-manager-limits.conf
+  /etc/nginx/snippets/tm-limits-server.conf /etc/nginx/snippets/tm-limits-login.conf
+  /etc/nginx/snippets/tm-limits-api.conf /etc/nginx/snippets/tm-syslog.conf
+  /etc/nginx/sites-available/topic-manager-http /etc/nginx/sites-enabled/topic-manager-http
+  /etc/rsyslog.d/30-topic-manager.conf /etc/rsyslog.d/topic-manager
+  /etc/chrony/sources.d/topic-manager.sources
+  /etc/systemd/timesyncd.conf.d/topic-manager.conf)
+# (closed on its last entry: tests extract the upgrade's BASELINE_PATHS up to
+# the only line in that file that is a bare ")", and a second would break them)
+
+# host_artefacts <source-tree> — "<kind> <path>" for every artefact above,
+# kind file, dir, link or state. The units and rules are read from the tree
+# the release installs them FROM, so a unit added to systemd/ is recorded
+# without anyone remembering to list it.
+host_artefacts() {   # host_artefacts <source-tree>
+    local src="$1" f u t e m s d
+    local -a ts
+    for f in "${src}"/systemd/*; do
+        u="${f##*/}"
+        printf 'file %s\n' "${OWNED_UNIT_DIR}/${u}"
+        read -r -a ts <<<"$(sed -n -E 's/^[[:space:]]*WantedBy[[:space:]]*=//p' "$f" | tr '\n' ' ')"
+        for t in "${ts[@]}"; do printf 'link %s\n' "${OWNED_UNIT_DIR}/${t}.wants/${u}"; done
+        read -r -a ts <<<"$(sed -n -E 's/^[[:space:]]*RequiredBy[[:space:]]*=//p' "$f" | tr '\n' ' ')"
+        for t in "${ts[@]}"; do printf 'link %s\n' "${OWNED_UNIT_DIR}/${t}.requires/${u}"; done
+    done
+    for f in "${src}"/install/polkit/*; do printf 'file %s\n' "${OWNED_POLKIT_DIR}/${f##*/}"; done
+    printf 'dir %s\n' "$OWNED_LIBEXEC_DIR"
+    for e in "${APPLY_HELPER_FILES[@]}"; do
+        read -r m s d <<<"$e"
+        if [[ "$d" == */* ]]; then printf 'dir %s\n' "${OWNED_LIBEXEC_DIR}/${d%/*}"; fi
+        printf 'file %s\n' "${OWNED_LIBEXEC_DIR}/${d}"
+    done
+    for f in "${HOST_FILES[@]}"; do printf 'file %s\n' "$f"; done
+    for f in "${HOST_LINKS[@]}"; do printf 'link %s\n' "$f"; done
+    for f in "${V120_MANAGED[@]}"; do printf 'state %s\n' "$f"; done
+}
+
+# write_install_manifest <source-tree> [pending] — INSTALL_MANIFEST from
+# host_artefacts: every artefact PRESENT, a file with its sha256 as it is now
+# (after the installer's own edits, e.g. the site's server_name). With
+# "pending": INSTALL_MANIFEST.pending, every artefact the release is ABOUT to
+# install, present or not — so a rollback of an upgrade interrupted before its
+# manifest was written still knows what that upgrade installed.
+write_install_manifest() {   # write_install_manifest <source-tree> [pending]
+    local src="$1" mode="${2:-}" out="$INSTALL_MANIFEST" kind p h tmp
+    local -A seen=()
+    [[ "$mode" == pending ]] && out="${INSTALL_MANIFEST}.pending"
+    safe_install_dir 700 root root "${INSTALL_MANIFEST%/*}"
+    tmp="$(mktemp "${out}.XXXXXX")"
+    {
+        printf '# topic-manager install manifest, release %s: <sha256|dir|link|state|pending> <absolute path>\n' \
+            "$(cat "${src}/VERSION" 2>/dev/null || echo unknown)"
+        while read -r kind p; do
+            [[ -z "${seen[$p]+x}" ]] || continue
+            seen["$p"]=1
+            if [[ "$mode" == pending ]]; then
+                h="$kind"; [[ "$kind" == file ]] && h=pending
+            elif [[ "$kind" == state ]]; then
+                [[ -e "$p" || -L "$p" ]] || continue
+                h=state
+            elif [[ "$kind" == link ]]; then
+                [[ -L "$p" ]] || continue
+                h=link
+            elif [[ "$kind" == dir ]]; then
+                [[ -d "$p" && ! -L "$p" ]] || continue
+                h=dir
+            else
+                [[ -f "$p" && ! -L "$p" ]] || continue
+                h="$(sha256sum < "$p")"; h="${h%% *}"
+            fi
+            printf '%s %s\n' "$h" "$p"
+        done < <(host_artefacts "$src")
+    } > "$tmp"
+    chmod 600 -- "$tmp"
+    mv -f -- "$tmp" "$out"
+}
+# <<< the product's host artefacts
 # Where a retired unit's RuntimeDirectory= lives (remove_retired_runtime).
 OWNED_RUNTIME_DIR="/run"
+# Where systemd keeps a persistent timer's last-trigger stamp. It outlives the
+# timer unit, so retire_unit removes a retired timer's (clean-room round 6, M2).
+TIMER_STAMP_DIR="/var/lib/systemd/timers"
 # One restore's record, reset by restore_from_backup: the units it retired,
 # their runtime directories, and every PROBLEM it met — a unit systemctl could
 # not stop and disable, a recorded artefact with no saved copy, the wrong
 # version answering. Any problem makes the restore's verdict non-zero
 # (restore_verdict), with each one listed.
 RETIRED_UNITS=(); RETIRED_RUNTIME=(); RESTORE_PROBLEMS=()
+SET_ASIDE=()   # product files a restore retired that were not as installed
+
+# What v1.1.0 and v1.1.1 laid down outside their own trees: the releases that
+# wrote no install manifest. DATA, read from those tags' install.sh and
+# install/upgrade-full.sh Phase 9 (t45 re-derives it from both tags and fails
+# on any difference) — never inferred from what a file on the host says. A
+# host with no manifest is judged by it ONLY when it runs one of these
+# versions; any other version with no manifest has no record, and a rollback
+# to it retires nothing and says so (restore_owned_artefacts).
+LEGACY_V11X_VERSIONS=(1.1.0 1.1.1)
+LEGACY_V11X_ARTEFACTS=("file /etc/systemd/system/topic-manager.service"
+                       "file /etc/systemd/system/topic-manager-nginx-test.service"
+                       "link /etc/systemd/system/multi-user.target.wants/topic-manager.service"
+                       "file /etc/polkit-1/rules.d/50-topic-manager.rules"
+                       "file /etc/nginx/snippets/tm-security-headers.conf"
+                       "file /etc/nginx/sites-available/topic-manager"
+                       "link /etc/nginx/sites-enabled/topic-manager"
+                       "file /etc/logrotate.d/topic-manager")
 
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_ROOT="/var/backups/topic-manager"
 BACKUP_DIR="${BACKUP_ROOT}/${TIMESTAMP}"
 BACKUP_TAR="${BACKUP_ROOT}/topic-manager-backup-${TIMESTAMP}.tar.gz"
+# Where a rollback copies a product file it retires that is NOT byte-for-byte
+# what the manifest recorded (an operator edited it since): kept, never just
+# deleted (restore_owned_artefacts).
+SET_ASIDE_DIR="${BACKUP_ROOT}/set-aside-${TIMESTAMP}"
 # Where root stages the source tree it is about to EXECUTE. BOTH branches of
 # Phase 5 land under this root-owned 0700 parent and BOTH assert it before a
 # byte is read. The online branch used to clone into
@@ -167,26 +297,19 @@ BASELINE_PATHS=(
   "/etc/logrotate.d/topic-manager"
 )
 
-# v1.2.0: the files Settings > "Apply to host" manages (rendered by the root
-# helper /usr/libexec/topic-manager/tm-apply). They are OPERATOR STATE, like
-# config.yaml: an upgrade keeps them (the release's copies are laid down only
-# where absent), backs them up in Phase 4, puts them back on a rollback, and
-# re-applies what tm.db holds at the end (Phase 12) — it never reverts an
-# operator's choice to the release default.
-V120_MANAGED=(
-  /etc/nginx/conf.d/topic-manager-limits.conf
-  /etc/nginx/snippets/tm-limits-server.conf /etc/nginx/snippets/tm-limits-login.conf
-  /etc/nginx/snippets/tm-limits-api.conf /etc/nginx/snippets/tm-syslog.conf
-  /etc/nginx/sites-available/topic-manager-http /etc/nginx/sites-enabled/topic-manager-http
-  /etc/rsyslog.d/30-topic-manager.conf /etc/rsyslog.d/topic-manager
-  /etc/chrony/sources.d/topic-manager.sources
-  /etc/systemd/timesyncd.conf.d/topic-manager.conf)
-# (closed on its last entry: tests extract BASELINE_PATHS up to the only
-# line in this file that is a bare ")", and a second one would break them)
 V120_UNITS=(topic-manager-apply-syslog.service topic-manager-apply-time.service
             topic-manager-apply-nginx.service topic-manager-apply-tls.service
             topic-manager-audit-prune.service topic-manager-audit-prune.timer
             topic-manager-apply-audit.service topic-manager-apply-audit.path)
+
+# ─── the run's verdict, as its last line (clean-room round 6, M1) ───────────
+# The docs tell the operator to run this detached (sudo setsid nohup … &) and
+# to judge the run by its exit code — which a detached run throws away. So
+# every exit from here on ends the output, and the script's own log, with
+# "RESULT: exit <N>"; _on_exit (armed for the destructive phases) prints it
+# after its rollback. README and docs/INSTALL.md say how to read it (t47).
+result_line() { echo "RESULT: exit $1"; }
+trap 'result_line "$?"' EXIT
 
 # ─── flags ───────────────────────────────────────────────────────────────────
 SKIP_OS=false; OFFLINE_FORCED=false; BACKUP_ONLY=false; DRY_RUN=false
@@ -809,14 +932,16 @@ verify_clone_commit() {
 }
 
 # install_apply_helper <source-tree> — the ROOT apply helper and its two rule
-# modules, root:root. Byte-identical in install.sh (t38).
+# modules (APPLY_HELPER_FILES, which the install manifest is written from),
+# root:root. Byte-identical in install.sh (t38).
 install_apply_helper() {   # install_apply_helper <source-tree>
-    local src="$1" lx=/usr/libexec/topic-manager
+    local src="$1" lx="$OWNED_LIBEXEC_DIR" e m s d
     [[ -L "$lx" || -L "${lx}/lib" ]] && fail "${lx} (or its lib/) is a symlink; refusing to install root code through it."
     install -d -m 755 -o root -g root "$lx" "${lx}/lib"
-    install -m 755 -o root -g root "${src}/install/libexec/tm-apply" "${lx}/tm-apply"
-    install -m 644 -o root -g root "${src}/tm/settings_schema.py" "${lx}/lib/settings_schema.py"
-    install -m 644 -o root -g root "${src}/tm/tls_check.py" "${lx}/lib/tls_check.py"
+    for e in "${APPLY_HELPER_FILES[@]}"; do
+        read -r m s d <<<"$e"
+        install -m "$m" -o root -g root "${src}/${s}" "${lx}/${d}"
+    done
 }
 
 # install_if_absent <mode> <src> <dest> — the release's default for a managed
@@ -849,9 +974,12 @@ backup_v120_managed() {   # backup_v120_managed <backup-dir>
 }
 
 # restore_socket_unit <backup-dir> — the gunicorn socket unit, v1.2.0+.
-# A restore point that has one gets it back. One that has NONE is a release
-# whose gunicorn bound 127.0.0.1:5001 itself (v1.1.x and earlier), and the
-# v1.2.0 unit must GO: left enabled it would hold /run/topic-manager/gunicorn.sock
+# A restore point that has one gets it back, enabled. One that has NONE is a
+# release whose gunicorn bound 127.0.0.1:5001 itself (v1.1.x and earlier), and
+# the v1.2.0 unit must GO — restore_owned_artefacts retires it, because the
+# host's install manifest records it and the restore point's does not (by
+# record, gatekeeper round 6; a restore point of an unknown release with no
+# manifest retires nothing and says so): left enabled it would hold /run/topic-manager/gunicorn.sock
 # and, on the first connection, start the restored service with LISTEN_FDS
 # set — and gunicorn serves a socket systemd hands it INSTEAD of its own
 # --bind, so the restored release would stop listening on the port its restored
@@ -862,8 +990,6 @@ restore_socket_unit() {   # restore_socket_unit <backup-dir>
     if [[ -f "${BD}/system/topic-manager.socket" ]]; then
         cp -a "${BD}/system/topic-manager.socket" "${OWNED_UNIT_DIR}/topic-manager.socket"
         systemctl enable topic-manager.socket >/dev/null 2>&1 || true
-    elif [[ -e "${OWNED_UNIT_DIR}/topic-manager.socket" || -L "${OWNED_UNIT_DIR}/topic-manager.socket" ]]; then
-        retire_unit "${OWNED_UNIT_DIR}/topic-manager.socket"
     fi
 }
 
@@ -886,20 +1012,23 @@ unit_runtime_dirs() {   # unit_runtime_dirs <unit-file>
     done < "$1"
 }
 
-# retire_unit <unit-file> — stop and disable a product unit, remove its file,
-# its drop-in directory (<unit>.d/) and every enablement link to it, and, for
-# a socket unit, the socket file it left behind: systemd does not delete a
-# Unix socket on stop (RemoveOnStop= defaults to no), so a rollback to a TCP
-# release used to leave a dead /run/topic-manager/gunicorn.sock that nothing
-# listens on (clean-room R2). The RuntimeDirectory= it declares is noted for
-# remove_retired_runtime: with RuntimeDirectoryPreserve=yes it outlives the
-# unit, and a rollback left /run/topic-manager-apply and the newer release's
-# result files behind (clean-room N5).
+# retire_unit <unit-file> — stop and disable a product unit, remove its file
+# and, for a socket unit, the socket file it left behind: systemd does not
+# delete a Unix socket on stop (RemoveOnStop= defaults to no), so a rollback to
+# a TCP release used to leave a dead /run/topic-manager/gunicorn.sock that
+# nothing listens on (clean-room R2). The RuntimeDirectory= it declares is
+# noted for remove_retired_runtime: with RuntimeDirectoryPreserve=yes it
+# outlives the unit, and a rollback left /run/topic-manager-apply and the newer
+# release's result files behind (clean-room N5). A retired timer's stamp in
+# TIMER_STAMP_DIR goes with it (clean-room round 6, M2). Its enablement links go with
+# `systemctl disable`, and those a manifest records are removed by
+# restore_owned_artefacts; a drop-in directory or a link no manifest records
+# is not the product's and is left (and listed) — gatekeeper round 6, B1.
 # A systemctl that could not stop and disable the unit is a RESTORE PROBLEM,
 # never ignored (gatekeeper round 5, d): the unit may still be running, or
 # still enabled, and the restore's verdict says so (restore_verdict).
 retire_unit() {   # retire_unit <unit-file>
-    local f="$1" u s l rd out
+    local f="$1" u s rd out
     u="$(basename "$f")"
     local socks=()
     [[ "$u" == *.socket && -f "$f" ]] && mapfile -t socks < <(socket_unit_paths "$f")
@@ -912,12 +1041,7 @@ retire_unit() {   # retire_unit <unit-file>
     # reset-failed only clears a failed state; it errs on a unit that has none.
     systemctl reset-failed "$u" >/dev/null 2>&1 || true
     rm -f -- "$f"
-    if [[ -d "${f}.d" && ! -L "${f}.d" && "${f}.d" != "${DROPIN_DIR:-}" ]]; then
-        rm -rf -- "${f}.d"
-    fi
-    shopt -s nullglob
-    for l in "${OWNED_UNIT_DIR}"/*.wants/"$u" "${OWNED_UNIT_DIR}"/*.requires/"$u"; do rm -f -- "$l"; done
-    shopt -u nullglob
+    if [[ "$u" == *.timer ]]; then rm -f -- "${TIMER_STAMP_DIR}/stamp-${u}"; fi
     for s in "${socks[@]}"; do
         [[ -S "$s" ]] && rm -f -- "$s"
         rmdir -- "$(dirname "$s")" 2>/dev/null || true
@@ -956,88 +1080,58 @@ remove_retired_runtime() {
     done
 }
 
-# owned_inventory — every host artefact under the OWNED_* LOCATIONS, whatever
-# it is called, NUL-delimited and sorted: every unit file in the unit
-# directory, every drop-in directory (<unit>.d/) with its contents, every alias
-# or enablement link to one of those unit files, every polkit rule, and the
-# whole root-helper tree. Round 5 inventoried the unit directory by a NAME
-# PREFIX, so a unit the product shipped under another name (tm-*.service), and
-# the drop-in directory of a unit it retired, survived a rollback (gatekeeper
-# round 5, b). The service's own drop-in (DROPIN_DIR) is not in it:
-# backup_dropin/restore_dropin own it, because it holds secrets. What a
-# restore may CHANGE is narrower than what is recorded — owned_artefact.
-owned_inventory() {
-    local p t
-    local -A unitf=()
+# location_inventory — "<field> <path>" for everything in the places a release
+# lays artefacts down (the unit directory, its drop-in directories and the
+# links in and one level below it, the polkit rules, the helper tree), whoever
+# put it there: field is the sha256 of a file, "dir", or "link:<target>". It
+# decides NOTHING. It is how a restore can say which files another tool or an
+# operator added, changed or removed since the restore point, all of which it
+# leaves exactly as they are. The service's own drop-in (DROPIN_DIR) is not
+# in it: backup_dropin/restore_dropin own it, because it holds secrets.
+location_inventory() {
+    local p f
     {
         shopt -s nullglob
-        for p in "${OWNED_UNIT_DIR}"/*; do
-            [[ -f "$p" && ! -L "$p" ]] || continue
-            unitf["${p##*/}"]=1
-            printf '%s\0' "$p"
-        done
-        for p in "${OWNED_UNIT_DIR}"/*.d; do
-            [[ -d "$p" && ! -L "$p" && "$p" != "$DROPIN_DIR" ]] || continue
-            find "$p" -print0
-        done
-        for p in "${OWNED_UNIT_DIR}"/* "${OWNED_UNIT_DIR}"/*/*; do
-            [[ -L "$p" && "$p" != "$DROPIN_DIR"/* ]] || continue
-            t="$(readlink -- "$p")"
-            [[ -n "${unitf[${t##*/}]+x}" ]] && printf '%s\0' "$p"
-        done
-        for p in "${OWNED_POLKIT_DIR}"/*; do
-            [[ -d "$p" && ! -L "$p" ]] && continue
-            printf '%s\0' "$p"
+        for p in "${OWNED_UNIT_DIR}"/* "${OWNED_UNIT_DIR}"/*/* "${OWNED_POLKIT_DIR}"/*; do
+            [[ "$p" == "$DROPIN_DIR" || "$p" == "$DROPIN_DIR"/* || "$p" == *$'\n'* ]] && continue
+            if [[ -L "$p" ]]; then
+                printf 'link:%s %s\n' "$(readlink -- "$p")" "$p"
+            elif [[ -f "$p" ]]; then
+                f="$(sha256sum < "$p")"; printf '%s %s\n' "${f%% *}" "$p"
+            elif [[ -d "$p" && "$p" == *.d ]]; then
+                printf 'dir %s\n' "$p"
+            fi
         done
         shopt -u nullglob
         # An if, not `test && find`: on a host without the helper (every
         # 1.1.x host) that would end the group non-zero, and under pipefail
         # abort Phase 4.
         if [[ -d "$OWNED_LIBEXEC_DIR" && ! -L "$OWNED_LIBEXEC_DIR" ]]; then
-            find "$OWNED_LIBEXEC_DIR" -print0
+            while IFS= read -r -d '' p; do
+                if [[ -f "$p" && ! -L "$p" ]]; then
+                    f="$(sha256sum < "$p")"; printf '%s %s\n' "${f%% *}" "$p"
+                elif [[ -d "$p" && ! -L "$p" ]]; then
+                    printf 'dir %s\n' "$p"
+                elif [[ -L "$p" ]]; then
+                    printf 'link:%s %s\n' "$(readlink -- "$p")" "$p"
+                fi
+            done < <(find "$OWNED_LIBEXEC_DIR" -print0)
         fi
-    } | sort -z -u
+    } | sort -k2 -u
 }
 
-# owned_artefact <path> [<prefix>] — is <path> the PRODUCT's, i.e. one a
-# rollback may retire or put back? The inventory records whole locations;
-# this decides what a restore may change there, so a unit another tool added
-# after the restore point (snapd writes snap-*.mount units into the unit
-# directory on every refresh; a configuration-management agent installs an
-# exporter) is never stopped, and one it changed is never reverted — each is
-# listed instead. The product's: the root-helper tree; a unit whose name
-# begins with the service name, or a polkit rule with it anywhere in its name;
-# a file that names it (every unit and rule the product
-# ships does, whatever it is called — t45 holds that); a link to such a unit;
-# the drop-in directory, or a file in it, of such a unit. <prefix> reads the
-# files from a restore point's copy rather than from the host.
-owned_artefact() {   # owned_artefact <path> [<prefix>]
-    local p="$1" pre="${2:-}" rel t
-    case "$p" in "$OWNED_LIBEXEC_DIR"|"$OWNED_LIBEXEC_DIR"/*) return 0 ;; esac
-    # A polkit rule is NN-<name>.rules: the service anywhere in the name, or
-    # in the rule (every rule of the product's names its service account).
-    if [[ "$p" == "${OWNED_POLKIT_DIR}"/* ]]; then
-        [[ "${p##*/}" == *"${SERVICE}"* ]] && return 0
-        [[ -f "${pre}${p}" && ! -L "${pre}${p}" ]] && grep -qF -- "$SERVICE" "${pre}${p}"
-        return
-    fi
-    if [[ "$p" == "${OWNED_UNIT_DIR}"/*.d || "$p" == "${OWNED_UNIT_DIR}"/*.d/* ]]; then
-        rel="${p#"${OWNED_UNIT_DIR}"/}"; rel="${rel%%/*}"
-        owned_unit_file "${OWNED_UNIT_DIR}/${rel%.d}" "$pre" && return 0
-        [[ -f "${pre}${p}" && ! -L "${pre}${p}" ]] && grep -qF -- "$SERVICE" "${pre}${p}"
-        return
-    fi
-    if [[ -L "${pre}${p}" ]]; then
-        [[ "${p##*/}" == "${SERVICE}"* ]] && return 0
-        t="$(readlink -- "${pre}${p}")"
-        owned_unit_file "${OWNED_UNIT_DIR}/${t##*/}" "$pre"
-        return
-    fi
-    owned_unit_file "$p" "$pre"
-}
-owned_unit_file() {   # owned_unit_file <path> <prefix>
-    [[ "${1##*/}" == "${SERVICE}"* ]] && return 0
-    [[ -f "${2}${1}" && ! -L "${2}${1}" ]] && grep -qF -- "$SERVICE" "${2}${1}"
+# legacy_artefacts <version> — "<kind> <path>" for a release that wrote no
+# install manifest, from LEGACY_V11X_ARTEFACTS; non-zero for any version that
+# list does not cover.
+legacy_artefacts() {   # legacy_artefacts <version>
+    local v
+    for v in "${LEGACY_V11X_VERSIONS[@]}"; do
+        if [[ "$1" == "$v" ]]; then
+            printf '%s\n' "${LEGACY_V11X_ARTEFACTS[@]}"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # same_artefact <a> <b> — the same link target, both directories, or the same bytes.
@@ -1051,94 +1145,236 @@ same_artefact() {   # same_artefact <a> <b>
     fi
 }
 
-# backup_owned_artefacts <backup-dir> — the inventory, and a byte-exact copy
-# of every artefact in it, into the restore point (Phase 4).
-backup_owned_artefacts() {   # backup_owned_artefacts <backup-dir>
-    local BD="$1" p d
-    owned_inventory > "${BD}/manifest/owned-artefacts.list"
-    while IFS= read -r -d '' p; do
+# backup_owned_artefacts <backup-dir> <installed-version> — Phase 4. The
+# restore point's record of what is the product's: the host's install manifest
+# as it is; on a host with none, a manifest DERIVED from the shipped list of
+# the installed release (legacy_artefacts: v1.1.x), marked "# derived"; for
+# any other version none at all, and a rollback to this point will retire
+# nothing (it says so now, and again then). Then a byte-exact copy of every
+# recorded artefact, and the location inventory.
+backup_owned_artefacts() {   # backup_owned_artefacts <backup-dir> <installed-version>
+    local BD="$1" v="${2:-unknown}" rec="${1}/manifest/installed-files.manifest" kind p h d
+    location_inventory > "${BD}/manifest/host-locations.list"
+    if [[ -f "$INSTALL_MANIFEST" ]]; then
+        cp -- "$INSTALL_MANIFEST" "$rec"
+    elif legacy_artefacts "$v" >/dev/null; then
+        {
+            printf '# derived: v%s wrote no install manifest; its shipped list (LEGACY_V11X_ARTEFACTS) as found on this host\n' "$v"
+            while read -r kind p; do
+                if [[ "$kind" == link && -L "$p" ]]; then
+                    printf 'link %s\n' "$p"
+                elif [[ "$kind" == file && -f "$p" && ! -L "$p" ]]; then
+                    h="$(sha256sum < "$p")"; printf '%s %s\n' "${h%% *}" "$p"
+                fi
+            done < <(legacy_artefacts "$v")
+        } > "$rec"
+    else
+        warn "v${v} wrote no install manifest, and this script carries no shipped list for it:"
+        warn "  a rollback to this restore point cannot tell its units from any other tool's,"
+        warn "  so it will retire none of them and report RESTORE INCOMPLETE with the list."
+        return 0
+    fi
+    while read -r h p; do
+        [[ -n "$h" && "$h" != \#* && "$h" != state && "$h" != pending ]] || continue
+        [[ -e "$p" || -L "$p" ]] || continue
         d="${BD}/system/owned${p}"
         if [[ -d "$p" && ! -L "$p" ]]; then
             mkdir -p -- "$d"; chmod --reference="$p" -- "$d"; chown --reference="$p" -- "$d"
         else
             mkdir -p -- "$(dirname "$d")"; cp -a -- "$p" "$d"
         fi
-    done < "${BD}/manifest/owned-artefacts.list"
+    done < "$rec"
+}
+
+# restore_point_copy <backup-dir> <path> — the restore point's copy of a
+# recorded artefact: the copy Phase 4 made, or (a restore point older than the
+# manifest) the one it has always kept of the service unit, the nginx site
+# and snippet and the logrotate file. Prints nothing if none.
+restore_point_copy() {   # restore_point_copy <backup-dir> <path>
+    local BD="$1" p="$2" c
+    c="${BD}/system/owned${p}"
+    if [[ ! -e "$c" && ! -L "$c" ]]; then
+        case "$p" in
+            "${OWNED_UNIT_DIR}/topic-manager.service") c="${BD}/system/topic-manager.service" ;;
+            /etc/nginx/sites-available/topic-manager) c="${BD}/system/topic-manager.nginx" ;;
+            /etc/nginx/snippets/tm-security-headers.conf) c="${BD}/system/tm-security-headers.conf" ;;
+            /etc/logrotate.d/topic-manager) c="${BD}/system/logrotate-topic-manager" ;;
+            *) return 0 ;;
+        esac
+    fi
+    if [[ -e "$c" || -L "$c" ]]; then printf '%s' "$c"; fi
+}
+
+# set_aside_if_changed <path> <recorded-field> — before a product file is
+# retired: if it is not byte-for-byte what the manifest recorded (an operator
+# edited it, or an interrupted upgrade installed it and recorded no hash), a
+# copy goes to SET_ASIDE_DIR and the restore names it. Never deleted unseen.
+set_aside_if_changed() {   # set_aside_if_changed <path> <recorded-field>
+    local p="$1" want="$2" got why
+    got="$(sha256sum < "$p")"; got="${got%% *}"
+    [[ "$want" =~ ^[0-9a-f]{64}$ && "$got" == "$want" ]] && return 0
+    why="changed since it was installed"
+    [[ "$want" == pending ]] && why="installed by an upgrade that did not finish; no hash was recorded"
+    mkdir -p -- "${SET_ASIDE_DIR}${p%/*}"; chmod 700 -- "$SET_ASIDE_DIR"
+    cp -a -- "$p" "${SET_ASIDE_DIR}${p}"
+    SET_ASIDE+=("${p} (${why}) -> ${SET_ASIDE_DIR}${p}")
 }
 
 # restore_owned_artefacts <backup-dir> — make the product's host artefacts
-# what the restore point recorded. The product's (owned_artefact), present now
-# and absent then = added by the release being rolled back: units are stopped,
-# disabled and removed with their drop-ins (retire_unit), everything else
-# deleted. The product's, recorded then = put back from the restore point's
-# copy; recorded with no copy = a restore problem. Anything else that changed
-# in these locations is listed and left alone. Then the retired units' runtime
-# directories go and systemd reloads, so no removed timer or path unit fires
-# the restored release into a module it does not have.
+# what the restore point recorded, judged ONLY by the two install manifests
+# (gatekeeper round 6, B1): the host's (INSTALL_MANIFEST, plus the .pending
+# record of an upgrade that did not finish) says what is the product's NOW,
+# the restore point's says what was then. Now and not then = added by the
+# release being rolled back: a unit is stopped, disabled and removed
+# (retire_unit), a file or link removed, a directory removed once empty — a
+# file that is not what its manifest recorded is set aside first. Then = put
+# back from the restore point's copy; no copy (and not unchanged) = a restore
+# problem. Everything else in these locations is not the product's: never
+# stopped, disabled, deleted or changed; what changed since the restore point
+# is listed. A restore point with no manifest of a version legacy_artefacts
+# does not cover retires NOTHING, and every artefact it could not judge is a
+# restore problem (RESTORE INCOMPLETE, exit 1). Operator state (V120_MANAGED)
+# is restore_v120_managed's.
 restore_owned_artefacts() {   # restore_owned_artefacts <backup-dir>
-    local BD="$1" list="${1}/manifest/owned-artefacts.list" p
-    local -A had=()
-    if [[ ! -f "$list" ]]; then
-        # Taken by an upgrade script older than the inventory: nothing here
-        # says which of these its release shipped, and guessing from names
-        # would be the hardcoded list this replaced. Name them, loudly.
-        local now=()
-        mapfile -d '' now < <(owned_inventory)
-        warn "This restore point predates the host-artefact inventory, so it cannot say which"
-        warn "  units, rules and helpers its release shipped. Present now, NOT removed:"
-        for p in "${now[@]}"; do owned_artefact "$p" && warn "    ${p}"; done
-        warn "  Retire any the restored release does not ship: sudo systemctl disable --now <unit>; delete the file; sudo systemctl daemon-reload"
-        remove_retired_runtime
-        return 0
-    fi
-    while IFS= read -r -d '' p; do had["$p"]=1; done < "$list"
-
-    # Judged BEFORE anything is removed: a drop-in is the product's because
-    # its unit is, and retire_unit is about to delete that unit.
-    local cur=() added_units=() added_other=() foreign=()
-    mapfile -d '' cur < <(owned_inventory)
-    for p in "${cur[@]}"; do
-        [[ -n "${had[$p]+x}" ]] && continue
-        if ! owned_artefact "$p"; then
-            foreign+=("${p} (added since the restore point)")
-        elif [[ "$p" != "${OWNED_UNIT_DIR}"/*/* && "$p" == "${OWNED_UNIT_DIR}"/* && -f "$p" && ! -L "$p" ]]; then
-            added_units+=("$p")                                    # a unit file
+    local BD="$1" rec="${1}/manifest/installed-files.manifest" f h p v c i
+    local -A now=() had=() then_loc=() now_loc=()
+    local keys=() units=() files=() dirs=() foreign=()
+    SET_ASIDE=()
+    # The .pending record first, so a hash the finished manifest recorded wins.
+    for f in "${INSTALL_MANIFEST}.pending" "$INSTALL_MANIFEST"; do
+        [[ -f "$f" ]] || continue
+        while read -r h p; do
+            if [[ -n "$h" && "$h" != \#* ]]; then now["$p"]="$h"; fi
+        done < "$f"
+    done
+    if [[ -f "$rec" ]]; then
+        while read -r h p; do
+            if [[ -n "$h" && "$h" != \#* ]]; then had["$p"]="$h"; fi
+        done < "$rec"
+    else
+        v="$(grep -oP '^topic_manager_version=\K.*' "${BD}/manifest/state.env" 2>/dev/null || true)"
+        if legacy_artefacts "$v" >/dev/null; then
+            while read -r h p; do had["$p"]="$h"; done < <(legacy_artefacts "$v")
         else
-            added_other+=("$p")      # a link, a drop-in, a rule, the helper tree
+            mapfile -t keys < <(printf '%s\n' "${!now[@]}" | sort)
+            for p in "${keys[@]}"; do
+                [[ -n "$p" && "${now[$p]}" != state ]] || continue
+                [[ -e "$p" || -L "$p" ]] || continue
+                RESTORE_PROBLEMS+=("not retired: ${p} — the restore point (v${v:-unknown}) has no install manifest and this script carries no shipped list for that version, so nothing says its release did not ship it")
+            done
+            warn "The restore point (v${v:-unknown}) has no install manifest: no unit, rule or helper was retired or put back."
+            return 0
         fi
-    done
-    for p in "${added_units[@]}"; do retire_unit "$p"; done
-    # Deepest first, so a directory is empty when its turn comes.
-    local i
-    for (( i=${#added_other[@]}-1; i>=0; i-- )); do
-        p="${added_other[$i]}"
-        if [[ -d "$p" && ! -L "$p" ]]; then rm -rf -- "$p"; else rm -f -- "$p"; fi
-    done
+    fi
 
-    while IFS= read -r -d '' p; do
-        local src="${BD}/system/owned${p}"
-        if ! owned_artefact "$p" "${BD}/system/owned"; then
-            same_artefact "$src" "$p" || foreign+=("${p} (changed or removed since the restore point)")
+    # Retire: the product's now, not then. Judged before anything is removed.
+    mapfile -t keys < <(printf '%s\n' "${!now[@]}" | sort)
+    for p in "${keys[@]}"; do
+        [[ -n "$p" && -z "${had[$p]+x}" ]] || continue
+        h="${now[$p]}"
+        [[ "$h" != state ]] || continue
+        [[ -e "$p" || -L "$p" ]] || continue
+        if [[ "$h" == dir ]]; then
+            if [[ -d "$p" && ! -L "$p" ]]; then dirs+=("$p"); fi
             continue
         fi
-        if [[ -d "$src" && ! -L "$src" ]]; then
+        if [[ -d "$p" && ! -L "$p" ]]; then
+            RESTORE_PROBLEMS+=("${p} is a directory, but the install manifest does not record a directory there: left as it is")
+            continue
+        fi
+        if [[ "$h" != link && ! -L "$p" ]]; then set_aside_if_changed "$p" "$h"; fi
+        if [[ "$h" != link && "${p%/*}" == "$OWNED_UNIT_DIR" && ! -L "$p" ]]; then
+            units+=("$p")
+        else
+            files+=("$p")
+        fi
+    done
+    for p in "${units[@]}"; do retire_unit "$p"; done
+    for p in "${files[@]}"; do
+        rm -f -- "$p"
+        # The bytecode Python wrote beside a retired module of the helper's.
+        if [[ "$p" == *.py ]]; then
+            f="${p##*/}"
+            shopt -s nullglob
+            for c in "${p%/*}/__pycache__/${f%.py}".*.pyc; do rm -f -- "$c"; done
+            shopt -u nullglob
+            rmdir -- "${p%/*}/__pycache__" 2>/dev/null || true
+        fi
+        info "Removed ${p} (the restore point's release does not ship it)"
+    done
+    # Deepest first, so a directory is empty when its turn comes.
+    for (( i=${#dirs[@]}-1; i>=0; i-- )); do
+        p="${dirs[$i]}"
+        if rmdir -- "$p" 2>/dev/null; then
+            info "Removed ${p} (the restore point's release does not ship it)"
+        else
+            foreign+=("${p}/ (the newer release's directory, left: it holds files no manifest records)")
+        fi
+    done
+
+    # Put back: the product's then.
+    mapfile -t keys < <(printf '%s\n' "${!had[@]}" | sort)
+    for p in "${keys[@]}"; do
+        [[ -n "$p" ]] || continue
+        h="${had[$p]}"
+        [[ "$h" != state && "$h" != pending ]] || continue
+        c="$(restore_point_copy "$BD" "$p")"
+        if [[ "$h" == dir ]]; then
             [[ -L "$p" ]] && rm -f -- "$p"
-            mkdir -p -- "$p"; chmod --reference="$src" -- "$p"; chown --reference="$src" -- "$p"
-        elif [[ -e "$src" || -L "$src" ]]; then
-            mkdir -p -- "$(dirname "$p")"
-            rm -rf -- "$p"; cp -a -- "$src" "$p"
+            mkdir -p -- "$p"
+            if [[ -n "$c" && -d "$c" ]]; then chmod --reference="$c" -- "$p"; chown --reference="$c" -- "$p"; fi
+        elif [[ -n "$c" ]]; then
+            if ! same_artefact "$c" "$p"; then
+                mkdir -p -- "$(dirname "$p")"
+                rm -rf -- "$p"; cp -a -- "$c" "$p"
+            fi
+        elif [[ "$h" == link && -L "$p" ]]; then
+            :
+        elif [[ "$h" == link && "$p" == "${OWNED_UNIT_DIR}"/*.wants/* ]]; then
+            mkdir -p -- "${p%/*}"; ln -s -- "${OWNED_UNIT_DIR}/${p##*/}" "$p"
+        elif [[ "$h" =~ ^[0-9a-f]{64}$ && -f "$p" && ! -L "$p" ]] && [[ "$(sha256sum < "$p")" == "$h "* ]]; then
+            :   # as the restore point recorded it
         else
             RESTORE_PROBLEMS+=("the restore point lists ${p} but holds no copy of it: left as it is")
             warn "The restore point lists ${p} but holds no copy of it — left as it is."
         fi
-    done < "$list"
+    done
+
+    # Not the product's by either record: listed, never touched.
+    if [[ -f "${BD}/manifest/host-locations.list" ]]; then
+        while read -r h p; do then_loc["$p"]="$h"; done < "${BD}/manifest/host-locations.list"
+        while read -r h p; do now_loc["$p"]="$h"; done < <(location_inventory)
+        mapfile -t keys < <(printf '%s\n' "${!then_loc[@]}" "${!now_loc[@]}" | sort -u)
+        for p in "${keys[@]}"; do
+            [[ -n "$p" && -z "${now[$p]+x}" && -z "${had[$p]+x}" ]] || continue
+            if [[ -z "${then_loc[$p]+x}" ]]; then
+                foreign+=("${p} (added since the restore point)")
+            elif [[ -z "${now_loc[$p]+x}" ]]; then
+                foreign+=("${p} (removed since the restore point)")
+            elif [[ "${then_loc[$p]}" != "${now_loc[$p]}" ]]; then
+                foreign+=("${p} (changed since the restore point)")
+            fi
+        done
+    fi
     if [[ ${#foreign[@]} -gt 0 ]]; then
-        warn "Not the product's, so this rollback left them as they are:"
-        for p in "${foreign[@]}"; do warn "    ${p}"; done
+        info "Not the product's (no install manifest records them), so this rollback left them exactly as they are:"
+        for p in "${foreign[@]}"; do info "    ${p}"; done
+    fi
+    if [[ ${#SET_ASIDE[@]} -gt 0 ]]; then
+        warn "Retired product files that were not as installed — a copy of each was kept:"
+        for p in "${SET_ASIDE[@]}"; do warn "    ${p}"; done
     fi
     remove_retired_runtime
     systemctl daemon-reload >/dev/null 2>&1 || true
-    info "Host units, rules and helpers restored to the restore point's inventory (${#RETIRED_UNITS[@]} unit(s) retired${RETIRED_UNITS[*]:+: ${RETIRED_UNITS[*]}})"
+    # The host's record is now the restore point's (none, for a release that kept none).
+    if [[ -f "$rec" ]] && ! grep -q '^# derived:' "$rec"; then
+        safe_install_dir 700 root root "${INSTALL_MANIFEST%/*}"
+        cp -- "$rec" "$INSTALL_MANIFEST"; chmod 600 -- "$INSTALL_MANIFEST"
+    else
+        rm -f -- "$INSTALL_MANIFEST"
+    fi
+    rm -f -- "${INSTALL_MANIFEST}.pending"
+    info "Host units, rules and helpers restored to the restore point's manifest (${#RETIRED_UNITS[@]} unit(s) retired${RETIRED_UNITS[*]:+: ${RETIRED_UNITS[*]}})"
 }
 
 # restore_v120_managed <backup-dir> — put them back exactly; from a restore
@@ -1153,10 +1389,6 @@ restore_v120_managed() {   # restore_v120_managed <backup-dir>
             cp -a -- "${BD}/system/v120${f}" "$f"
         fi
     done
-    if [[ ! -f "${BD}/system/v120/.present" ]]; then
-        systemctl disable --now topic-manager-audit-prune.timer topic-manager-apply-audit.path \
-            >/dev/null 2>&1 || true
-    fi
     systemctl try-restart rsyslog.service >/dev/null 2>&1 || true
 }
 
@@ -1537,6 +1769,7 @@ _on_exit() {
     local rc=$?
     trap - EXIT
     [[ $rc -ne 0 ]] && rollback || true
+    result_line "$rc"
     exit $rc
 }
 trap _on_exit EXIT
@@ -2293,7 +2526,7 @@ backup_dropin "$BACKUP_DIR"
 [[ -f /etc/logrotate.d/topic-manager ]] && \
     cp -a /etc/logrotate.d/topic-manager "${BACKUP_DIR}/system/logrotate-topic-manager"
 backup_v120_managed "$BACKUP_DIR"
-backup_owned_artefacts "$BACKUP_DIR"
+backup_owned_artefacts "$BACKUP_DIR" "$INSTALLED_VER"
 
 {
     echo "topic_manager_version=${INSTALLED_VER}"
@@ -2525,6 +2758,10 @@ success "Dependency imports verified"
 # =============================================================================
 phase "Phase 9 — Deploy application"
 # =============================================================================
+# Before the first host artefact is written: what this release is about to
+# install, so a rollback from anywhere below retires it by record even though
+# the manifest proper is written only once it is all in place.
+write_install_manifest "$WORK_DIR" pending
 
 info "Deploying backend ..."
 rsync -a "${WORK_DIR}/tm/" "${APP_HOME}/tm/"
@@ -2644,7 +2881,8 @@ fi
     cp "${WORK_DIR}/install/logrotate.d/topic-manager" /etc/logrotate.d/topic-manager
 systemctl daemon-reload
 systemctl enable "${SERVICE}.socket" "$SERVICE" --quiet
-success "Application deployed"
+write_install_manifest "$WORK_DIR"
+success "Application deployed (install manifest: ${INSTALL_MANIFEST})"
 
 # =============================================================================
 phase "Phase 10 — Restore configuration, data, certs and permissions"
@@ -2998,6 +3236,9 @@ fi
 systemctl enable --now topic-manager-audit-prune.timer >/dev/null 2>&1 \
     && success "Audit retention: topic-manager-audit-prune.timer (daily)" \
     || warn "The audit prune timer could not be enabled: systemctl enable --now topic-manager-audit-prune.timer"
+# Again now every unit is enabled: the enablement links are recorded as they are.
+write_install_manifest "$WORK_DIR"
+rm -f -- "${INSTALL_MANIFEST}.pending"
 
 info "Installed third-party components:"
 "${VENV}/bin/pip" freeze | sed 's/^/    /'

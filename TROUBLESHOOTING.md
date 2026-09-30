@@ -977,19 +977,25 @@ sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --restore 2
 It verifies the backup's `SHA256SUMS` before restoring from it, refuses to restore a backup
 that fails that check, puts back the recorded ownership and modes, and then reports the
 health of what it restored. It also makes the product's host units, polkit rules and root helper what the restore point
-recorded. The restore point records every unit file, drop-in directory and enablement link in
-`/etc/systemd/system` (the service's own drop-in excepted — it is restored separately), every
-rule in `/etc/polkit-1/rules.d` and all of `/usr/libexec/topic-manager`, whatever they are
-called. On the restore, every unit, timer, path or socket unit of the product's that the newer
-release added is stopped, disabled and removed — with its drop-in directory, its socket file and
-the runtime directory it declared (`/run/topic-manager-apply`, with the newer release's result
-files) — its helper and rules deleted, the older copies put back, and systemd reloaded, so no
-timer of the newer release keeps firing into code the restored one does not have. "The
-product's" is decided by what the file says, not only by its name: every unit and rule it ships
-names `topic-manager`. Anything else that changed in those directories since the restore point
-(a snap refresh's `snap-*.mount`, another tool's unit) is listed as *not the product's* and left
-alone. A restore point taken before v1.2.0's inventory cannot say what its release shipped;
-`--restore` then changes none of them and lists what it left.
+recorded. **What is the product's is a record, never a guess.** `install.sh` and every upgrade
+write `/var/lib/topic-manager/installed-files.manifest` (root, `0600`): one line per host file
+they laid down — every unit and its enablement link, the polkit rule, the helper tree under
+`/usr/libexec/topic-manager`, the nginx site and snippet, the logrotate file — with its sha256,
+plus the Settings-managed files as operator state. Phase 4 copies it, and every file it names,
+into the restore point. On the restore, what the host's manifest names and the restore point's
+does not is retired: a unit is stopped, disabled and removed with its socket file, its timer
+stamp (`/var/lib/systemd/timers/stamp-<timer>`) and the runtime directory it declared
+(`/run/topic-manager-apply`); a file, link or rule is deleted; the helper directory goes once
+empty. A retired file that is no longer what the manifest recorded (you edited it) is copied to
+`/var/backups/topic-manager/set-aside-<TIMESTAMP>/` first and named. What the restore point's
+manifest names is put back byte-exact, and systemd reloads — so no timer of the newer release
+keeps firing into code the restored one does not have. **Everything else is left exactly as it
+is**, whatever its name or its text: another tool's unit that backs up `/opt/topic-manager`, a
+drop-in of yours that mentions `topic-manager`, a snap's `snap-*.mount`. What changed there since
+the restore point is listed as *not the product's*. A v1.1.0 or v1.1.1 host has no manifest; its
+release's shipped file list (read from those releases' own install code) stands in for one. A
+restore point of any other release with no manifest retires **nothing**, and `--restore` ends
+`RESTORE INCOMPLETE`, listing what it could not judge.
 
 **The verdict.** `--restore` exits 0 only when the service answers healthy **as the version
 the restore point holds** (`manifest/state.env`) and nothing went wrong. Otherwise it prints
@@ -1008,9 +1014,11 @@ with no saved copy — and exits 1. Fix each, or revert the vCSA snapshot.
   system/topic-manager.nginx         system/tm-security-headers.conf
   system/logrotate-topic-manager     venv.tar.gz
   manifest/state.env                 manifest/permissions.baseline
-  manifest/owned-artefacts.list      system/owned/<absolute path>   (v1.2.0+: unit files,
-                                     drop-ins and links in /etc/systemd/system, polkit
-                                     rules, /usr/libexec/topic-manager, byte-exact)
+  manifest/installed-files.manifest  system/owned/<absolute path>   (v1.2.0+: the host's
+                                     install manifest, and a byte-exact copy of every file
+                                     it names; "# derived:" = a v1.1.x host's shipped list)
+  manifest/host-locations.list       (what else was in /etc/systemd/system, the polkit
+                                     rules and the helper tree: listed, never restored)
   SHA256SUMS
 ```
 ```bash

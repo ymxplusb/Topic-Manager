@@ -92,13 +92,21 @@ tm_case "install-script-refuses-install--d-through-a-symlink" symlinks s_install
 
 # The consequence, not just the exit code: the thing the symlink pointed at
 # must be exactly as it was.
+# Every behaviour case below runs BOTH scripts' copies (gatekeeper round 6,
+# N1): an install.sh-only mutation used to be caught only by the
+# scripts-carry-the-same-code comparison, never by what the code does.
+_scripts() { echo "$TM_TMP/up.sh" "$TM_TMP/install.sh"; }
+
 s_symlink_target_is_untouched() {
+    local sc
     _prep
     ln -s "$TARGET" "$LINK" 2>/dev/null || tm_die "this filesystem will not create symlinks"
-    _do "$TM_TMP/up.sh" 777 root root "$LINK"
-    tm_assert_mode 700 "$TARGET" \
-        "the refusal came AFTER the chmod — the symlink target was modified,
-        which is the whole thing the guard exists to prevent"
+    for sc in $(_scripts); do
+        _do "$sc" 777 root root "$LINK"
+        tm_assert_mode 700 "$TARGET" \
+            "$(basename "$sc"): the refusal came AFTER the chmod — the symlink target was modified,
+            which is the whole thing the guard exists to prevent"
+    done
 }
 tm_case "the-symlink-target-is-not-chmodded" symlinks,modes s_symlink_target_is_untouched
 
@@ -106,34 +114,45 @@ tm_case "the-symlink-target-is-not-chmodded" symlinks,modes s_symlink_target_is_
 # A safe_install_dir that refused everything would pass every case above. These
 # two prove it still does the job it replaced.
 s_creates_a_new_directory() {
+    local sc
     _prep
-    _do "$TM_TMP/up.sh" 750 "$(_owner_now)" "$(_group_now)" "$TM_TMP/w/fresh"
-    tm_assert_rc 0 "$RC" "safe_install_dir refused an ordinary new directory: $(cat "$TM_TMP/out")"
-    tm_assert_dir "$TM_TMP/w/fresh" "the directory was not created at all"
+    for sc in $(_scripts); do
+        rm -rf "$TM_TMP/w/fresh"
+        _do "$sc" 750 "$(_owner_now)" "$(_group_now)" "$TM_TMP/w/fresh"
+        tm_assert_rc 0 "$RC" "$(basename "$sc"): safe_install_dir refused an ordinary new directory: $(cat "$TM_TMP/out")"
+        tm_assert_dir "$TM_TMP/w/fresh" "$(basename "$sc"): the directory was not created at all"
+    done
 }
 tm_case "an-ordinary-new-directory-is-still-created" chown s_creates_a_new_directory
 
 s_applies_the_mode() {
+    local sc
     _prep
-    _do "$TM_TMP/up.sh" 700 "$(_owner_now)" "$(_group_now)" "$TM_TMP/w/fresh"
-    tm_assert_rc 0 "$RC" "safe_install_dir failed: $(cat "$TM_TMP/out")"
-    tm_assert_mode 700 "$TM_TMP/w/fresh" "the requested mode was not applied"
-    # and on an EXISTING directory, which is the reinstall case
-    chmod 777 "$TM_TMP/w/fresh"
-    _do "$TM_TMP/up.sh" 700 "$(_owner_now)" "$(_group_now)" "$TM_TMP/w/fresh"
-    tm_assert_rc 0 "$RC" "safe_install_dir refused an existing real directory"
-    tm_assert_mode 700 "$TM_TMP/w/fresh" \
-        "a re-run did not re-apply the mode — the reinstall path would leave a
-        widened directory widened"
+    for sc in $(_scripts); do
+        rm -rf "$TM_TMP/w/fresh"
+        _do "$sc" 700 "$(_owner_now)" "$(_group_now)" "$TM_TMP/w/fresh"
+        tm_assert_rc 0 "$RC" "$(basename "$sc"): safe_install_dir failed: $(cat "$TM_TMP/out")"
+        tm_assert_mode 700 "$TM_TMP/w/fresh" "$(basename "$sc"): the requested mode was not applied"
+        # and on an EXISTING directory, which is the reinstall case
+        chmod 777 "$TM_TMP/w/fresh"
+        _do "$sc" 700 "$(_owner_now)" "$(_group_now)" "$TM_TMP/w/fresh"
+        tm_assert_rc 0 "$RC" "$(basename "$sc"): safe_install_dir refused an existing real directory"
+        tm_assert_mode 700 "$TM_TMP/w/fresh" \
+            "$(basename "$sc"): a re-run did not re-apply the mode — the reinstall path would leave a
+            widened directory widened"
+    done
 }
 tm_case "the-mode-is-applied-to-new-and-existing-directories" modes,chown s_applies_the_mode
 
 s_refuses_a_plain_file() {
+    local sc
     _prep
     printf 'x\n' > "$TM_TMP/w/afile"
-    _do "$TM_TMP/up.sh" 750 root root "$TM_TMP/w/afile"
-    tm_assert_ne 0 "$RC" "a plain file was accepted where a directory was meant"
-    tm_assert_grep "not a directory" "$TM_TMP/out" "the refusal did not say why"
+    for sc in $(_scripts); do
+        _do "$sc" 750 root root "$TM_TMP/w/afile"
+        tm_assert_ne 0 "$RC" "$(basename "$sc"): a plain file was accepted where a directory was meant"
+        tm_assert_grep "exists and is not a directory" "$TM_TMP/out" "$(basename "$sc"): the refusal did not say why"
+    done
 }
 tm_case "a-path-that-is-not-a-directory-is-refused" none s_refuses_a_plain_file
 

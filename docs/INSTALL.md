@@ -499,6 +499,11 @@ sudo setsid nohup bash /var/lib/topic-manager/offline-src/install/upgrade-full.s
 tail -f ~/tm-upgrade.out      # Ctrl-C ends only the tail
 ```
 or inside `tmux new -s tm-upgrade`. The script's own log is `/var/log/topic-manager-upgrade-<TIMESTAMP>.log`.
+The exit code of a detached run is its LAST line, in both: `tail -n 1 ~/tm-upgrade.out` shows
+`RESULT: exit 0` when it finished and verified, `RESULT: exit <N>` when it stopped (the lines
+above say why; a failed upgrade has already rolled back; for `--restore`, 1 is
+`RESTORE INCOMPLETE`). No `RESULT:` line yet: still running (`pgrep -af upgrade-full.sh`), or
+killed outright — read the log.
 `install.sh` and the upgrade WAIT for the package lock (up to 600 s, `TM_DPKG_LOCK_WAIT_S`),
 naming the process that holds it — on an air-gapped host usually unattended-upgrades.
 

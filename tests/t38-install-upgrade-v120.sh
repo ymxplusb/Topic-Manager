@@ -271,10 +271,12 @@ a_restore_pre_v120_removes_them() {
     [ -e "$FR/etc/nginx/sites-enabled/topic-manager-http" ] || [ -L "$FR/etc/nginx/sites-enabled/topic-manager-http" ] \
         && _tm_afail "a pre-v1.2.0 rollback left the :80 site enabled beside the old site's own :80 block"
     tm_assert_nofile "$FR/etc/nginx/conf.d/topic-manager-limits.conf" "a v1.2.0-only file survived a rollback to before v1.2.0"
-    grep -q 'systemctl disable --now topic-manager-audit-prune.timer' "${TM_TMP}/calls" \
-        || _tm_afail "the prune timer stays enabled for a release that has no tm.audit_retention"
-    grep -q 'topic-manager-apply-audit.path' "${TM_TMP}/calls" \
-        || _tm_afail "the apply-audit path stays enabled for a release that has no tm.apply audit"
+    # The prune timer and the apply-audit path are UNITS: a rollback retires
+    # them by record (restore_owned_artefacts, t45), never by name here — a
+    # restore point of an unknown release must retire nothing (gatekeeper
+    # round 6, N3).
+    grep -q 'disable' "${TM_TMP}/calls" && _tm_afail "restore_v120_managed disabled units by name: $(cat "${TM_TMP}/calls")"
+    true
 }
 tm_case "restore-to-pre-v120-removes-the-v120-files" symlinks a_restore_pre_v120_removes_them
 

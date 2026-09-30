@@ -288,4 +288,42 @@ d_troubleshooting() {
 }
 tm_case "troubleshooting-covers-the-lock-and-the-restore-verdict" none d_troubleshooting
 
+# ─── round 7 (clean-room round 6, M1): a detached run's exit code ────────────
+# The docs judge the run by its exit code and run it detached, which throws
+# the code away. The script prints it as its last line; the docs say to read
+# that line. Both sides, and they must agree.
+d_result_line() {
+    local out rc f
+    # The REAL script, early exits (nothing on the host is touched: both stop
+    # at option parsing): the last line is the exit code, whatever it is.
+    rc=0; out="$(bash "$UP" --no-such-option 2>&1)" || rc=$?
+    tm_assert_rc 2 "$rc" "an unknown option did not exit 2"
+    tm_assert_eq "RESULT: exit 2" "$(tail -n 1 <<<"$out")" "CLEAN-ROOM M1: the last line of an early exit is not its exit code"
+    rc=0; out="$(bash "$UP" --restore 2>&1)" || rc=$?
+    tm_assert_eq "RESULT: exit ${rc}" "$(tail -n 1 <<<"$out")" "CLEAN-ROOM M1: --restore without a timestamp does not end with its exit code"
+    # _on_exit — the trap of the destructive phases — after its rollback.
+    {
+        echo 'rollback() { echo "ROLLED BACK"; }'
+        tm_extract_line "$UP" '^result_line\(\) \{'
+        tm_extract_func "$UP" _on_exit
+        echo 'trap _on_exit EXIT'
+        echo 'exit "$1"'
+    } > "${TM_TMP}/exit.sh"
+    rc=0; out="$(bash "${TM_TMP}/exit.sh" 3 2>&1)" || rc=$?
+    tm_assert_rc 3 "$rc" "_on_exit changed the exit code"
+    tm_assert_eq "ROLLED BACK|RESULT: exit 3" "$(tr '\n' '|' <<<"$out" | sed 's/|$//')" \
+        "CLEAN-ROOM M1: a failed upgrade does not end with RESULT after its rollback"
+    rc=0; out="$(bash "${TM_TMP}/exit.sh" 0 2>&1)" || rc=$?
+    tm_assert_eq "RESULT: exit 0" "$out" "a finished upgrade does not end with RESULT: exit 0"
+    # The docs give the same line and say how to read it.
+    for f in "$D_README" "$D_INSTALL"; do
+        grep -qF 'tail -n 1 ~/tm-upgrade.out' "$f" || _tm_afail "$(basename "$f") does not say how to read a detached run's result"
+        grep -qF 'RESULT: exit 0' "$f" || _tm_afail "$(basename "$f") does not give the success line the script prints"
+        grep -qF 'RESULT: exit <N>' "$f" || _tm_afail "$(basename "$f") does not give the failure line"
+        grep -qF 'RESTORE INCOMPLETE' "$f" || _tm_afail "$(basename "$f") does not say what 1 means for --restore"
+    done
+    grep -qF "result_line() { echo \"RESULT: exit \$1\"; }" "$UP" || _tm_afail "the script's line is not the one the docs give"
+}
+tm_case "a-detached-run-ends-with-its-exit-code-and-the-docs-say-so" none d_result_line
+
 tm_finish

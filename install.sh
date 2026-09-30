@@ -88,6 +88,122 @@ SERVICE_NAME="topic-manager"
 PYTHON="python3"
 REQUIRED_PYTHON_VERSION="3.10"
 
+# >>> the product's host artefacts — byte-identical in install.sh and install/upgrade-full.sh (t45)
+# What this release lays down OUTSIDE its own trees, recorded POSITIVELY
+# (gatekeeper round 6, B1). The installer and the upgrade write
+# INSTALL_MANIFEST (root 0600) from these lists and from the source tree they
+# install from: every unit in systemd/ and the enablement link its [Install]
+# section asks for, every rule in install/polkit/, the helper tree
+# APPLY_HELPER_FILES describes, HOST_FILES, HOST_LINKS, and the operator state
+# in V120_MANAGED. A rollback retires or puts back ONLY what a manifest names
+# (restore_owned_artefacts); anything else is another tool's or the
+# operator's, and is never stopped, disabled, deleted or changed. Round 6
+# judged a file the product's when its TEXT mentioned topic-manager, and a
+# rollback stopped, disabled and deleted another tool's backup unit (its
+# ExecStart backed up /opt/topic-manager) and silently deleted an operator's
+# nginx drop-in that named the product in a comment.
+# One line per artefact, "<field> <absolute path>": the sha256 of a file as
+# installed, "dir", "link", "state" (operator state the Settings apply
+# rewrites: recorded, never hash-checked) or, in INSTALL_MANIFEST.pending
+# only, "pending" (a file an upgrade is about to install). "#" starts a comment.
+INSTALL_MANIFEST="/var/lib/topic-manager/installed-files.manifest"
+OWNED_UNIT_DIR="/etc/systemd/system"
+OWNED_POLKIT_DIR="/etc/polkit-1/rules.d"
+OWNED_LIBEXEC_DIR="/usr/libexec/topic-manager"
+# The root apply helper: "<mode> <source in the tree> <path under OWNED_LIBEXEC_DIR>".
+APPLY_HELPER_FILES=("755 install/libexec/tm-apply tm-apply"
+                    "644 tm/settings_schema.py lib/settings_schema.py"
+                    "644 tm/tls_check.py lib/tls_check.py")
+# Release files and links at fixed paths elsewhere. t45 parses every install,
+# cp and ln both scripts run and holds them to these lists.
+HOST_FILES=(/etc/nginx/snippets/tm-security-headers.conf
+            /etc/nginx/sites-available/topic-manager /etc/logrotate.d/topic-manager)
+HOST_LINKS=(/etc/nginx/sites-enabled/topic-manager)
+# v1.2.0: the files Settings > "Apply to host" manages (rendered by the root
+# helper /usr/libexec/topic-manager/tm-apply). They are OPERATOR STATE, like
+# config.yaml: an upgrade keeps them (the release's copies are laid down only
+# where absent), backs them up in Phase 4, puts them back on a rollback, and
+# re-applies what tm.db holds at the end (Phase 12) — it never reverts an
+# operator's choice to the release default.
+V120_MANAGED=(
+  /etc/nginx/conf.d/topic-manager-limits.conf
+  /etc/nginx/snippets/tm-limits-server.conf /etc/nginx/snippets/tm-limits-login.conf
+  /etc/nginx/snippets/tm-limits-api.conf /etc/nginx/snippets/tm-syslog.conf
+  /etc/nginx/sites-available/topic-manager-http /etc/nginx/sites-enabled/topic-manager-http
+  /etc/rsyslog.d/30-topic-manager.conf /etc/rsyslog.d/topic-manager
+  /etc/chrony/sources.d/topic-manager.sources
+  /etc/systemd/timesyncd.conf.d/topic-manager.conf)
+# (closed on its last entry: tests extract the upgrade's BASELINE_PATHS up to
+# the only line in that file that is a bare ")", and a second would break them)
+
+# host_artefacts <source-tree> — "<kind> <path>" for every artefact above,
+# kind file, dir, link or state. The units and rules are read from the tree
+# the release installs them FROM, so a unit added to systemd/ is recorded
+# without anyone remembering to list it.
+host_artefacts() {   # host_artefacts <source-tree>
+    local src="$1" f u t e m s d
+    local -a ts
+    for f in "${src}"/systemd/*; do
+        u="${f##*/}"
+        printf 'file %s\n' "${OWNED_UNIT_DIR}/${u}"
+        read -r -a ts <<<"$(sed -n -E 's/^[[:space:]]*WantedBy[[:space:]]*=//p' "$f" | tr '\n' ' ')"
+        for t in "${ts[@]}"; do printf 'link %s\n' "${OWNED_UNIT_DIR}/${t}.wants/${u}"; done
+        read -r -a ts <<<"$(sed -n -E 's/^[[:space:]]*RequiredBy[[:space:]]*=//p' "$f" | tr '\n' ' ')"
+        for t in "${ts[@]}"; do printf 'link %s\n' "${OWNED_UNIT_DIR}/${t}.requires/${u}"; done
+    done
+    for f in "${src}"/install/polkit/*; do printf 'file %s\n' "${OWNED_POLKIT_DIR}/${f##*/}"; done
+    printf 'dir %s\n' "$OWNED_LIBEXEC_DIR"
+    for e in "${APPLY_HELPER_FILES[@]}"; do
+        read -r m s d <<<"$e"
+        if [[ "$d" == */* ]]; then printf 'dir %s\n' "${OWNED_LIBEXEC_DIR}/${d%/*}"; fi
+        printf 'file %s\n' "${OWNED_LIBEXEC_DIR}/${d}"
+    done
+    for f in "${HOST_FILES[@]}"; do printf 'file %s\n' "$f"; done
+    for f in "${HOST_LINKS[@]}"; do printf 'link %s\n' "$f"; done
+    for f in "${V120_MANAGED[@]}"; do printf 'state %s\n' "$f"; done
+}
+
+# write_install_manifest <source-tree> [pending] — INSTALL_MANIFEST from
+# host_artefacts: every artefact PRESENT, a file with its sha256 as it is now
+# (after the installer's own edits, e.g. the site's server_name). With
+# "pending": INSTALL_MANIFEST.pending, every artefact the release is ABOUT to
+# install, present or not — so a rollback of an upgrade interrupted before its
+# manifest was written still knows what that upgrade installed.
+write_install_manifest() {   # write_install_manifest <source-tree> [pending]
+    local src="$1" mode="${2:-}" out="$INSTALL_MANIFEST" kind p h tmp
+    local -A seen=()
+    [[ "$mode" == pending ]] && out="${INSTALL_MANIFEST}.pending"
+    safe_install_dir 700 root root "${INSTALL_MANIFEST%/*}"
+    tmp="$(mktemp "${out}.XXXXXX")"
+    {
+        printf '# topic-manager install manifest, release %s: <sha256|dir|link|state|pending> <absolute path>\n' \
+            "$(cat "${src}/VERSION" 2>/dev/null || echo unknown)"
+        while read -r kind p; do
+            [[ -z "${seen[$p]+x}" ]] || continue
+            seen["$p"]=1
+            if [[ "$mode" == pending ]]; then
+                h="$kind"; [[ "$kind" == file ]] && h=pending
+            elif [[ "$kind" == state ]]; then
+                [[ -e "$p" || -L "$p" ]] || continue
+                h=state
+            elif [[ "$kind" == link ]]; then
+                [[ -L "$p" ]] || continue
+                h=link
+            elif [[ "$kind" == dir ]]; then
+                [[ -d "$p" && ! -L "$p" ]] || continue
+                h=dir
+            else
+                [[ -f "$p" && ! -L "$p" ]] || continue
+                h="$(sha256sum < "$p")"; h="${h%% *}"
+            fi
+            printf '%s %s\n' "$h" "$p"
+        done < <(host_artefacts "$src")
+    } > "$tmp"
+    chmod 600 -- "$tmp"
+    mv -f -- "$tmp" "$out"
+}
+# <<< the product's host artefacts
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()    { echo -e "${CYAN}[INFO]${NC} $*"; }
 success() { echo -e "${GREEN}[OK]${NC}   $*"; }
@@ -1255,12 +1371,13 @@ success "Service installed: ${SERVICE_NAME} on /run/topic-manager/gunicorn.sock 
 # never imports or executes anything under ${APP_HOME} (the service account's
 # tree) — the helper refuses a lib/ that is not root-owned and private.
 install_apply_helper() {   # install_apply_helper <source-tree>
-    local src="$1" lx=/usr/libexec/topic-manager
+    local src="$1" lx="$OWNED_LIBEXEC_DIR" e m s d
     [[ -L "$lx" || -L "${lx}/lib" ]] && fail "${lx} (or its lib/) is a symlink; refusing to install root code through it."
     install -d -m 755 -o root -g root "$lx" "${lx}/lib"
-    install -m 755 -o root -g root "${src}/install/libexec/tm-apply" "${lx}/tm-apply"
-    install -m 644 -o root -g root "${src}/tm/settings_schema.py" "${lx}/lib/settings_schema.py"
-    install -m 644 -o root -g root "${src}/tm/tls_check.py" "${lx}/lib/tls_check.py"
+    for e in "${APPLY_HELPER_FILES[@]}"; do
+        read -r m s d <<<"$e"
+        install -m "$m" -o root -g root "${src}/${s}" "${lx}/${d}"
+    done
 }
 install_apply_helper "$SCRIPT_DIR"
 success "Apply helper installed: /usr/libexec/topic-manager/tm-apply (root:root 0755)"
@@ -1525,6 +1642,13 @@ apply_saved_settings
 systemctl enable --now topic-manager-audit-prune.timer --quiet \
     || warn "The audit prune timer could not be enabled: systemctl enable --now topic-manager-audit-prune.timer"
 success "Audit retention: topic-manager-audit-prune.timer (daily)"
+
+# ─── the install manifest (gatekeeper round 6, B1) ──────────────────────────
+# The positive record of every host artefact this install laid down: the only
+# thing a later rollback may retire or put back (see host_artefacts above).
+write_install_manifest "$SCRIPT_DIR"
+rm -f -- "${INSTALL_MANIFEST}.pending"
+success "Install manifest: ${INSTALL_MANIFEST}"
 
 # ─── summary ─────────────────────────────────────────────────────────────────
 echo ""

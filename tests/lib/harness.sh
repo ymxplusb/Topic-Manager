@@ -326,6 +326,12 @@ tm_unmet() {
             tmapp) tm_probe_tmapp || out="${out}${out:+, }an environment where tm.app imports (ldap3, confluent-kafka)" ;;
             # The root helper, memfd and AF_UNIX syslog datagrams (v1.2.0).
             linux) tm_probe_linux || out="${out}${out:+, }Linux (fcntl, pwd, memfd_create, AF_UNIX)" ;;
+            # The released tags a case takes its reference data from (t45
+            # re-derives the v1.1.x shipped file list from v1.1.0 and v1.1.1).
+            # A tarball of the tree (git archive) has no history at all.
+            gittags) { command -v git && git -C "$TM_REPO_ROOT" rev-parse -q --verify 'v1.1.0^{commit}' \
+                         && git -C "$TM_REPO_ROOT" rev-parse -q --verify 'v1.1.1^{commit}'; } >/dev/null 2>&1 \
+                       || out="${out}${out:+, }the git tags v1.1.0 and v1.1.1 (a clone with its tags, not an archive)" ;;
             # A real openssl on PATH (the TLS validation is the host CLI's).
             openssl) command -v openssl >/dev/null 2>&1 || out="${out}${out:+, }openssl" ;;
             *)     tm_die "unknown requirement '${r}'" ;;

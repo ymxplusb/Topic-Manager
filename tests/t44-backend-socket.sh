@@ -105,15 +105,14 @@ _restore_socket() {   # _restore_socket <backup-has-socket: yes|no>
 
 a_rollback_socket() {
     local R="${TM_TMP}/rs"
+    # A restore point WITHOUT the socket unit: retiring it is by record now
+    # (gatekeeper round 6, B1) — restore_owned_artefacts retires it because the
+    # host's install manifest records it and the restore point's does not, and
+    # t45's round trip proves the unit, its link, its socket file and the
+    # emptied directory go. restore_socket_unit alone never retires anything.
     _restore_socket no
-    grep -qx 'systemctl disable --now topic-manager.socket' "${TM_TMP}/calls" \
-        || _tm_afail "a rollback to a TCP release did not disable the socket: $(cat "${TM_TMP}/calls")"
-    tm_assert_nofile "$R/etc/systemd/system/topic-manager.socket" "the socket unit survived a rollback to a release without one"
-    [ -L "$R/etc/systemd/system/sockets.target.wants/topic-manager.socket" ] \
-        && _tm_afail "the socket stays wanted by sockets.target after the rollback"
-    # R2 (clean-room 2026-09-29): the dead socket file itself.
-    [ -e "$RSOCK" ] && { rm -rf "$RSOCKD"; _tm_afail "CLEAN-ROOM R2: the stale gunicorn socket survived a rollback to a TCP release"; }
-    [ -d "$RSOCKD" ] && { rm -rf "$RSOCKD"; _tm_afail "the emptied socket directory was left behind"; }
+    grep -q 'disable' "${TM_TMP}/calls" && { rm -rf "$RSOCKD"; _tm_afail "restore_socket_unit retired the socket without a record"; }
+    rm -rf "$RSOCKD"
     _restore_socket yes
     grep -q 'the restore point copy' "$R/etc/systemd/system/topic-manager.socket" \
         || { rm -rf "$RSOCKD"; _tm_afail "a rollback to a socket release did not restore its socket unit"; }
@@ -122,7 +121,7 @@ a_rollback_socket() {
     rm -rf "$RSOCKD"
     true
 }
-tm_case "a-rollback-to-a-tcp-release-removes-the-socket-and-its-file" linux a_rollback_socket
+tm_case "a-rollback-restores-the-socket-unit-it-recorded" linux a_rollback_socket
 
 # ── the REAL gunicorn, with the unit's own arguments ─────────────────────────
 _unit_args() {   # the service's ExecStart arguments, one per line, paths relocated

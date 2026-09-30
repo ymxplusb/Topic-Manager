@@ -757,19 +757,25 @@ sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --list-back
 sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --restore 20260830-141205
 ```
 `--restore` verifies the backup's `SHA256SUMS` before it restores from it, puts back the recorded ownership and modes, and reports the health of what it restored. It also makes the product's host units, polkit rules and root helper what the restore point
-recorded. The restore point records every unit file, drop-in directory and enablement link in
-`/etc/systemd/system` (the service's own drop-in excepted — it is restored separately), every
-rule in `/etc/polkit-1/rules.d` and all of `/usr/libexec/topic-manager`, whatever they are
-called. On the restore, every unit, timer, path or socket unit of the product's that the newer
-release added is stopped, disabled and removed — with its drop-in directory, its socket file and
-the runtime directory it declared (`/run/topic-manager-apply`, with the newer release's result
-files) — its helper and rules deleted, the older copies put back, and systemd reloaded, so no
-timer of the newer release keeps firing into code the restored one does not have. "The
-product's" is decided by what the file says, not only by its name: every unit and rule it ships
-names `topic-manager`. Anything else that changed in those directories since the restore point
-(a snap refresh's `snap-*.mount`, another tool's unit) is listed as *not the product's* and left
-alone. A restore point taken before v1.2.0's inventory cannot say what its release shipped;
-`--restore` then changes none of them and lists what it left.
+recorded. **What is the product's is a record, never a guess.** `install.sh` and every upgrade
+write `/var/lib/topic-manager/installed-files.manifest` (root, `0600`): one line per host file
+they laid down — every unit and its enablement link, the polkit rule, the helper tree under
+`/usr/libexec/topic-manager`, the nginx site and snippet, the logrotate file — with its sha256,
+plus the Settings-managed files as operator state. Phase 4 copies it, and every file it names,
+into the restore point. On the restore, what the host's manifest names and the restore point's
+does not is retired: a unit is stopped, disabled and removed with its socket file, its timer
+stamp (`/var/lib/systemd/timers/stamp-<timer>`) and the runtime directory it declared
+(`/run/topic-manager-apply`); a file, link or rule is deleted; the helper directory goes once
+empty. A retired file that is no longer what the manifest recorded (you edited it) is copied to
+`/var/backups/topic-manager/set-aside-<TIMESTAMP>/` first and named. What the restore point's
+manifest names is put back byte-exact, and systemd reloads — so no timer of the newer release
+keeps firing into code the restored one does not have. **Everything else is left exactly as it
+is**, whatever its name or its text: another tool's unit that backs up `/opt/topic-manager`, a
+drop-in of yours that mentions `topic-manager`, a snap's `snap-*.mount`. What changed there since
+the restore point is listed as *not the product's*. A v1.1.0 or v1.1.1 host has no manifest; its
+release's shipped file list (read from those releases' own install code) stands in for one. A
+restore point of any other release with no manifest retires **nothing**, and `--restore` ends
+`RESTORE INCOMPLETE`, listing what it could not judge.
 
 **The verdict.** `--restore` exits 0 only when the service answers healthy **as the version
 the restore point holds** (`manifest/state.env`) and nothing went wrong. Otherwise it prints
@@ -834,6 +840,18 @@ tail -f ~/tm-upgrade.out      # Ctrl-C ends only the tail; the upgrade carries o
 or run it inside `tmux new -s tm-upgrade` (after a disconnect: `tmux attach -t tm-upgrade`).
 Either way the script also writes its full log to `/var/log/topic-manager-upgrade-<TIMESTAMP>.log`.
 Run `--restore` the same way.
+
+**Reading the result of a detached run.** A detached run has no terminal to hand its exit code
+to, so the script prints it as its LAST line — to `~/tm-upgrade.out` and to its own log:
+```bash
+tail -n 1 ~/tm-upgrade.out    # RESULT: exit 0   = done: upgraded (or restored) and verified
+                              # RESULT: exit <N> = stopped; the lines above it say why. A failed
+                              #   upgrade has rolled itself back by then; for --restore, 1 is
+                              #   RESTORE INCOMPLETE with the list. --audit-only: 1 = warnings,
+                              #   2 = blockers.
+```
+No `RESULT:` line yet means it is still running (`pgrep -af upgrade-full.sh`) — or was killed
+outright (a `kill -9`, a power loss), which nothing can report: read the log.
 
 **A runtime package the release added.** The upgrade patches no OS package offline — there is
 no repository to reach — so a package a new release needs is not installed by it. v1.2.0 adds
