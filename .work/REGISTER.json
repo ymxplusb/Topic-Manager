@@ -319,6 +319,25 @@
       "why": "ownership was inferred, never recorded",
       "disposition": "fixed in round 7: install manifest written by install.sh and the upgrade; restore by record only; v1.1.x by its shipped list (re-derived from the tags); unknown release without a manifest retires nothing and fails the verdict",
       "status": "fixed-unreleased"
+    },
+    {
+      "id": "REG-0031",
+      "severity": "Medium",
+      "status": "open",
+      "source": "prod deploy v1.2.0 on .90, 2026-09-30",
+      "finding": "The FULL online upgrade (upgrade-full.sh with --repo-url, no --audit-only/--backup-only) does not print the final 'RESULT: exit N' line promised by round 7 (M1); --audit-only and --backup-only do. README/INSTALL tell the operator to read `tail -n 1` of the log, which on the full run shows the Rollback line instead.",
+      "where": "install/upgrade-full.sh (the full-run exit path after the post-upgrade checklist)",
+      "repro": "prod .90: /root/tm-upgrade-1.2.0-full.log ends with 'Rollback: sudo bash /root/tm-v1.2.0/install/upgrade-full.sh --restore 20260930-033204', no RESULT line; t47 covers the doc/script agreement but not this exit path.",
+      "closes_when": "a t47 case runs the full-upgrade exit path and asserts the last line is RESULT: exit 0"
+    },
+    {
+      "id": "REG-0032",
+      "severity": "Low",
+      "status": "open",
+      "source": "prod deploy v1.2.0 on .90, 2026-09-30",
+      "finding": "After the upgrade's OS patch phase restarts sssd, sssd-nss/pam/pam-priv.socket are 'failed': the host's sssd.conf has 'services = nss, pam', so sssd binds those sockets itself and the socket units collide. sssd is active and identity lookups work. Host configuration, not the product; the upgrade could mask or ignore the sssd socket units in its post-check, or document it.",
+      "where": "host .90 /etc/sssd/sssd.conf; upgrade-full.sh Phase 6",
+      "repro": "systemctl --failed after upgrade on .90 (state change 2026-09-30 03:32:34)"
     }
   ]
 }

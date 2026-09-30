@@ -677,6 +677,18 @@
       "meaning": "passed",
       "verdict": "v1.2.0 @ ee694f8: final gatekeeper CONFIRMED on the no-HIGH bar (14 gates pass incl. sonar-local 0 new vs v1.1.1 on 5/7 judged conditions; B1 rollback ownership falsified with foreign fixtures; CI tag fetch verified). Adversary (Codex daybreak-blue): no HIGH; F-03/F-04/F-07 fixed, F-05 fixed via unix socket, F-02/F-08 disclosed-by-design, F-01/F-06 FALSE. sec-review: HIGH config injection + CSRF + installer race fixed and re-attacked (30+ payloads). DAST: authenticated ZAP on tm-qc, 127 URLs / 7633 requests / 1.1% 401-403: High 0, Medium 24 = REG-0001/0002 CSP (deferred), Low 4 REG-0028 accepted. Render proof RENDERS (7 panes). Clean-room on real STIG+FIPS tm-qc @ 34230aa PASS (upgrade/restore/upgrade, STIG 209/8 no new). Restore retest @ ee694f8 running in parallel.",
       "at": "2026-09-30T03:20:26Z"
+    },
+    "ship": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "v1.2.0 (2c4a267) annotated tag on GitLab = main; pipeline 1269-1278 success (test 417s with tag fetch, scan, deps, audit, publish, guides); Sonar gate OK new_violations 0; release v1.2.0 + package topic-manager 1.2.0 published 2026-09-30T03:30Z.",
+      "at": "2026-09-30T03:31:30Z"
+    },
+    "deploy": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Prod .90 upgraded 1.1.1 -> 1.2.0 2026-09-30 ~03:33Z (online, read-only deploy key, v1.2.0 @ 2c4a267), by Claude on James's standing go-ahead. audit exit 1 (1 warning: rsyslog-openssl absent -> installed after via apt) -> snapshot pre-v1.2.0-upgrade-20260930 -> backup 20260930-033149 exit 0 -> full upgrade phases 1-12 'Upgrade complete' (no RESULT line: REG, see register). Host verified: version/health 1.2.0; topic-manager + socket + nginx active; gunicorn.sock 0660 topic-manager:www-data, 0 listeners on 5001, nginx -> socket upstream; TLS1.0/1.1 refused; 4 security headers; 14 assets ?v=1200 all 200; tm.db 0600/data 0700; manifest 35 entries root 0600; 11 units; no reboot needed; journal clean. sssd socket units failed after OS patch (host config, REG). Rollback: --restore 20260930-033204. Snapshot kept until James's sign-in check.",
+      "at": "2026-09-30T04:04:17Z"
     }
   }
 }
