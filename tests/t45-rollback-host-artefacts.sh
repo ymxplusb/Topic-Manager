@@ -31,7 +31,9 @@
 #   * the manifest is written from host_artefacts, which reads the tree the
 #     release installs from; both scripts carry one identical copy;
 #   * the v1.1.x list is re-derived from the v1.1.0 and v1.1.1 TAGS, and this
-#     tree's install/cp/ln destinations are held to the manifest lists.
+#     tree's install/cp/ln destinations are held to the manifest lists;
+#   * the restore's verdict: the restored VERSION, and every problem, decide it
+#     (gatekeeper round 5, c and d).
 #
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 # =============================================================================
@@ -579,6 +581,65 @@ r_problems_are_reported() {
     tm_assert_nogrep "topic-manager-nginx-test.service (changed since" "${TM_TMP}/out" "a product unit with no copy is listed as not the product's"
 }
 tm_case "a-unit-that-cannot-be-retired-or-a-missing-copy-is-a-restore-problem" linux,symlinks r_problems_are_reported
+
+# ─── the restore's verdict (gatekeeper round 5, c and d) ─────────────────────
+_verdict() {   # _verdict <health-json> <state.env line or ''> [problem]
+    local BD="${TM_TMP}/vbd"; rm -rf "$BD"; mkdir -p "$BD/manifest"
+    [ -z "$2" ] || printf 'installed_at=x\n%s\n' "$2" > "$BD/manifest/state.env"
+    printf '%s' "$1" > "${TM_TMP}/health"
+    {
+        echo 'set -uo pipefail'
+        echo 'curl() { cat "'"${TM_TMP}"'/health"; }'
+        echo 'success() { echo "[OK] $*"; }; warn() { echo "[WARN] $*"; }'
+        echo 'RESTORE_PROBLEMS=()'
+        [ -z "${3:-}" ] || printf 'RESTORE_PROBLEMS+=(%q)\n' "$3"
+        tm_extract_func "$UP" restore_verdict
+        echo 'restore_verdict "$1"'
+    } > "${TM_TMP}/verdict.sh"
+    RC=0; OUT="$(bash "${TM_TMP}/verdict.sh" "$BD" 2>&1)" || RC=$?
+}
+v_version_is_required() {
+    _verdict '{"status":"ok","version":"1.1.0"}' 'topic_manager_version=1.1.0'
+    tm_assert_rc 0 "$RC" "a healthy restore of the right version failed: ${OUT}"
+    grep -q 'Restore complete — back on v1.1.0' <<<"$OUT" || _tm_afail "the success line does not name the version: ${OUT}"
+    _verdict '{"status":"ok","version":"1.2.0"}' 'topic_manager_version=1.1.0'
+    tm_assert_rc 1 "$RC" "GATEKEEPER R5 c: health said ok as 1.2.0 after a restore to 1.1.0, and the restore passed: ${OUT}"
+    grep -q 'answers version 1.2.0, not the restored 1.1.0' <<<"$OUT" || _tm_afail "the wrong version is not named: ${OUT}"
+    _verdict '{"status":"ok"}' 'topic_manager_version=1.1.0'
+    tm_assert_rc 1 "$RC" "a health answer with no version passed as the restored release: ${OUT}"
+    _verdict '{"status":"ok","version":"1.1.0"}' ''
+    tm_assert_rc 1 "$RC" "a restore point that records no version passed unverified: ${OUT}"
+    # Neither side knows the version: "" == "" must not read as a match.
+    _verdict '{"status":"ok"}' ''
+    tm_assert_rc 1 "$RC" "no recorded version and no reported version passed as a match: ${OUT}"
+    _verdict '{"status":"ok","version":"unknown"}' 'topic_manager_version=unknown'
+    tm_assert_rc 1 "$RC" "an UNKNOWN recorded version passed as a match: ${OUT}"
+    grep -q 'does not record its version' <<<"$OUT" || _tm_afail "an unknown recorded version is not named: ${OUT}"
+    _verdict '' 'topic_manager_version=1.1.0'
+    tm_assert_rc 1 "$RC" "no health answer passed: ${OUT}"
+    grep -q 'RESTORE INCOMPLETE' <<<"$OUT" || _tm_afail "a failed restore does not say RESTORE INCOMPLETE: ${OUT}"
+}
+tm_case "restore-verdict-requires-the-restored-version" linux v_version_is_required
+
+v_problems_fail_the_verdict() {
+    _verdict '{"status":"ok","version":"1.1.0"}' 'topic_manager_version=1.1.0' 'systemctl disable --now x.timer failed'
+    tm_assert_rc 1 "$RC" "GATEKEEPER R5 d: a restore problem did not fail the verdict: ${OUT}"
+    grep -q '  - systemctl disable --now x.timer failed' <<<"$OUT" || _tm_afail "the problem is not listed: ${OUT}"
+    grep -q 'Restore complete' <<<"$OUT" && _tm_afail "a restore with a problem said complete: ${OUT}"
+    true
+}
+tm_case "restore-verdict-fails-on-any-restore-problem" linux v_problems_fail_the_verdict
+
+v_verdict_wired() {
+    local rfb
+    local -a L
+    rfb="$(tm_extract_func "$UP" restore_from_backup)"
+    mapfile -t L <<<"$rfb"
+    grep -q '^    RETIRED_UNITS=(); RETIRED_RUNTIME=(); RESTORE_PROBLEMS=()$' <<<"$rfb" || _tm_afail "restore_from_backup does not start a fresh restore record"
+    [ "${L[${#L[@]}-2]}" = '    restore_verdict "$BD"' ] || _tm_afail "restore_from_backup does not END with restore_verdict (its exit code)"
+    grep -qF 'restore_from_backup "$RB" || fail "Restore did not complete cleanly' "$UP" || _tm_afail "--restore does not exit non-zero on a failed verdict"
+}
+tm_case "restore-from-backup-returns-the-verdict" none v_verdict_wired
 
 # ─── the manifest itself ─────────────────────────────────────────────────────
 _m_tree_one() {

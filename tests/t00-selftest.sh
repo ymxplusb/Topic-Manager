@@ -153,6 +153,18 @@ s_failing_case_goes_red() {
 }
 tm_case "runner-goes-red-on-a-failing-case" none s_failing_case_goes_red
 
+s_tab_in_a_failure_is_a_failure() {
+    # Round 7: a failure message quoting a tab-separated line split its
+    # record, and the runner reported a HARNESS ERROR instead of the FAIL.
+    _mk_fixture "$TM_TMP/t99-fake3t.sh" none 'tm_assert_eq "$(printf "a\tb")" x "quoted"'
+    local rc=0
+    _runner -- "$TM_TMP/t99-fake3t.sh" >"$TM_TMP/r3t" 2>&1 || rc=$?
+    tm_assert_rc 1 "$rc" "a failure whose message holds a tab is not an ordinary failure"
+    tm_assert_nogrep 'HARNESS ERROR' "$TM_TMP/r3t" "a tab in a failure message broke the result record"
+    tm_assert_grep '1 failed' "$TM_TMP/r3t" "the failure is not counted"
+}
+tm_case "runner-counts-a-failure-whose-message-holds-a-tab" none s_tab_in_a_failure_is_a_failure
+
 s_harness_error_propagates() {
     _mk_fixture "$TM_TMP/t99-fake4.sh" none 'tm_extract_func "$(tm_upgrade_sh)" definitely_not_here'
     local rc=0

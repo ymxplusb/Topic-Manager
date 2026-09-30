@@ -394,7 +394,12 @@ TM_RESULTS="${TM_RESULTS:-}"
 
 _tm_record() {   # _tm_record <status> <id> <reqs> <msg>
     [ -n "$TM_RESULTS" ] || return 0
-    printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$TM_FILE_NAME" "$2" "$3" "$4" >> "$TM_RESULTS"
+    # The record is TAB-separated, and a failure message can quote a line that
+    # has tabs in it (t18, t26 quote apt/awk output). Round 7: such a record
+    # split into extra fields, the runner called the whole file's records
+    # unrecognised, and every mutation control whose failure quoted one was
+    # ABORTED instead of counted as killed. A tab in the message is a space.
+    printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$TM_FILE_NAME" "$2" "$3" "${4//$'\t'/ }" >> "$TM_RESULTS"
 }
 
 # ─── assertions (each one aborts its case) ───────────────────────────────────
