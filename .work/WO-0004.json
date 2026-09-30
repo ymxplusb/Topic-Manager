@@ -690,5 +690,11 @@
       "verdict": "Prod .90 upgraded 1.1.1 -> 1.2.0 2026-09-30 ~03:33Z (online, read-only deploy key, v1.2.0 @ 2c4a267), by Claude on James's standing go-ahead. audit exit 1 (1 warning: rsyslog-openssl absent -> installed after via apt) -> snapshot pre-v1.2.0-upgrade-20260930 -> backup 20260930-033149 exit 0 -> full upgrade phases 1-12 'Upgrade complete' (no RESULT line: REG, see register). Host verified: version/health 1.2.0; topic-manager + socket + nginx active; gunicorn.sock 0660 topic-manager:www-data, 0 listeners on 5001, nginx -> socket upstream; TLS1.0/1.1 refused; 4 security headers; 14 assets ?v=1200 all 200; tm.db 0600/data 0700; manifest 35 entries root 0600; 11 units; no reboot needed; journal clean. sssd socket units failed after OS patch (host config, REG). Rollback: --restore 20260930-033204. Snapshot kept until James's sign-in check.",
       "at": "2026-09-30T04:04:17Z"
     }
+  },
+  "clean_room_restore_r7": {
+    "date": "2026-09-30",
+    "build": "ee694f8",
+    "bundle_sha256": "609965c38efbba7740125ab48af24a2dbbc6e29c971e288f85bcd621cc0adbca",
+    "verdict": "ownership PASS on the real host (foreign files byte-identical, site-backup enabled, 17 retired = list, polkit 1.1.0 byte-exact, manifest 34 entries); FAIL only on REG-0031 (no RESULT line on success path)"
   }
 }
