@@ -5872,10 +5872,10 @@ DESC|v1.3.0 the acceptance is not recorded
 TESTS|t50-consent-v130.sh
 TARGET|py:routes
 EQUIV|no
-ANCHOR|        if consent:
-ANCHOR|            audit.log_action(cfg, result['username'], 'CONSENT_ACCEPTED', 'consent notice',
-REPLACE|        if False:
-REPLACE|            audit.log_action(cfg, result['username'], 'CONSENT_ACCEPTED', 'consent notice',
+ANCHOR|    if consent:
+ANCHOR|        audit.log_action(cfg, username, 'CONSENT_ACCEPTED', 'consent notice',
+REPLACE|    if False:
+REPLACE|        audit.log_action(cfg, username, 'CONSENT_ACCEPTED', 'consent notice',
 
 --- M689
 DESC|v1.3.0 the acceptance does not name a custom notice

@@ -591,6 +591,17 @@ def _consent_gate():
     return (consent if consent_on else None), None
 
 
+def _record_consent(cfg, username, consent):
+    """CONSENT_ACCEPTED for `username`, just before their LOGIN row; nothing
+    while the notice is off. Raises AuditUnavailable like log_action."""
+    if consent:
+        audit.log_action(cfg, username, 'CONSENT_ACCEPTED', 'consent notice',
+                         '%s accepted %s before this sign-in' % (
+                             consent.get('notice', '?'),
+                             audit.utc_ts(datetime.fromtimestamp(float(consent['at']),
+                                                                 timezone.utc))), '')
+
+
 def _use_consent(db, consent):
     """One acceptance, one sign-in: the token is used up inside the sign-in's
     open transaction on `db` (committed with the session it creates). A second
@@ -672,12 +683,7 @@ def login():
     # request.remote_addr is meaningful as of v1.0.4 (ProxyFix, one hop) —
     # before that every row would have recorded 127.0.0.1.
     try:
-        if consent:
-            audit.log_action(cfg, result['username'], 'CONSENT_ACCEPTED', 'consent notice',
-                             '%s accepted %s before this sign-in' % (
-                                 consent.get('notice', '?'),
-                                 audit.utc_ts(datetime.fromtimestamp(float(consent['at']),
-                                                                     timezone.utc))), '')
+        _record_consent(cfg, result['username'], consent)
         audit.log_action(cfg, result['username'], 'LOGIN',
                          request.remote_addr or 'unknown',
                          'bind=%s' % ('service' if _cfg().get('auth', {}).get('ldap_bind_dn')
