@@ -5,6 +5,35 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
+## [1.2.1] — 2026-10-02
+
+A patch release: quieter Settings panes, and a successful full upgrade now ends with its
+verdict line. No dependency, schema, configuration or host-file change; upgrade as usual.
+
+### Changed
+
+- **Settings → Apply to host no longer repeats the last success.** Every apply pane (Rate
+  limiting, HTTP redirect, TLS & certificate, Remote syslog, Time source) used to show the
+  last job's state, message, job id and every detail (time daemon, backup path…) in green on
+  each visit. Now a pane whose last apply succeeded shows nothing; right after **your** Apply
+  succeeds it shows one line, **✓ Applied.**, cleared when you change Settings group or reload.
+  A failed, rolled-back, unknown or still-running apply is shown as before — state and
+  message, and for a failure its job id and details — and is never cleared by moving around.
+  **✓ Saved.** follows the same rule; a failed save keeps its message. The TLS pane no longer
+  repeats the certificate summary under the apply result: **Current TLS configuration**, just
+  above it, shows the certificate the host is serving.
+
+### Fixed
+
+- **REG-0031: a successful full upgrade printed no `RESULT: exit 0`.** The success path
+  disarmed the exit handler that prints the final line (`trap - EXIT`), so an online or
+  `--offline` upgrade that finished never printed the line README and INSTALL tell you to
+  read with `tail -n 1`; the last line was the `Rollback:` hint. Every exit path now ends with
+  `RESULT: exit <N>`; a failure after the upgrade has completed still does not roll it back.
+  `--audit-only`, `--backup-only`, `--restore` and failed runs were already correct.
+
+---
+
 ## [1.2.0] — 2026-09-29
 
 

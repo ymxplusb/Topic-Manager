@@ -1150,7 +1150,7 @@ a `systemctl start`, and systemd refuses a unit started 5 times in 10 seconds).
 
 ### `syslog over TLS needs the rsyslog-openssl package (lmnsd_ossl.so is not installed)`
 
-`sudo apt-get install rsyslog-openssl` (online), or from the v1.2.0 offline bundle with
+`sudo apt-get install rsyslog-openssl` (online), or from the offline bundle (v1.2.0 and later) with
 `install.sh`. `rsyslogd -N1` does NOT detect the missing module (measured: the driver loads
 at connect time), which is why the helper looks for it. Or choose TCP/UDP.
 
