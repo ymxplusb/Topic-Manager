@@ -142,6 +142,30 @@ function settingsJobUpdate(domain, data) {
     };
 }
 
+// What an apply pane shows (v1.2.1). A settled success is not news: it shows
+// nothing, except the one line right after this visit's own Apply succeeded.
+// Anything else (in progress, failed, unknown, a state this page does not
+// know) shows its state and message; a failure also shows the job and its
+// details, which an operator needs to act on it.
+function settingsStatusGlyph(state) {
+    if (state === 'ok') return '✓';
+    return SETTINGS_FAILED_STATES.has(state) ? '✕' : '!';
+}
+const SETTINGS_QUIET_STATES = new Set(['idle', 'ok']);
+const SETTINGS_APPLY_NOTHING = { state: null, title: '', message: '', job: '', details: [] };
+function settingsApplyView(job, justApplied) {
+    if (SETTINGS_QUIET_STATES.has(job.state)) {
+        // justApplied is set only by a user apply that settled 'ok', and any
+        // later run of the domain clears it first.
+        return justApplied ? { ...SETTINGS_APPLY_NOTHING, state: 'ok', title: '✓ Applied.' } : SETTINGS_APPLY_NOTHING;
+    }
+    const failed = SETTINGS_FAILED_STATES.has(job.state);
+    return {
+        state: job.state, title: settingsStatusGlyph(job.state) + ' ' + job.state, message: job.message,
+        job: failed ? job.job : '', details: failed ? job.details : [],
+    };
+}
+
 // CC-1: the PPSM describes what the host status endpoint says was APPLIED,
 // never what is merely saved. One domain, bounded to 10 s.
 function settingsLiveState(data) {
@@ -246,6 +270,9 @@ const SettingsTab = {
             hostPanelLoading: {},
             applyJobs: Object.fromEntries(['syslog', 'time', 'nginx', 'tls'].map(domain =>
                 [domain, { busy: false, uncertain: true, state: 'idle', job: '', applied: null, applied_at: null, message: '', details: [] }])),
+            // domain -> true once THIS visit's Apply succeeded; cleared by the
+            // next run of that domain and by a change of Settings group.
+            applyNotices: {},
             hostRuns: {},
             hostDisposed: false,
             // DoW Consent
@@ -290,6 +317,11 @@ const SettingsTab = {
         fgColor() {
             return { white: '#ffffff', black: '#000000', grey: '#d1d5db' }[this.bannerFg] || '#ffffff';
         },
+        // The only source of what an apply pane renders (settingsApplyView).
+        applyViews() {
+            return Object.fromEntries(Object.entries(this.applyJobs)
+                .map(([domain, job]) => [domain, settingsApplyView(job, this.applyNotices[domain] === true)]));
+        },
     },
     watch: {
         // Rail search auto-jump, as in CORTEX: if the open group no longer
@@ -307,8 +339,17 @@ const SettingsTab = {
         // ── Section rail ───────────────────────────────────────────
         selectGroup(id) {
             if (!this.railGroups.some(g => g.id === id)) return;
+            if (id !== this.activeGroup) this.clearSettledMessages();
             this.activeGroup = id;
             try { localStorage.setItem(SETTINGS_GROUP_KEY, id); } catch (e) { /* storage unavailable: the choice holds for this visit */ }
+        },
+        // A success message is transient: it is cleared when the operator
+        // moves to another group. A failed save keeps its message.
+        clearSettledMessages() {
+            this.applyNotices = {};
+            for (const [section, message] of Object.entries(this.sectionMessages)) {
+                if (message.startsWith('✓')) this.sectionMessages[section] = '';
+            }
         },
         railMatch(g) {
             const q = settingsSearchNorm(this.railQuery);
@@ -444,8 +485,7 @@ const SettingsTab = {
             } finally { this.hostPanelLoading[panel] = false; }
         },
         statusGlyph(state) {
-            if (state === 'ok') return '✓';
-            return SETTINGS_FAILED_STATES.has(state) ? '✕' : '!';
+            return settingsStatusGlyph(state);
         },
         // One deadline covers POST, polling, and even a hung fetch/body read.
         // Run state holds cancellation handles only; certificate files stay local.
@@ -454,6 +494,7 @@ const SettingsTab = {
             if (!job || job.busy || this.hostDisposed) return;
             if (options && (!this.settingsLoaded || job.uncertain)) return;
             job.busy = true;
+            delete this.applyNotices[domain];
             if (options) job.state = 'requesting';
             job.message = settingsApplyStartMessage(domain, options);
             job.details = [];
@@ -470,6 +511,9 @@ const SettingsTab = {
             });
             try {
                 await Promise.race([this.monitorHostApply(domain, job, run, options, deadline), expired]);
+                // Reached only when the run returned: a timeout or a failed
+                // request threw above, so 'ok' here is this run's own answer.
+                if (options && job.state === 'ok') this.applyNotices[domain] = true;
             } catch (e) {
                 job.uncertain = !e.refused;
                 job.state = e.refused ? 'failed' : 'unknown';
@@ -916,11 +960,11 @@ const SettingsTab = {
       <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
       <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
     </div>
-    <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.nginx.state">
-      <strong>{{ statusGlyph(applyJobs.nginx.state) }} {{ applyJobs.nginx.state }}</strong>
-      <span>{{ applyJobs.nginx.message }}</span>
-      <span v-if="applyJobs.nginx.job">Job: {{ applyJobs.nginx.job }}</span>
-      <ul v-if="applyJobs.nginx.details.length"><li v-for="(detail, i) in applyJobs.nginx.details" :key="i">{{ detail }}</li></ul>
+    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+      <ul v-if="applyViews.nginx.details.length"><li v-for="(detail, i) in applyViews.nginx.details" :key="i">{{ detail }}</li></ul>
     </div>
   </div>
   <div class="ssec host-settings">
@@ -937,11 +981,11 @@ const SettingsTab = {
       <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
       <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
     </div>
-    <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.nginx.state">
-      <strong>{{ statusGlyph(applyJobs.nginx.state) }} {{ applyJobs.nginx.state }}</strong>
-      <span>{{ applyJobs.nginx.message }}</span>
-      <span v-if="applyJobs.nginx.job">Job: {{ applyJobs.nginx.job }}</span>
-      <ul v-if="applyJobs.nginx.details.length"><li v-for="(detail, i) in applyJobs.nginx.details" :key="i">{{ detail }}</li></ul>
+    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+      <ul v-if="applyViews.nginx.details.length"><li v-for="(detail, i) in applyViews.nginx.details" :key="i">{{ detail }}</li></ul>
     </div>
   </div>
   <div class="ssec host-settings">
@@ -972,19 +1016,11 @@ const SettingsTab = {
       </fieldset>
     </form>
     <button type="button" class="btn btn-sm" @click="runHostApply('tls')" :disabled="applyJobs.tls.busy">Check status</button>
-    <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.tls.state">
-      <strong>{{ statusGlyph(applyJobs.tls.state) }} {{ applyJobs.tls.state }}</strong>
-      <span>{{ applyJobs.tls.message }}</span>
-      <span v-if="applyJobs.tls.job">Job: {{ applyJobs.tls.job }}</span>
-      <ul v-if="applyJobs.tls.details.length"><li v-for="(detail, i) in applyJobs.tls.details" :key="i">{{ detail }}</li></ul>
-      <dl v-if="applyJobs.tls.applied" class="host-facts">
-        <dt>Last applied</dt><dd>{{ applyJobs.tls.applied_at || 'Unavailable' }}</dd>
-        <dt>Subject</dt><dd>{{ applyJobs.tls.applied.subject }}</dd>
-        <dt>Issuer</dt><dd>{{ applyJobs.tls.applied.issuer }}</dd>
-        <dt>Expires</dt><dd>{{ applyJobs.tls.applied.not_after }}</dd>
-        <dt>Key type</dt><dd>{{ applyJobs.tls.applied.key_type }}</dd>
-        <dt>Chain certificates</dt><dd>{{ applyJobs.tls.applied.chain_count }}</dd>
-      </dl>
+    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+      <span v-if="applyViews.tls.message">{{ applyViews.tls.message }}</span>
+      <span v-if="applyViews.tls.job">Job: {{ applyViews.tls.job }}</span>
+      <ul v-if="applyViews.tls.details.length"><li v-for="(detail, i) in applyViews.tls.details" :key="i">{{ detail }}</li></ul>
     </div>
   </div>
   </div>
@@ -1010,11 +1046,11 @@ const SettingsTab = {
       <button type="button" class="btn btn-sm" @click="applyToHost('syslog')" :disabled="!settingsLoaded || sectionSaving.syslog || applyJobs.syslog.busy || applyJobs.syslog.uncertain">Apply to host</button>
       <button type="button" class="btn btn-sm" @click="runHostApply('syslog')" :disabled="applyJobs.syslog.busy">Check status</button>
     </div>
-    <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.syslog.state">
-      <strong>{{ statusGlyph(applyJobs.syslog.state) }} {{ applyJobs.syslog.state }}</strong>
-      <span>{{ applyJobs.syslog.message }}</span>
-      <span v-if="applyJobs.syslog.job">Job: {{ applyJobs.syslog.job }}</span>
-      <ul v-if="applyJobs.syslog.details.length"><li v-for="(detail, i) in applyJobs.syslog.details" :key="i">{{ detail }}</li></ul>
+    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+      <span v-if="applyViews.syslog.message">{{ applyViews.syslog.message }}</span>
+      <span v-if="applyViews.syslog.job">Job: {{ applyViews.syslog.job }}</span>
+      <ul v-if="applyViews.syslog.details.length"><li v-for="(detail, i) in applyViews.syslog.details" :key="i">{{ detail }}</li></ul>
     </div>
   </div>
   <div class="ssec host-settings">
@@ -1093,11 +1129,11 @@ const SettingsTab = {
       <button type="button" class="btn btn-sm" @click="applyToHost('time')" :disabled="!settingsLoaded || sectionSaving.time || applyJobs.time.busy || applyJobs.time.uncertain">Apply to host</button>
       <button type="button" class="btn btn-sm" @click="runHostApply('time')" :disabled="applyJobs.time.busy">Check status</button>
     </div>
-    <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.time.state">
-      <strong>{{ statusGlyph(applyJobs.time.state) }} {{ applyJobs.time.state }}</strong>
-      <span>{{ applyJobs.time.message }}</span>
-      <span v-if="applyJobs.time.job">Job: {{ applyJobs.time.job }}</span>
-      <ul v-if="applyJobs.time.details.length"><li v-for="(detail, i) in applyJobs.time.details" :key="i">{{ detail }}</li></ul>
+    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+      <span v-if="applyViews.time.message">{{ applyViews.time.message }}</span>
+      <span v-if="applyViews.time.job">Job: {{ applyViews.time.job }}</span>
+      <ul v-if="applyViews.time.details.length"><li v-for="(detail, i) in applyViews.time.details" :key="i">{{ detail }}</li></ul>
     </div>
     <div class="host-readout">
       <div class="host-actions"><strong>Current time source</strong><button type="button" class="btn btn-sm" @click="loadHostPanel('time')" :disabled="hostPanelLoading.time">Refresh status</button></div>

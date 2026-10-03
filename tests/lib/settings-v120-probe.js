@@ -90,6 +90,74 @@ async function ready() {
     calls = [];
     return inst;
 }
+// v1.2.1: the apply-status blocks RENDERED from the shipped template. Vue is
+// not in the tree, so this is the render: it parses each block, evaluates its
+// v-if / v-for / :data-state / {{ }} against an instance, and returns what a
+// browser would show. It knows only the constructs those blocks use and
+// refuses any other directive, so a block cannot grow a binding it ignores.
+const STATUS_BLOCK_RE = /<div class="host-status" role="status" aria-live="polite"[^>]*>[\s\S]*?<\/div>/g;
+function templateEval(expr, scope) {
+    const code = expr.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    return new Function('scope', 'with (scope) { return (' + code + '); }')(scope);
+}
+function parseBlock(html) {
+    const root = { tag: '#root', attrs: {}, children: [] };
+    const stack = [root];
+    const tokens = html.match(/<\/?[a-z]+(?:\s+[^\s=>]+(?:="[^"]*")?)*\s*>|[^<]+/g);
+    if (tokens.join('') !== html) throw new Error('unparsed template text in a status block');
+    for (const token of tokens) {
+        if (token.startsWith('</')) {
+            const node = stack.pop();
+            if (node.tag !== token.slice(2, -1).trim()) throw new Error('mismatched </' + node.tag + '>');
+        } else if (token.startsWith('<')) {
+            const node = { tag: token.match(/^<([a-z]+)/)[1], attrs: {}, children: [] };
+            for (const m of token.matchAll(/\s([^\s=>]+)(?:="([^"]*)")?/g)) node.attrs[m[1]] = m[2] ?? '';
+            stack.at(-1).children.push(node);
+            stack.push(node);
+        } else stack.at(-1).children.push(token);
+    }
+    if (stack.length !== 1) throw new Error('unclosed element in a status block');
+    return root.children[0];
+}
+let renderedElements = 0;
+function renderNode(node, scope) {
+    if (typeof node === 'string') return node.replace(/\{\{([\s\S]*?)\}\}/g, (_, e) => String(templateEval(e, scope) ?? ''));
+    for (const name of Object.keys(node.attrs)) {
+        if (/^(v-|@)/.test(name) && !['v-if', 'v-for'].includes(name)) throw new Error('the status renderer does not know ' + name);
+    }
+    if ('v-if' in node.attrs && !templateEval(node.attrs['v-if'], scope)) return '';
+    if (!('v-for' in node.attrs)) renderedElements++;
+    const inner = s => node.children.map(c => renderNode(c, s)).join(' ');
+    if ('v-for' in node.attrs) {
+        const m = node.attrs['v-for'].match(/^\((\w+), (\w+)\) in (.+)$/);
+        if (!m) throw new Error('unsupported v-for ' + node.attrs['v-for']);
+        const items = templateEval(m[3], scope);
+        const { 'v-for': _, ...rest } = node.attrs;
+        return items.map((item, i) => renderNode({ ...node, attrs: rest }, Object.assign(Object.create(scope), { [m[1]]: item, [m[2]]: i }))).join(' ');
+    }
+    return inner(scope);
+}
+function renderStatusBlocks(inst) {
+    return (S.template.match(STATUS_BLOCK_RE) || []).map(html => {
+        const node = parseBlock(html);
+        const domains = new Set([...html.matchAll(/apply(?:Views|Jobs)\.(\w+)\./g)].map(m => m[1]));
+        if (domains.size !== 1) throw new Error('a status block must name exactly one domain: ' + [...domains]);
+        const stateExpr = node.attrs[':data-state'];
+        renderedElements = 0;
+        const text = renderNode(node, inst).replace(/\s+/g, ' ').trim();
+        return {
+            domain: [...domains][0],
+            state: stateExpr === undefined ? null : templateEval(stateExpr, inst) ?? null,
+            text,
+            // Elements rendered INSIDE the block. Zero is what lets the CSS
+            // collapse an empty pane (.host-status:empty).
+            elements: renderedElements - 1,
+        };
+    });
+}
+function renderedFor(inst, domain) {
+    return renderStatusBlocks(inst).filter(b => b.domain === domain);
+}
 async function main() {
     if (scenario === 'bindings') {
         const inst = await ready();
@@ -399,8 +467,10 @@ async function main() {
         assert.deepEqual(plain(inst.applyJobs.tls.applied), summary);
         assert.equal(inst.applyJobs.tls.applied_at, '2026-09-27');
         assert.ok(!JSON.stringify(inst).includes('NEVER_STORE_KEY'));
-        for (const field of Object.keys(summary)) assert.ok(S.template.includes('applyJobs.tls.applied.' + field));
-        for (const domain of ['syslog', 'time', 'nginx', 'tls']) assert.ok(S.template.includes('applyJobs.' + domain + '.job'));
+        // v1.2.1: the summary is kept in job state (filtered above) but not
+        // rendered: the live readout above the form already shows the certificate.
+        assert.ok(!S.template.includes('applyJobs.tls.applied'), 'the apply pane does not repeat the certificate summary');
+        for (const domain of ['syslog', 'time', 'nginx', 'tls']) assert.ok(S.template.includes('applyViews.' + domain + '.job'));
         // Every Settings mutation uses the same distinct audit messages.
         for (const [status, error, message] of [[503, 'audit_unavailable', /nothing was changed/], [500, 'audit_write_failed', /change WAS made/]]) {
             handler = () => json({ error }, status);
@@ -459,8 +529,121 @@ async function main() {
             assert.ok(csv.split('\n').some(row => row.startsWith('"Logging","Syslog","N/A","N/A",')), 'syslog row claims a transport');
             assert.ok(!csv.includes('9999') && !csv.includes('live.example.org'));
         }
+    } else if (scenario === 'quiet') {
+        // v1.2.1 (James 2026-10-02): a settled success is not shown. The
+        // status a page open loads says nothing; this visit's own Apply says
+        // "✓ Applied." once; failure, uncertainty and work in progress always
+        // show, failures with their job and details.
+        const blocks = inst => renderStatusBlocks(inst).map(b => b.domain).sort().join(',');
+        const verbose = { job: 'job77', message: 'time daemon: timesyncd', details: ['no servers set: host default kept', 'backup: /var/backups/topic-manager/apply/20261002-0101'] };
+        const mounted = async status => {
+            handler = url => json(url === '/api/settings' ? loaded : url === '/api/audit/capacity' ? capacity : url === '/api/system/time' ? time
+                : url === '/api/system/tls' ? tls : status(url.split('/').pop()));
+            const inst = instance();
+            await inst.loadSettings();
+            await finish(Promise.all(['syslog', 'time', 'nginx', 'tls'].map(domain => inst.runHostApply(domain))));
+            calls = [];
+            return inst;
+        };
+        {
+            // Page open, every domain last applied OK (and, separately, idle).
+            for (const state of ['ok', 'idle']) {
+                const inst = await mounted(domain => ({ domain, state, ...verbose }));
+                assert.equal(blocks(inst), 'nginx,nginx,syslog,time,tls', 'the five apply panes are rendered');
+                for (const domain of ['syslog', 'time', 'nginx', 'tls']) {
+                    assert.equal(inst.applyJobs[domain].state, state, 'the fixture status was loaded for ' + domain);
+                    assert.equal(inst.applyJobs[domain].job, 'job77', 'the loaded status carries a job id for ' + domain);
+                    for (const b of renderedFor(inst, domain)) {
+                        assert.equal(b.text, '', state + ' status loaded on page open renders no apply text for ' + domain);
+                        assert.equal(b.state, null, state + ' status loaded on page open sets no state colour for ' + domain);
+                        assert.equal(b.elements, 0, state + ' status loaded on page open leaves the pane empty for ' + domain);
+                    }
+                }
+            }
+        }
+        {
+            // The user applies, it succeeds: exactly one line, no job, no details.
+            const inst = await mounted(domain => ({ domain, state: 'ok', ...verbose }));
+            let polls = 0;
+            handler = (url, options) => {
+                if (options.method === 'POST') return json({ domain: 'nginx', job: 'job78', state: 'queued' }, 202);
+                if (url.endsWith('/apply/nginx')) { polls++; return json({ domain: 'nginx', state: polls === 1 ? 'running' : 'ok', ...verbose, job: 'job78' }); }
+                return json({});
+            };
+            const pending = inst.applyToHost('nginx');
+            await flush();
+            assert.ok(renderedFor(inst, 'nginx').every(b => b.text.startsWith('! ')), 'an apply in progress is shown');
+            await finish(pending);
+            assert.equal(inst.applyJobs.nginx.state, 'ok');
+            for (const b of renderedFor(inst, 'nginx')) {
+                assert.equal(b.text, '✓ Applied.', 'a user apply success renders exactly one line');
+                assert.equal(b.state, 'ok');
+            }
+            for (const domain of ['syslog', 'time', 'tls']) assert.ok(renderedFor(inst, domain).every(b => b.text === ''), 'only the applied pane speaks');
+            assert.ok(!renderStatusBlocks(inst).some(b => /Job|backup|timesyncd/.test(b.text)), 'no job id or details after a success');
+            // Gone on a change of group; a re-select of the same group keeps it.
+            inst.selectGroup(inst.activeGroup);
+            assert.ok(renderedFor(inst, 'nginx').every(b => b.text === '✓ Applied.'), 'selecting the open group again is not a change');
+            inst.selectGroup(inst.activeGroup === 'logging' ? 'system' : 'logging');
+            assert.ok(renderedFor(inst, 'nginx').every(b => b.text === ''), 'the Applied line is cleared on a change of group');
+            // A later status check replaces it too.
+            handler = (url, options) => options.method ? json({ state: 'queued' }, 202) : json({ domain: 'nginx', state: 'ok', ...verbose });
+            await finish(inst.applyToHost('nginx'));
+            assert.ok(renderedFor(inst, 'nginx').every(b => b.text === '✓ Applied.'));
+            handler = () => json({ domain: 'nginx', state: 'ok', ...verbose });
+            await finish(inst.runHostApply('nginx'));
+            assert.ok(renderedFor(inst, 'nginx').every(b => b.text === ''), 'a status check is not an apply');
+        }
+        for (const state of ['failed', 'rolled_back']) {
+            // A failure, from the user's apply AND loaded on page open: state,
+            // message, job and every detail, and it survives a change of group.
+            const failure = { domain: 'syslog', state, job: 'job79', message: 'Validation failed', details: ['rsyslogd -N1 refused the config', 'backup: /var/backups/topic-manager/apply/20261002-0102'] };
+            const want = '✕ ' + state + ' Validation failed Job: job79 rsyslogd -N1 refused the config backup: /var/backups/topic-manager/apply/20261002-0102';
+            const inst = await mounted(domain => domain === 'syslog' ? failure : { domain, state: 'ok', ...verbose });
+            assert.equal(renderedFor(inst, 'syslog')[0].text, want, state + ' loaded on page open is shown in full');
+            assert.equal(renderedFor(inst, 'syslog')[0].state, state);
+            handler = (url, options) => options.method ? json({ state: 'queued', job: 'job79' }, 202) : json(failure);
+            await finish(inst.applyToHost('syslog'));
+            assert.equal(renderedFor(inst, 'syslog')[0].text, want, state + ' after the user apply is shown in full');
+            inst.selectGroup(inst.activeGroup === 'logging' ? 'system' : 'logging');
+            assert.equal(renderedFor(inst, 'syslog')[0].text, want, 'a failure is never cleared by a change of group');
+        }
+        {
+            // A job still running when the page asks, and an outcome that is not known.
+            const inst = await mounted(domain => ({ domain, state: 'ok' }));
+            handler = () => json({ domain: 'time', job: 'job80', state: 'running', message: 'Testing', details: ['x'] });
+            const pending = inst.runHostApply('time');
+            await flush();
+            assert.equal(renderedFor(inst, 'time')[0].text, '! running Testing', 'a job still running is shown with its message');
+            assert.equal(renderedFor(inst, 'time')[0].state, 'running');
+            handler = () => json({ domain: 'time', job: 'job80', state: 'ok', message: 'Applied', details: ['x'] });
+            await finish(pending);
+            assert.equal(renderedFor(inst, 'time')[0].text, '', 'a running job that settles OK without a user apply says nothing');
+            inst.applyJobs.nginx.job = 'job81';
+            inst.applyJobs.nginx.details = ['stale detail'];
+            handler = () => { throw new Error('offline'); };
+            await finish(inst.runHostApply('nginx'));
+            for (const b of renderedFor(inst, 'nginx')) {
+                assert.equal(b.text, '! unknown Status unknown — the host may or may not have applied the change. Check again.', 'an unknown outcome is shown');
+                assert.equal(b.state, 'unknown');
+            }
+        }
+        {
+            // Save messages: a success is transient, a failure stays.
+            const inst = await mounted(domain => ({ domain, state: 'ok' }));
+            await inst.saveHostSection('sessions');
+            assert.equal(inst.sectionMessages.sessions, '✓ Saved.');
+            handler = () => json({ error: 'invalid', field: 'ntp_servers', reason: 'bad server' }, 400);
+            await inst.saveHostSection('time');
+            assert.match(inst.sectionMessages.time, /^✕ ntp_servers: bad server/);
+            inst.selectGroup(inst.activeGroup);
+            assert.equal(inst.sectionMessages.sessions, '✓ Saved.', 'selecting the open group again keeps the message');
+            inst.selectGroup(inst.activeGroup === 'logging' ? 'system' : 'logging');
+            assert.equal(inst.sectionMessages.sessions, '', 'a Saved message is cleared on a change of group');
+            assert.match(inst.sectionMessages.time, /^✕ ntp_servers: bad server/, 'a failed save keeps its message');
+        }
     } else throw new Error('Unknown scenario: ' + scenario);
-    const expected = { bindings: 93, validation: 269, errors: 14, apply: 47, timeout: 13, panels: 27, tls: 107, ppsm: 32, integration: 83 };
+    const expected = { bindings: 93, validation: 269, errors: 14, apply: 47, timeout: 13, panels: 27, tls: 107, ppsm: 32, integration: 79, quiet: 82 };
     rawAssert.equal(assertions, expected[scenario], 'complete the exact scenario assertion count');
     console.log('ALL ' + assertions + ' ASSERTIONS PASSED');
 }

@@ -433,6 +433,14 @@ has **Save** (stores the value in `tm.db`, audited as `SETTINGS_UPDATE` with old
 values) and, where the host must change, **Apply to host** (audited as
 `SYSTEM_APPLY_REQUESTED`, then `SYSTEM_APPLY_RESULT`).
 
+Since v1.2.1 a pane speaks only when there is something to act on. A failed, rolled-back,
+unknown or still-running apply shows its state and message (a failure also its job id and
+details), whenever the page is opened, until a later apply succeeds. A successful apply shows
+one line, **✓ Applied.**, until you move to another Settings group or reload the page; a
+**✓ Saved.** message behaves the same way. A host whose last apply succeeded shows nothing.
+Every verdict, success included, stays in the audit trail and on the host
+(TROUBLESHOOTING.md → Apply to host).
+
 | Setting | Where it lives | Applied by |
 |---|---|---|
 | Remote syslog — host, port, UDP/TCP/TLS, application id | `/etc/rsyslog.d/30-topic-manager.conf` + `/etc/nginx/snippets/tm-syslog.conf` | `tm-apply syslog` |
