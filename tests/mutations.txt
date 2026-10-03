@@ -7289,10 +7289,13 @@ ANCHOR|    curl -sS -c "$J" -b "$J" -H "$H" -H "$T" -d @/root/tm-login.json "$U/
 # the mode, the silence, the bundle refusal and the export-ignore.
 
 --- M858
-DESC|v1.3.0 af3 evidence pattern loses its ^ anchor (any depth matches)
+# EQUIVALENT: the pattern is applied with re.match, which anchors at the start
+# of the path on its own, so dropping ^ changes nothing observable. Measured
+# SURVIVED on 2026-10-03; the real widening (a leading .* — search semantics under re.match) is M874.
+DESC|v1.3.0 af3 evidence pattern loses its ^ anchor (re.match still anchors: documented equivalent)
 TESTS|t21-env-neutral.sh
 TARGET|envneutral
-EQUIV|no
+EQUIV|yes
 ANCHOR|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
 REPLACE|RELEASE_EVIDENCE = re.compile(r"docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
 
@@ -7421,3 +7424,11 @@ EQUIV|no
 ANCHOR|docs/releases      export-ignore
 ANCHOR|docs/releases/**   export-ignore
 REPLACE|# (removed)
+
+--- M874
+DESC|v1.3.0 af3 evidence pattern searched, unanchored (vendor/docs/releases/X.Y.Z/dast.json matches)
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
+REPLACE|RELEASE_EVIDENCE = re.compile(r".*docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")

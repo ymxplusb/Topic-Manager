@@ -448,6 +448,61 @@
       "where": "tests/t06-cluster-store.sh:45, tests/t07-config-reload.sh:36,223,463, tests/t12-restart-throttle.sh:37,46,60,153,228, tests/t13-proxy-headers.sh:86",
       "why": "Out of this round's scope (tests the round did not touch); each change needs its controls re-run.",
       "closes_when": "no test sets PYTHONPATH to the repo root for a tm import (a gate or t41 case greps for it), and the py:* controls are re-run"
+    },
+    {
+      "id": "REG-0043",
+      "severity": "Medium",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-3 (gatekeeper finding, registered by builder 2026-10-03, not fixed)",
+      "finding": "check-shell-parse.sh's heredoc recogniser does not match a backslash-quoted delimiter (<<\\EOF): the pattern accepts only an optional ' or \" quote before the word, so a <<\\EOF heredoc's body is scanned as shell and a quote in it can false-red, or its terminator is never seen and the rest of the file is mis-parsed.",
+      "where": "tools/check-shell-parse.sh:47 (HEREDOC regex)",
+      "why": "Out of assure-fix-3's scope (one blocker only).",
+      "closes_when": "the recogniser accepts <<\\WORD and <<-\\WORD, with a t54 case for each and a mutation control"
+    },
+    {
+      "id": "REG-0044",
+      "severity": "Medium",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-3 (gatekeeper finding, registered by builder 2026-10-03, not fixed)",
+      "finding": "check-shell-parse.sh selects files by the word 'bash' in their first 64 bytes, so a .sh whose shebang/header does not say bash there (#!/bin/sh, a long first comment) is silently skipped; and the gate's TM_OLD_BASH interpreter is never verified to BE bash 3.x, so an override pointing at a modern bash passes the bash-3.2 parse check without testing it.",
+      "where": "tools/check-shell-parse.sh:37-39 (file selection); TM_OLD_BASH handling",
+      "why": "Out of assure-fix-3's scope.",
+      "closes_when": "every tracked *.sh and install/libexec/* is parsed or explicitly excluded by name, and the gate refuses (exit 3) a TM_OLD_BASH whose BASH_VERSINFO[0] is not 3"
+    },
+    {
+      "id": "REG-0045",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-3 (gatekeeper finding, registered by builder 2026-10-03, not fixed)",
+      "finding": "check-version-surfaces.sh reads only CHANGELOG headings with a YYYY-MM-DD date, so a newest section dated 'TBD' (or any non-date) is accepted rather than refused at release time.",
+      "where": "tools/check-version-surfaces.sh:80",
+      "why": "Out of assure-fix-3's scope.",
+      "closes_when": "a '## [X.Y.Z] — <non-date>' heading fails the gate, with a t22 case"
+    },
+    {
+      "id": "REG-0046",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-3 (gatekeeper finding, registered by builder 2026-10-03, not fixed)",
+      "finding": "The LDAP sign-in bound (SIGN_IN_CONNECT_TIMEOUT_S = 5) is applied per resolved address by ldap3, so a directory name resolving to several unreachable addresses can hold the connect phase well past 5 s; the sign-in is bounded, but not by the figure documented.",
+      "where": "tm/auth.py:101-111 (Server(..., connect_timeout=...)); constant at tm/auth.py:64",
+      "why": "Out of assure-fix-3's scope; behaviour is bounded, the bound is a multiple.",
+      "closes_when": "the whole connect phase has a single deadline (or the documented bound states 'per address'), with a test using a multi-address name"
+    },
+    {
+      "id": "REG-0047",
+      "severity": "Medium",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-3 (gatekeeper finding, registered by builder 2026-10-03, not fixed)",
+      "finding": "The v1.3.0 DAST evidence (docs/releases/1.3.0/dast.json) scanned c05fcbe, BEFORE both assure fix rounds: the consent-binding, 401-generation and audit-outcome changes (8fae4f1, 8143ef6 and later) were never scanned on a running system.",
+      "where": "docs/releases/1.3.0/dast.json (target tm-qc, v1.3.0 @ c05fcbe); WO-0006 dast[0].caveat",
+      "why": "A rescan needs a fresh throwaway QC build of the final candidate; out of this round's scope.",
+      "closes_when": "an authenticated active scan of a build containing those changes (next release's /assure), or the /deploy passive scan of the canary/prod recorded as dast-canary.json, shows no new High/Medium on those routes"
     }
   ]
 }
