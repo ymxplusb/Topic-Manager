@@ -5609,8 +5609,10 @@ DESC|v1.3.0 Kafka errors leak the exception text again
 TESTS|t48-audit-v130.sh
 TARGET|py:routes
 EQUIV|no
+ANCHOR|    ref = _kafka_failure(what, exc)
 ANCHOR|    return jsonify({'error': KAFKA_FAILED_MESSAGE % ref, 'code': 'kafka_error',
 ANCHOR|                    'reference': ref}), 502
+REPLACE|    ref = _kafka_failure(what, exc)
 REPLACE|    return jsonify({'error': str(exc), 'code': 'kafka_error',
 REPLACE|                    'reference': ref}), 502
 
