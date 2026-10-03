@@ -127,6 +127,9 @@ class FakeConnection:
         CALLS.append('search %s %s %s' % (search_base, search_filter, ','.join(attributes)))
         sam = search_filter[len('(sAMAccountName='):-1]
         self.entries = [ENTRIES[sam]] if sam in ENTRIES else []
+        # A real ldap3 Connection records every completed search's result
+        # code; tm/auth reads it to tell "no such user" from a failed search.
+        self.result = {'type': 'searchResDone', 'result': 0, 'description': 'success'}
 
     def unbind(self):
         CALLS.append('unbind %s' % self.user)

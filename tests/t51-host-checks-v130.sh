@@ -36,7 +36,10 @@ PYROOT="$(tm_py_root)"
 _host() {
     R="${TM_TMP}/root"; RB="${TM_TMP}/bin"
     mkdir -p "$R"/etc/nginx/{conf.d,snippets,sites-available,sites-enabled,modules-enabled} \
-        "$R"/var/log/nginx "$R"/etc/topic-manager/tls "$RB"
+        "$R"/var/log/nginx "$R"/etc/topic-manager/tls "$R"/etc/logrotate.d "$RB"
+    # Ubuntu's own nginx stanza, as nginx-common ships it (measured, bookworm/noble).
+    printf '/var/log/nginx/*.log {\n\tdaily\n\tmissingok\n\trotate 14\n\tcompress\n\tdelaycompress\n\tnotifempty\n\tcreate 0640 www-data adm\n\tsharedscripts\n\tpostrotate\n\t\tinvoke-rc.d nginx rotate >/dev/null 2>&1\n\tendscript\n}\n' \
+        > "$R/etc/logrotate.d/nginx"
     printf 'root:x:0:0:root:/root:/bin/bash\nwww-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\n' > "$R/etc/passwd"
     printf 'root:x:0:\nadm:x:4:syslog\nwww-data:x:33:\nsudo:x:27:admin\n' > "$R/etc/group"
     printf 'root:!:19000::::::\nwww-data:*:19000:0:99999:7:::\n' > "$R/etc/shadow"
@@ -46,7 +49,8 @@ _host() {
     cp "${TM_REPO_ROOT}/nginx/tm-security-headers.conf" "$R/etc/nginx/snippets/tm-security-headers.conf"
     chmod -R go-w "$R/etc/nginx"
     : > "$R/var/log/nginx/topic-manager-access.log"; : > "$R/var/log/nginx/topic-manager-error.log"
-    chown 33:4 "$R"/var/log/nginx/topic-manager-*.log; chmod 640 "$R"/var/log/nginx/topic-manager-*.log
+    : > "$R/var/log/nginx/topic-manager-access.log.1"
+    chown 33:4 "$R"/var/log/nginx/topic-manager-*.log*; chmod 640 "$R"/var/log/nginx/topic-manager-*.log*
     : > "$R/etc/topic-manager/tls/server.key"; chmod 600 "$R/etc/topic-manager/tls/server.key"
     {
         printf '# configuration file /etc/nginx/nginx.conf:\nuser www-data;\nevents {\n    worker_connections 768;\n}\nhttp {\n'
@@ -85,6 +89,7 @@ a_compliant_host_passes() {
     done
     tm_assert_eq "INFO" "$(_st worker_connections "$out")" "worker_connections is not reported as information"
     grep -q 'worker_connections 768' <<<"$out" || _tm_afail "the measured worker_connections is not named: ${out}"
+    grep -q 'both site logs and 1 rotated copy are 0640 www-data adm' <<<"$out" || _tm_afail "the site-log check does not say what it measured: ${out}"
 }
 tm_case "a-compliant-host-passes-every-check" chown a_compliant_host_passes
 
@@ -94,15 +99,18 @@ a_host_state_warns() {
     sed -i 's#^adm:x:4:syslog#adm:x:4:syslog,www-data#' "$R/etc/group"
     sed -i 's#^www-data:\*:#www-data:$6$abc$def:#' "$R/etc/shadow"
     chmod g+w "$R/etc/nginx/nginx.conf"
+    sed -i 's/create 0640 www-data adm/create 0644 root root/' "$R/etc/logrotate.d/nginx"
     printf 'load_module modules/ngx_http_geoip_module.so;\n' >> "$R/dump"
     printf '# configuration file /etc/nginx/sites-enabled/other:\nserver {\n    ssl_protocols TLSv1 TLSv1.2;\n}\n' >> "$R/dump"
     local before out k
     before="$(cd "$R" && find etc -type f -exec sha256sum {} + | sort)"
     _report; out="$REPORT"
     tm_assert_eq "0" "$REPORT_RC" "host state the product does not own FAILED the report (it must only warn): ${out}"
-    for k in web_account_shell web_account_groups web_account_password nginx_config_modes nginx_modules tls_protocols; do
+    for k in web_account_shell web_account_groups web_account_password nginx_config_modes nginx_modules tls_protocols site_log_modes; do
         tm_assert_eq "WARN" "$(_st "$k" "$out")" "${k} on host-owned state is not a WARN: ${out}"
     done
+    grep -q 'logrotate.d/nginx does not recreate the logs it rotates as "create 0640 www-data adm" (create 0644 root root)' <<<"$out" \
+        || _tm_afail "the OS logrotate stanza's create is not named: ${out}"
     grep -q 'administrative group(s) adm' <<<"$out" || _tm_afail "the admin group is not named: ${out}"
     grep -q 'ngx_http_geoip_module' <<<"$out" || _tm_afail "the loaded module is not named"
     tm_assert_eq "$before" "$(cd "$R" && find etc -type f -exec sha256sum {} + | sort)" \
@@ -112,11 +120,15 @@ tm_case "host-state-the-product-does-not-own-is-a-warning-and-untouched" chown a
 
 a_product_drift_fails() {
     local k mut out
-    for mut in site_log rotated site_mode format uses errors tokens key tls; do
+    for mut in site_log rotated rotated_owner live_owner site_mode format uses errors tokens key tls; do
         _host
         case "$mut" in
             site_log) chmod 644 "$R/var/log/nginx/topic-manager-error.log"; k=site_log_modes ;;
             rotated)  : > "$R/var/log/nginx/topic-manager-access.log.1"; chmod 644 "$R/var/log/nginx/topic-manager-access.log.1"; k=site_log_modes ;;
+            # WO-0006 D6: the tm-qc shape - a rotated copy root:root 0640 - and a
+            # live log root-owned; both used to pass (root was accepted).
+            rotated_owner) : > "$R/var/log/nginx/topic-manager-error.log.2.gz"; chown 0:0 "$R/var/log/nginx/topic-manager-error.log.2.gz"; chmod 640 "$R/var/log/nginx/topic-manager-error.log.2.gz"; k=site_log_modes ;;
+            live_owner) chown 0:4 "$R/var/log/nginx/topic-manager-access.log"; k=site_log_modes ;;
             site_mode) chmod g+w "$R/etc/nginx/sites-available/topic-manager"; k=nginx_config_modes ;;
             format)   sed -i 's/ \$request_id//' "$R/dump"; k=nginx_log_format ;;
             uses)     sed -i 's#topic-manager-access.log tm_dod;#topic-manager-access.log;#' "$R/dump"; k=nginx_log_format ;;
@@ -134,6 +146,44 @@ a_product_drift_fails() {
     tm_assert_eq "UNKNOWN" "$(_st nginx_log_format "$out")" "a check nginx could not answer was guessed: ${out}"
 }
 tm_case "drift-of-the-products-own-files-fails-the-report" chown a_product_drift_fails
+
+# WO-0006 LOW: a probe that raises is reported by its exception TYPE only; the
+# text (paths, host details) goes to the journal, not to the result the page shows.
+a_broken_probe_reports_type_only() {
+    _host
+    local out
+    out="$(python3 -I - "$(tm_apply_helper)" "$R" "$RB" <<'PYEOF' 2>"${TM_TMP}/stderr" | tr -d '\r'
+import argparse, importlib.machinery, importlib.util, json, sys
+loader = importlib.machinery.SourceFileLoader('tm_apply_probe', sys.argv[1])
+spec = importlib.util.spec_from_loader('tm_apply_probe', loader)
+m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+def broken(ctx):
+    raise RuntimeError('SECRET-DETAIL /etc/topic-manager/tls/server.key')
+m.check_tls_key = broken
+ctx = m.Ctx(argparse.Namespace(domain='compliance', report=True, root=sys.argv[2], bin=sys.argv[3], lib=None, svc_user=None))
+internal = [c for c in m.compliance_checks(ctx) if c['key'] == 'internal']
+print('n=%d' % len(internal))
+print('detail=%s' % internal[0]['detail'])
+PYEOF
+)"
+    tm_assert_eq "n=1" "$(grep '^n=' <<<"$out")" "the broken probe was not reported once: ${out} $(cat "${TM_TMP}/stderr")"
+    tm_assert_eq "detail=a check failed with RuntimeError; the detail is in journalctl -u topic-manager-apply-compliance" \
+        "$(grep '^detail=' <<<"$out")" "the result carries the exception's text, not just its type: ${out}"
+    grep -q 'SECRET-DETAIL' "${TM_TMP}/stderr" || _tm_afail "the exception's text did not reach the journal (stderr)"
+}
+tm_case "a-broken-probe-is-reported-by-type-its-text-goes-to-the-journal" "linux,chown" a_broken_probe_reports_type_only
+
+# WO-0006 LOW: the read-only measurement unit may write its result directory,
+# nginx's pid file, the nginx logs nginx -T opens and the staging - not all of /run.
+a_compliance_unit_writes_little() {
+    local u="${TM_REPO_ROOT}/systemd/topic-manager-apply-compliance.service"
+    tm_assert_eq "ReadWritePaths=-/opt/topic-manager/data/apply /run/topic-manager-apply -/run/nginx.pid /var/log/nginx" \
+        "$(grep '^ReadWritePaths=' "$u")" "the compliance unit's writable set changed (all of /run is too much for a measurement)"
+    tm_assert_eq "ProtectSystem=strict" "$(grep '^ProtectSystem=' "$u")" "the compliance unit is not read-only everywhere else"
+    tm_assert_eq "RuntimeDirectory=topic-manager-apply" "$(grep '^RuntimeDirectory=' "$u")" "the result directory is not the unit's runtime directory"
+    grep -q "^RESULT_DIR = '/run/topic-manager-apply'$" "$(tm_apply_helper)" || _tm_afail "the helper writes its result somewhere the unit does not allow"
+}
+tm_case "the-compliance-unit-writes-only-what-a-measurement-needs" none a_compliance_unit_writes_little
 
 a_staged_measurement() {
     . "${TM_TESTS_DIR}/lib/apply_fixture.sh"
@@ -175,13 +225,13 @@ a_ensure_site_logs() {
     blk="$(tm_extract_between "$(tm_install_sh)" "$_SHARED_START" "$_SHARED_END")"
     d="${TM_TMP}/log"; mkdir -p "$d"
     : > "$d/topic-manager-error.log"; chmod 644 "$d/topic-manager-error.log"; chown root:root "$d/topic-manager-error.log"
-    : > "$d/topic-manager-access.log.1"; chmod 644 "$d/topic-manager-access.log.1"
+    : > "$d/topic-manager-access.log.1"; chmod 644 "$d/topic-manager-access.log.1"; chown root:root "$d/topic-manager-access.log.1"
     : > "$d/other.log"; chmod 644 "$d/other.log"
     out="$(bash -c "${blk}"$'\n'"ensure_site_logs '$d' www-data")"; rc=$?
     tm_assert_eq "0" "$rc" "ensure_site_logs failed on a fixable directory: ${out}"
     tm_assert_eq "640 www-data adm" "$(stat -c '%a %U %G' "$d/topic-manager-access.log")" "a missing site log was not created 0640 www-data:adm"
     tm_assert_eq "640 www-data adm" "$(stat -c '%a %U %G' "$d/topic-manager-error.log")" "an existing 0644 site log was not narrowed"
-    tm_assert_eq "640" "$(stat -c '%a' "$d/topic-manager-access.log.1")" "a rotated copy kept its other-read bit"
+    tm_assert_eq "640 www-data adm" "$(stat -c '%a %U %G' "$d/topic-manager-access.log.1")" "a rotated copy kept its other-read bit or its root owner (WO-0006 D6)"
     tm_assert_eq "644" "$(stat -c '%a' "$d/other.log")" "a log that is not the product's was changed"
     # The symlink points at a SCRATCH file: a mutant that follows it must not
     # damage the host it runs on (it once chmod'ed a container's /etc/passwd).
@@ -191,6 +241,26 @@ a_ensure_site_logs() {
     tm_assert_eq "1" "$rc" "a symlinked site log was accepted"
     case "$out" in *"(a symlink)"*) ;; *) _tm_afail "the refusal does not name the symlink: ${out}" ;; esac
     tm_assert_eq "644 root" "$(stat -c '%a %U' "${TM_TMP}/victim")" "ensure_site_logs followed the symlink"
+    # A directory someone other than root can write: a checked name could be
+    # swapped for a link before root chowns it. Refused, nothing touched.
+    rm -f "$d/topic-manager-error.log"
+    local d2="${TM_TMP}/log2"; mkdir -p "$d2"; chmod 775 "$d2"
+    : > "$d2/topic-manager-access.log.1"; chmod 644 "$d2/topic-manager-access.log.1"
+    out="$(bash -c "${blk}"$'\n'"ensure_site_logs '$d2' www-data")"; rc=$?
+    tm_assert_eq "1" "$rc" "a group-writable log directory was accepted"
+    case "$out" in *"is not root-owned and closed to group/other writes"*) ;; *) _tm_afail "the refusal does not say why: ${out}" ;; esac
+    tm_assert_eq "644 root" "$(stat -c '%a %U' "$d2/topic-manager-access.log.1")" "a log in a writable directory was touched"
+    chmod 755 "$d2"; chown 33 "$d2"
+    out="$(bash -c "${blk}"$'\n'"ensure_site_logs '$d2' www-data")"; rc=$?
+    tm_assert_eq "1" "$rc" "a log directory owned by the web account was accepted"
+    # The verify, not the chown, is the guarantee: a chown that reports success
+    # and changes nothing (a filesystem that ignores ownership) is caught.
+    local d3="${TM_TMP}/log3"; mkdir -p "$d3"
+    : > "$d3/topic-manager-access.log"; : > "$d3/topic-manager-error.log"; : > "$d3/topic-manager-error.log.1"
+    chown root:root "$d3"/topic-manager-*; chmod 640 "$d3"/topic-manager-*
+    out="$(bash -c 'chown() { :; }'$'\n'"${blk}"$'\n'"ensure_site_logs '$d3' www-data")"; rc=$?
+    tm_assert_eq "1" "$rc" "logs left root:root by a chown that did nothing were accepted: ${out}"
+    case "$out" in *"topic-manager-error.log.1 (640 root root)"*) ;; *) _tm_afail "the rotated copy left root:root is not named: ${out}" ;; esac
     out="$(bash -c "${blk}"$'\n'"host_stig_report '${TM_TMP}/no-such-helper'")"; rc=$?
     tm_assert_eq "0" "$rc" "a missing helper made the report fail rather than say so"
     case "$out" in UNKNOWN$'\t'host_checks$'\t'*"is missing, so the host STIG checks were not run") ;;

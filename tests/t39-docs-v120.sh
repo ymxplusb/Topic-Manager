@@ -244,4 +244,96 @@ a_upgrade_checklist_numbers_and_paths() {
 }
 tm_case "the-upgrade-checklist-counts-and-names-an-absolute-rollback" none a_upgrade_checklist_numbers_and_paths
 
+# WO-0006 D1/D2: every documented upgrade command that would hit the v1.3.0
+# remote-syslog gate (--audit-only, or the upgrade itself, online or offline,
+# detached or not) carries the answer: --syslog-host or --no-remote-syslog.
+# Read from README, INSTALL §12, install/README AND the text prepare-offline.sh
+# prints (its echo lines, unescaped). A command block that loses the flag sends
+# the operator into a refused upgrade. --backup-only/--list-backups/--restore
+# need none, and each source says so for --backup-only; the refusal's exit
+# code is stated where the flags are explained.
+a_upgrade_commands_carry_the_syslog_answer() {
+    local out
+    out="$(PYTHONDONTWRITEBYTECODE=1 "$PY" - "$TM_REPO_ROOT" "$(tm_prepare_sh)" <<'PYEOF' | tr -d '\r'
+import re, sys
+root, prep = sys.argv[1], sys.argv[2]
+def logical(text):
+    out, cur = [], ''
+    for line in text.splitlines():
+        if line.rstrip().endswith('\\'):
+            cur += line.rstrip()[:-1] + ' '
+            continue
+        out.append(cur + line); cur = ''
+    return out
+def printed(path):
+    src = open(path, encoding='utf-8').read()
+    tail = src[src.index('Offline preparation complete'):]
+    return '\n'.join(m.group(1).replace('\\\\', '\\') for m in re.finditer(r'^echo "(.*)"$', tail, re.M))
+srcs = {'README.md': open(root + '/README.md', encoding='utf-8').read(),
+        'INSTALL.md': open(root + '/docs/INSTALL.md', encoding='utf-8').read(),
+        'install/README.md': open(root + '/install/README.md', encoding='utf-8').read(),
+        'prepare-offline.sh': printed(prep)}
+for name, text in srcs.items():
+    n, bad = 0, []
+    for line in logical(text):
+        cmd = line.strip()
+        if 'upgrade-full.sh' not in cmd or not cmd.startswith('sudo ') \
+                or not ('--offline' in cmd or '--repo-url' in cmd):
+            continue
+        if re.search(r'--(backup-only|list-backups|restore)\b', cmd):
+            continue
+        n += 1
+        if '--syslog-host' not in cmd and '--no-remote-syslog' not in cmd:
+            bad.append(cmd)
+    print('%s n=%d bad=%s' % (name, n, bad))
+    norm = re.sub(r'\s+', ' ', text)
+    print('%s backup_only_said=%s' % (name, any(p in norm for p in ('--backup-only` needs neither', '--backup-only needs neither', 'no syslog flag'))))
+PYEOF
+)"
+    local f want
+    for f in README.md:5 INSTALL.md:5 install/README.md:1 prepare-offline.sh:2; do
+        want="${f%:*}"
+        local line; line="$(grep "^${want} n=" <<<"$out")"
+        local n; n="$(sed -E 's/.* n=([0-9]+) .*/\1/' <<<"$line")"
+        [ "${n:-0}" -ge "${f##*:}" ] || _tm_afail "${want}: found ${n:-0} gated upgrade command(s), expected at least ${f##*:} - the check would be vacuous: ${out}"
+        case "$line" in *" bad=[]") ;; *) _tm_afail "${want}: an upgrade command without --syslog-host/--no-remote-syslog: ${line}" ;; esac
+        tm_assert_eq "${want} backup_only_said=True" "$(grep "^${want} backup_only_said=" <<<"$out")" \
+            "${want} does not say that --backup-only needs no syslog flag"
+    done
+    local R="${TM_REPO_ROOT}/README.md" I="${TM_REPO_ROOT}/docs/INSTALL.md"
+    for f in "$R" "$I"; do
+        local flat; flat="$(tr '\n' ' ' < "$f" | tr -s ' ')"
+        grep -qF '`BLOCK remote syslog` and exits 2' <<<"$flat" || _tm_afail "$(basename "$f") does not give --audit-only's exit code for the syslog block"
+        grep -qE 'refuses at its gate with (\*\*)?exit 1' <<<"$flat" || _tm_afail "$(basename "$f") does not give the refused upgrade's exit code"
+    done
+    grep -qF 'needs neither' <<<"$(tr '\n' ' ' < "${TM_REPO_ROOT}/install/README.md" | tr -s ' ')" || _tm_afail "install/README.md does not say --backup-only needs neither flag"
+    # The exit codes the docs state are the script's.
+    local UP; UP="$(tm_upgrade_sh)"
+    grep -q '^fail()    { echo "${RED}\[FAIL\]${NC}    \$\*" >&2; exit 1; }$' "$UP" || _tm_afail "fail() no longer exits 1; the documented refusal code is wrong"
+    grep -qF 'Refusing to upgrade: the audit trail would stay on this host' "$UP" || _tm_afail "the syslog refusal moved"
+}
+tm_case "every-documented-upgrade-command-says-where-the-audit-trail-goes" none a_upgrade_commands_carry_the_syslog_answer
+
+# WO-0006 D3/D5: the operator docs name the compliance API and INSTALL §7
+# verifies the v1.3.0 host state, each by a name the code actually uses.
+a_compliance_api_and_v130_verify_documented() {
+    local R="${TM_REPO_ROOT}/README.md" I="${TM_REPO_ROOT}/docs/INSTALL.md" sect
+    grep -qF '`GET /api/compliance`' "$R" || _tm_afail "README does not document GET /api/compliance"
+    grep -qF '`POST /api/system/apply/compliance`' "$R" || _tm_afail "README does not document POST /api/system/apply/compliance"
+    grep -qF '`GET /api/system/apply/compliance`' "$R" || _tm_afail "README does not say how to read the measurement's state"
+    grep -q "^@bp.route('/compliance', methods=\['GET'\])$" "${TM_REPO_ROOT}/tm/routes.py" || _tm_afail "the documented GET /api/compliance route is not in routes.py"
+    grep -q "^@bp.route('/system/apply/<domain>', methods=\['POST'\])$" "${TM_REPO_ROOT}/tm/routes.py" || _tm_afail "the documented apply route is not in routes.py"
+    grep -q "^CHECK_DOMAINS = ('compliance',)" "${TM_REPO_ROOT}/tm/apply.py" || _tm_afail "compliance is no longer a request domain"
+    sect="$(tm_extract_between "$I" '^## 7\. Verify the install$' '^## 8\. ')"
+    grep -qF 'log_format tm_dod' <<<"$sect" || _tm_afail "INSTALL 7 does not check the DoD log format"
+    grep -q '^log_format tm_dod ' "${TM_REPO_ROOT}/nginx/tm-log-format.conf" || _tm_afail "the log format INSTALL 7 checks for is not the shipped one"
+    grep -qF 'access_log /var/log/nginx/topic-manager-access.log tm_dod;' <<<"$sect" || _tm_afail "INSTALL 7 does not check the site logs in it"
+    grep -qF 'access_log /var/log/nginx/topic-manager-access.log tm_dod;' "$(tm_nginx_site)" || _tm_afail "the site no longer logs as INSTALL 7 says"
+    grep -qF "stat -c '%a %U %G %n' /var/log/nginx /var/log/nginx/topic-manager-*" <<<"$sect" || _tm_afail "INSTALL 7 does not check the site log modes"
+    grep -qF 'tm-apply compliance --report' <<<"$sect" || _tm_afail "INSTALL 7 does not run the host STIG checks"
+    grep -qF 'topic-manager-apply-compliance.service' <<<"$sect" || _tm_afail "INSTALL 7 does not check the compliance unit"
+    [ -f "${TM_REPO_ROOT}/systemd/topic-manager-apply-compliance.service" ] || _tm_afail "the unit INSTALL 7 checks is not shipped"
+}
+tm_case "the-compliance-api-and-the-v130-verify-steps-are-documented" none a_compliance_api_and_v130_verify_documented
+
 tm_finish

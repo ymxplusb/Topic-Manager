@@ -40,9 +40,12 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-# Read-only everywhere else. /run for the result (and nginx -T's pid check),
-# /var/log/nginx because `nginx -T` opens the logs it would write, and the
-# staging it deletes. A leading - means "if present".
-ReadWritePaths=-/opt/topic-manager/data/apply /run /var/log/nginx
+# Read-only everywhere else. The result directory (RuntimeDirectory above,
+# named again so the writable set reads in one line), nginx's pid file if
+# `nginx -T` touches it, /var/log/nginx because `nginx -T` opens the logs it
+# would write, and the staging it deletes. NOT all of /run (WO-0006): a
+# read-only measurement has no business writing other daemons' sockets and
+# state. A leading - means "if present".
+ReadWritePaths=-/opt/topic-manager/data/apply /run/topic-manager-apply -/run/nginx.pid /var/log/nginx
 
 # No [Install] section: never enabled, only started on demand.

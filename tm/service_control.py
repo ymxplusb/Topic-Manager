@@ -220,11 +220,12 @@ def _restart_sequence(hard_nginx, on_result):
     verb = 'restart' if hard_nginx else 'reload'
     rc, out = _unit_action(verb, NGINX_UNIT)
     if rc == 0:
-        on_result('nginx %sed' % verb)
+        on_result('nginx %sed' % verb, 'success')
     else:
         # Report it and carry on: the topic-manager restart is independent of
         # nginx, and stopping here would leave the operator with neither.
-        on_result('nginx %s FAILED (exit %d): %s' % (verb, rc, out or 'no output'))
+        on_result('nginx %s FAILED (exit %d): %s' % (verb, rc, out or 'no output'),
+                  'failure')
 
     # --no-block: systemd queues the job and systemctl returns immediately.
     # Waiting would mean waiting for the process this thread runs in to be
@@ -245,13 +246,13 @@ def _restart_sequence(hard_nginx, on_result):
     # do not reintroduce it by treating a signal as an exit status.
     _EXPECTED_SELF_KILL = (-signal.SIGTERM, -signal.SIGKILL)
     if rc == 0:
-        on_result('topic-manager restart queued')
+        on_result('topic-manager restart queued', 'success')
     elif rc in _EXPECTED_SELF_KILL:
         on_result('topic-manager restart queued; this worker was replaced '
-                  'mid-call (signal %d), which is the expected outcome' % -rc)
+                  'mid-call (signal %d), which is the expected outcome' % -rc, 'success')
     else:
         on_result('topic-manager restart FAILED (exit %d): %s'
-                  % (rc, out or 'no output'))
+                  % (rc, out or 'no output'), 'failure')
 
 
 def restart_detached(hard_nginx, on_result):
@@ -259,9 +260,11 @@ def restart_detached(hard_nginx, on_result):
     Start the restart sequence on a daemon thread and return immediately, so
     the caller can flush its 202 before anything is touched.
 
-    `on_result` is called with a one-line outcome for each step; the route
-    passes an audit-logging callback, because the worker is about to die and
-    the UI cannot be told directly.
+    `on_result(message, outcome)` is called once per step, outcome 'success'
+    or 'failure'; the route passes an audit-logging callback, because the
+    worker is about to die and the UI cannot be told directly. The outcome is
+    passed, never inferred from the message: a FAILED step recorded with the
+    audit default ('success') is a false success in the trail (WO-0006 F1).
     """
     thread = threading.Thread(
         target=_restart_sequence,

@@ -79,6 +79,46 @@ print('second=%d prune_rows2=%d' % (r2['deleted_age'] + r2['deleted_rows'], coun
 }
 tm_case "prune-deletes-by-age-and-records-it" none a_prune_by_age
 
+# WO-0006 D4: a prune that deletes nothing writes no AUDIT_PRUNE row (above),
+# and the docs now say so; --dry-run says beforehand what a prune would do,
+# exactly as prune() then does it, and writes nothing at all.
+a_prune_dry_run() {
+    _setup
+    local out
+    out="$(_run "
+import hashlib, subprocess, sys
+setting('audit_retention_days', '30'); setting('audit_max_rows', '10000')
+add_rows(4, 45); add_rows(10000, 5); add_rows(3, 1)
+def dump():
+    d = db(); h = hashlib.sha256(repr(d.execute('SELECT * FROM audit_log ORDER BY id').fetchall()).encode() + repr(d.execute('SELECT * FROM app_settings ORDER BY key').fetchall()).encode()).hexdigest(); d.close(); return h
+before = dump()
+now = datetime.datetime.now(datetime.timezone.utc)
+p = R.preview(cfg, now=now)
+cli = subprocess.run([sys.executable, '-m', 'tm.audit_retention', '--dry-run'], capture_output=True, text=True)
+print('cli_rc=%d' % cli.returncode)
+print('cli=%s' % cli.stdout.strip())
+print('unchanged=%s' % (dump() == before))
+r = R.prune(cfg, now=now)
+print('same=%s' % ({k: p[k] for k in ('deleted_age', 'deleted_rows', 'oldest')} == {k: r[k] for k in ('deleted_age', 'deleted_rows', 'oldest')}))
+print('remaining=%s' % (p['remaining'] + 1 == r['remaining']))
+print('counts=%d %d' % (p['deleted_age'], p['deleted_rows']))
+setting('audit_max_rows', '20000')       # nothing old, nothing over the limit now
+cli = subprocess.run([sys.executable, '-m', 'tm.audit_retention', '--dry-run'], capture_output=True, text=True)
+print('noop=%s' % cli.stdout.strip().endswith('Nothing to delete: a prune now would write no AUDIT_PRUNE row.'))
+")"
+    tm_assert_eq "cli_rc=0" "$(grep '^cli_rc=' <<<"$out")" "--dry-run failed: ${out}"
+    case "$(grep '^cli=' <<<"$out")" in
+        "cli=audit prune --dry-run: would delete 4 older than 30 days"*" and 4 beyond the 10000-row limit; 9999 rows would remain"*"A prune would write AUDIT_PRUNE.") ;;
+        *) _tm_afail "--dry-run does not say what a prune would delete: ${out}" ;;
+    esac
+    tm_assert_eq "unchanged=True" "$(grep '^unchanged=' <<<"$out")" "--dry-run changed the database"
+    tm_assert_eq "same=True" "$(grep '^same=' <<<"$out")" "the preview disagrees with the prune that followed: ${out}"
+    tm_assert_eq "remaining=True" "$(grep '^remaining=' <<<"$out")" "the preview's remaining count is not the prune's (less its own row): ${out}"
+    tm_assert_eq "counts=4 4" "$(grep '^counts=' <<<"$out")" "the preview counted the wrong rows: ${out}"
+    tm_assert_eq "noop=True" "$(grep '^noop=' <<<"$out")" "--dry-run on a pruned table does not say a prune would write nothing: ${out}"
+}
+tm_case "a-dry-run-says-what-a-prune-would-do-and-writes-nothing" none a_prune_dry_run
+
 a_prune_by_rows() {
     _setup
     local out

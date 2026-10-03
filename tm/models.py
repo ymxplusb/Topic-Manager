@@ -1,6 +1,8 @@
+import hashlib
 import logging
 import sqlite3
 import os
+import secrets
 import stat
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -135,6 +137,17 @@ def init_db(cfg):
             end_reason        TEXT
         )
     ''')
+    # v1.3.0 (WO-0006 F5): one row per consent acceptance not yet used. The
+    # browser holds the token, this table its digest; a sign-in consumes it,
+    # so a copy of the cookie cannot be replayed for a second sign-in. Rows
+    # past the acceptance's lifetime are removed whenever one is issued.
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS consent_tokens (
+            token_hash  TEXT PRIMARY KEY,
+            accepted_at REAL NOT NULL,
+            notice      TEXT NOT NULL
+        )
+    ''')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user)')
     _fold_session_users(cur)
     # v1.2.0: retention prunes by age (tm/audit_retention.py). Without an index
@@ -191,6 +204,40 @@ def create_session(db, username, timeout_minutes, ip_addr=''):
     )
     db.commit()
     return sid
+
+
+def _token_hash(token):
+    return hashlib.sha256(str(token).encode('utf-8')).hexdigest()
+
+
+def issue_consent_token(db, notice, max_age_s, now):
+    """A new one-use consent token (returned; only its digest is stored),
+    committed. Expired tokens are removed first."""
+    token = secrets.token_urlsafe(32)
+    db.execute('DELETE FROM consent_tokens WHERE accepted_at < ?', (now - max_age_s,))
+    db.execute('INSERT INTO consent_tokens (token_hash, accepted_at, notice) VALUES (?,?,?)',
+               (_token_hash(token), now, notice))
+    db.commit()
+    return token
+
+
+def find_consent_token(db, token, max_age_s, now):
+    """(accepted_at, notice) of an unused, unexpired token, or None."""
+    if not isinstance(token, str) or not token:
+        return None
+    return db.execute('SELECT accepted_at, notice FROM consent_tokens '
+                      'WHERE token_hash = ? AND accepted_at >= ? AND accepted_at <= ?',
+                      (_token_hash(token), now - max_age_s, now)).fetchone()
+
+
+def consume_consent_token(db, token, max_age_s, now):
+    """Use the token up, inside the CALLER'S transaction (not committed here).
+    True only for the one caller that deleted it: two sign-ins presenting the
+    same token cannot both succeed."""
+    if not isinstance(token, str) or not token:
+        return False
+    return db.execute('DELETE FROM consent_tokens WHERE token_hash = ? AND accepted_at >= ?',
+                      (_token_hash(token), now - max_age_s)).rowcount == 1
 
 
 def validate_session(db, sid, absolute_hours=None):

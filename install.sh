@@ -227,33 +227,48 @@ write_install_manifest() {   # write_install_manifest <source-tree> [pending]
 # topic-manager-error.log 0644, readable by every local account; the access
 # log holds client addresses). The two logs are created here FIRST, 0640
 # <web account>:adm, which is what Ubuntu's /etc/logrotate.d/nginx recreates
-# them as at every rotation; an existing one is narrowed to that, and a
-# rotated copy loses its "other" bits. Never through a symlink.
+# them as at every rotation (`create 0640 www-data adm`; the compliance check
+# verifies that stanza). An existing one is narrowed to that, and so is every
+# ROTATED copy, owner included: a rotated copy keeps the owner the live file
+# had, and a root:root file nginx created before v1.3.0 rotated to a
+# root:root .1 (WO-0006 D6, tm-qc). Never through a symlink.
 SITE_LOG_NAMES=(topic-manager-access.log topic-manager-error.log)
+_site_log_ok() {   # _site_log_ok <path> <web> <grp>: 0640 or tighter, owned web:grp
+    local got m
+    got="$(stat -c '%a %U %G' "$1" 2>/dev/null || echo 'missing - -')"
+    m="${got%% *}"
+    if [[ ! "$m" =~ ^[0-7]+$ ]] || (( (8#$m & 8#137) != 0 )) || [[ "${got#* }" != "$2 $3" ]]; then
+        echo "$got"; return 1
+    fi
+}
 ensure_site_logs() {   # ensure_site_logs <log-dir> <web-user>; 1 + the problems on stdout
-    local dir="$1" web="$2" grp=adm f p got m bad=""
+    local dir="$1" web="$2" grp=adm f p got bad=""
     getent group "$grp" >/dev/null 2>&1 || grp=root
     id "$web" >/dev/null 2>&1 || web=root
     if [[ -L "$dir" ]]; then echo "${dir} is a symlink; refusing to create logs through it"; return 1; fi
     [[ -d "$dir" ]] || install -d -m 755 -o root -g "$grp" "$dir"
+    # Only root may change what is in the directory, or a name checked here as
+    # a regular file could be a symlink by the time root chowns it (the
+    # CVE-2016-1247 shape). Debian/Ubuntu ship it root:adm 0755.
+    got="$(stat -c '%u %a' "$dir" 2>/dev/null || echo '- -')"
+    if [[ "${got%% *}" != 0 || ! "${got#* }" =~ ^[0-7]+$ ]] || (( (8#${got#* } & 8#022) != 0 )); then
+        echo "${dir} is not root-owned and closed to group/other writes (uid mode: ${got}); refusing to touch logs in it"
+        return 1
+    fi
     for f in "${SITE_LOG_NAMES[@]}"; do
         p="${dir}/${f}"
         if [[ -L "$p" ]]; then bad="${bad} ${p} (a symlink)"; continue; fi
         if [[ -e "$p" ]]; then
-            chown "${web}:${grp}" "$p" && chmod u-x,g-wx,o-rwx "$p"
+            chown -h "${web}:${grp}" "$p" && chmod u-x,g-wx,o-rwx "$p"
         else
             install -m 640 -o "$web" -g "$grp" /dev/null "$p"
         fi
-        got="$(stat -c '%a %U %G' "$p" 2>/dev/null || echo 'missing - -')"
-        m="${got%% *}"
-        if [[ ! "$m" =~ ^[0-7]+$ ]] || (( (8#$m & 8#137) != 0 )) \
-                || [[ ! " ${got#* } " =~ ^\ (${web}|root)\ (${grp}|root)\ $ ]]; then
-            bad="${bad} ${p} (${got})"
-        fi
+        got="$(_site_log_ok "$p" "$web" "$grp")" || bad="${bad} ${p} (${got})"
     done
     for p in "${dir}"/topic-manager-*.log.*; do
         [[ -f "$p" && ! -L "$p" ]] || continue
-        chmod o-rwx "$p" || bad="${bad} ${p} (could not narrow)"
+        chown -h "${web}:${grp}" "$p" && chmod u-x,g-wx,o-rwx "$p"
+        got="$(_site_log_ok "$p" "$web" "$grp")" || bad="${bad} ${p} (${got})"
     done
     if [[ -n "$bad" ]]; then echo "not 0640 ${web}:${grp}:${bad}"; return 1; fi
     return 0

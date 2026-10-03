@@ -66,6 +66,31 @@ def _last_prune(db):
     return row[0] if row else None
 
 
+def preview(cfg, now=None):
+    """What prune(cfg, now) would delete, without deleting or writing
+    anything: {deleted_age, deleted_rows, remaining, oldest} as prune returns
+    them, remaining and oldest being what the table would hold after it (the
+    AUDIT_PRUNE row aside). A prune that would delete nothing writes no
+    AUDIT_PRUNE row; this is how to see that before it runs."""
+    now = now or _now()
+    db = get_db(cfg)
+    try:
+        s = _settings(db)
+        cutoff = _ts(now - timedelta(days=s['audit_retention_days']))
+        total = db.execute('SELECT COUNT(*) FROM audit_log').fetchone()[0]
+        by_age = db.execute('SELECT COUNT(*) FROM audit_log WHERE ts < ?', (cutoff,)).fetchone()[0]
+        # prune() keeps max_rows - 1 of what the age rule leaves (its own row
+        # makes max_rows), oldest first by id.
+        by_rows = max(0, (total - by_age) - (s['audit_max_rows'] - 1))
+        oldest = db.execute('SELECT MIN(ts) FROM (SELECT ts FROM audit_log WHERE ts >= ? '
+                            'ORDER BY id LIMIT -1 OFFSET ?)', (cutoff, by_rows)).fetchone()[0]
+    finally:
+        db.close()
+    return {'deleted_age': by_age, 'deleted_rows': by_rows,
+            'remaining': total - by_age - by_rows, 'oldest': oldest, 'cutoff': cutoff,
+            'retention_days': s['audit_retention_days'], 'max_rows': s['audit_max_rows']}
+
+
 def prune(cfg, now=None):
     """Delete what retention says must go, and record it. Returns a dict:
     {deleted_age, deleted_rows, remaining, oldest}. Raises on any failure, in
@@ -213,10 +238,22 @@ def main(argv=None):
                                  description='Prune the audit trail by age and row count.')
     ap.add_argument('--config', default=None,
                     help='config.yaml (default: $TM_CONFIG or /etc/topic-manager/config.yaml)')
+    ap.add_argument('--dry-run', action='store_true',
+                    help='say what a prune would delete now; delete and write nothing')
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
     from .config import load_config
     cfg = load_config(args.config)
+    if args.dry_run:
+        # Read-only: no init_db, no apply-result recording, no capacity flag.
+        p = preview(cfg)
+        print('audit prune --dry-run: would delete %d older than %d days (before %s) and %d '
+              'beyond the %d-row limit; %d rows would remain, oldest %s. %s'
+              % (p['deleted_age'], p['retention_days'], p['cutoff'], p['deleted_rows'],
+                 p['max_rows'], p['remaining'], p['oldest'] or '(none)',
+                 'A prune would write AUDIT_PRUNE.' if p['deleted_age'] or p['deleted_rows']
+                 else 'Nothing to delete: a prune now would write no AUDIT_PRUNE row.'))
+        return 0
     init_db(cfg)
     # Belt to the apply-audit .path unit's braces: a finished apply that no
     # event recorded is recorded here, daily, before anything is pruned.

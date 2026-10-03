@@ -68,6 +68,7 @@ import argparse
 import datetime
 import errno
 import fcntl
+import fnmatch
 import glob
 import hashlib
 import json
@@ -1183,6 +1184,10 @@ SITE_LOGS = ('/var/log/nginx/topic-manager-access.log', '/var/log/nginx/topic-ma
 SITE_LOG_DIR = '/var/log/nginx'
 SITE_LOG_PREFIX = 'topic-manager-'
 SITE_LOG_GROUP = 'adm'
+#: The OS package's logrotate stanza for /var/log/nginx/*.log (Ubuntu: create
+#: 0640 www-data adm). The product cannot ship its own for these files - two
+#: stanzas matching one log is a logrotate error - so it checks this one.
+NGINX_LOGROTATE = '/etc/logrotate.d/nginx'
 NGINX_DIR = '/etc/nginx'
 MODULES_ENABLED = '/etc/nginx/modules-enabled'
 SECURITY_HEADERS = '/etc/nginx/snippets/tm-security-headers.conf'
@@ -1325,48 +1330,78 @@ def _uid(ctx, name):
     return None
 
 
-def check_site_logs(ctx, web_user):
-    """NGNX-APP-000400: the product's OWN logs. The two live files must be
-    0640 or tighter, owned by the web account (or root) and group adm (or
-    root) — what the installer and the upgrade create them as and what
-    Ubuntu's logrotate recreates them as. Rotated copies must not be readable
-    by other. Drift is a FAIL (DQ1): the access log holds client addresses."""
-    owners = {0, _uid(ctx, web_user)}
-    groups = {0, _gid(ctx, SITE_LOG_GROUP)}
-    bad, missing = [], []
-    for path in SITE_LOGS:
-        try:
-            st = os.lstat(ctx.p(path))
-        except FileNotFoundError:
-            missing.append(path)
+def _logrotate_create(ctx):
+    """The `create MODE OWNER GROUP` that the OS's nginx logrotate stanza
+    (NGINX_LOGROTATE) applies to /var/log/nginx/*.log, as a tuple of strings;
+    () when that stanza or its create line is absent; None when unreadable."""
+    try:
+        with open(ctx.p(NGINX_LOGROTATE), encoding='utf-8', errors='replace') as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    for paths, body in re.findall(r'([^{}]*)\{([^{}]*)\}', text):
+        if not any(fnmatch.fnmatch(SITE_LOGS[0], w) for w in paths.split()):
             continue
-        if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o137 or st.st_uid not in owners \
-                or st.st_gid not in groups:
-            bad.append('%s (%o, uid %d, gid %d)' % (path, stat.S_IMODE(st.st_mode), st.st_uid,
-                                                   st.st_gid))
+        for line in body.splitlines():
+            words = line.split('#', 1)[0].split()
+            if words[:1] == ['create'] and len(words) == 4:
+                return tuple(words[1:])
+        return ()
+    return ()
+
+
+def check_site_logs(ctx, web_user):
+    """NGNX-APP-000400: the product's OWN logs, live and rotated, must be 0640
+    or tighter and owned by the web account and group adm (root only where
+    that account or group does not exist, as ensure_site_logs falls back) —
+    what the installer and the upgrade create and normalise them as, and what
+    the OS's nginx logrotate stanza must recreate them as (`create 0640
+    <web> adm`; a rotated copy keeps the live file's owner and mode, so the
+    two are the same promise). Drift of the files is a FAIL (DQ1: the access
+    log holds client addresses); a logrotate stanza that would recreate them
+    otherwise is the OS's file, so a WARN (WO-0006 D6: a root:root `.1` left
+    from before v1.3.0 used to pass)."""
+    uid, gid = _uid(ctx, web_user), _gid(ctx, SITE_LOG_GROUP)
+    want_uid = uid if uid is not None else 0
+    want_gid = gid if gid is not None else 0
+    bad, missing = [], []
     try:
         names = sorted(os.listdir(ctx.p(SITE_LOG_DIR)))
     except OSError:
         names = []
-    for name in names:
-        path = os.path.join(SITE_LOG_DIR, name)
-        if not name.startswith(SITE_LOG_PREFIX) or path in SITE_LOGS:
-            continue
+    rotated = [os.path.join(SITE_LOG_DIR, n) for n in names
+               if n.startswith(SITE_LOG_PREFIX) and os.path.join(SITE_LOG_DIR, n) not in SITE_LOGS]
+    for path in SITE_LOGS + tuple(rotated):
         try:
             st = os.lstat(ctx.p(path))
+        except FileNotFoundError:
+            if path in SITE_LOGS:
+                missing.append(path)
+            continue
         except OSError:
             continue
-        if st.st_mode & 0o007:
-            bad.append('%s (%o: readable by other)' % (path, stat.S_IMODE(st.st_mode)))
+        if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o137 or st.st_uid != want_uid \
+                or st.st_gid != want_gid:
+            bad.append('%s (%o, uid %d, gid %d)' % (path, stat.S_IMODE(st.st_mode), st.st_uid,
+                                                   st.st_gid))
+    want = '0640 %s %s' % (web_user if uid is not None else 'root',
+                           SITE_LOG_GROUP if gid is not None else 'root')
     if bad:
-        return [_check('site_log_modes', 'fail', 'Topic Manager logs readable beyond root, %s '
-                       'and %s: %s' % (web_user, SITE_LOG_GROUP, '; '.join(bad[:6])))]
+        return [_check('site_log_modes', 'fail', 'Topic Manager logs not %s (live and rotated): '
+                       '%s' % (want, '; '.join(bad[:6])))]
     if missing:
         return [_check('site_log_modes', 'warn', 'not created yet: %s (the installer and the '
-                       'upgrade create them 0640 %s:%s)' % (', '.join(missing), web_user,
-                                                          SITE_LOG_GROUP))]
-    return [_check('site_log_modes', 'pass', 'both site logs are 0640 or tighter, %s/root and '
-                   '%s/root' % (web_user, SITE_LOG_GROUP))]
+                       'upgrade create them %s)' % (', '.join(missing), want))]
+    create = _logrotate_create(ctx)
+    if create is None or tuple(create) != tuple(want.split()):
+        return [_check('site_log_modes', 'warn', '%s does not recreate the logs it rotates as '
+                       '"create %s" (%s): a rotated copy would not stay %s'
+                       % (NGINX_LOGROTATE, want, 'unreadable' if create is None else
+                          ('create %s' % ' '.join(create)) if create else 'no create line',
+                          want))]
+    return [_check('site_log_modes', 'pass', 'both site logs and %d rotated cop%s are %s, and '
+                   '%s recreates them so' % (len(rotated), 'y' if len(rotated) == 1 else 'ies',
+                                             want, NGINX_LOGROTATE))]
 
 
 def check_modules(ctx, dump):
@@ -1517,7 +1552,12 @@ def compliance_checks(ctx):
         try:
             checks.extend(fn())
         except Exception as exc:          # one broken probe must not hide the others
-            checks.append(_check('internal', 'unknown', '%s: %s' % (type(exc).__name__, exc)))
+            # The exception's TEXT stays in the journal: this result is read by
+            # the application and shown to every signed-in user (WO-0006).
+            traceback.print_exc(file=sys.stderr)
+            checks.append(_check('internal', 'unknown', 'a check failed with %s; the detail is '
+                                 'in journalctl -u topic-manager-apply-compliance'
+                                 % type(exc).__name__))
     return checks
 
 

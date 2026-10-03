@@ -101,7 +101,10 @@ def validate_credentials(cfg, username, password):
     if not ok:
         return False, err
 
-    entry, err = _ldap_search_user(conn, base_dn, sam)
+    try:
+        entry, err = _ldap_search_user(conn, base_dn, sam)
+    except DirectorySearchFailed as exc:
+        return False, f'LDAP error: {exc}'
     if entry is None:
         return False, err
 
@@ -157,7 +160,9 @@ def check_membership(cfg, username):
         if not ok:
             return 'unavailable', 'service bind failed: %s' % err
         entry, err = _ldap_search_user(conn, auth_cfg['ldap_base_dn'], _normalise_sam(username))
-    except Exception as exc:          # a socket error mid-search, a TLS failure
+    except Exception as exc:          # a socket error mid-search, a TLS failure, a
+        # search the directory did not complete (DirectorySearchFailed): none of
+        # them says the account is gone, so none may end its sessions.
         return 'unavailable', '%s: %s' % (type(exc).__name__, str(exc)[:200])
     if entry is None:
         return 'not_found', 'the account is no longer in the directory'
@@ -230,17 +235,38 @@ def _ldap_bind(server, user, password, receive_timeout=None):
         return False, f'LDAP error: {exc}', None
 
 
+#: ldap3's resultCode for a search that completed (RFC 4511 success).
+_LDAP_SUCCESS = 0
+
+
+class DirectorySearchFailed(Exception):
+    """The directory did not complete the search (busy, unavailable, a size or
+    time limit, a base DN it does not hold...). It says nothing about whether
+    the account exists, so it must never be read as "not found"."""
+
+
 def _ldap_search_user(conn, base_dn, sam):
-    conn.search(
-        search_base=base_dn,
-        search_filter=f'(sAMAccountName={_ldap_escape(sam)})',
-        attributes=['memberOf', 'displayName', 'sAMAccountName', 'mail', 'distinguishedName'],
-    )
-    if not conn.entries:
+    """(entry, None), or (None, 'User not found in directory') when the
+    search COMPLETED and matched nothing. A search that did not complete
+    raises DirectorySearchFailed: ldap3 (raise_exceptions=False) reports a
+    failed search by its result code and an empty entries list, which is
+    the same shape as "no such user" unless the code is read."""
+    try:
+        conn.search(
+            search_base=base_dn,
+            search_filter=f'(sAMAccountName={_ldap_escape(sam)})',
+            attributes=['memberOf', 'displayName', 'sAMAccountName', 'mail', 'distinguishedName'],
+        )
+        result = conn.result if isinstance(conn.result, dict) else {}
+        if result.get('result') != _LDAP_SUCCESS:
+            raise DirectorySearchFailed('directory search did not complete: result %s %s'
+                                        % (result.get('result', 'none'),
+                                           str(result.get('description', ''))[:80]))
+        entry = conn.entries[0] if conn.entries else None
+    finally:
         conn.unbind()
+    if entry is None:
         return None, 'User not found in directory'
-    entry = conn.entries[0]
-    conn.unbind()
     return entry, None
 
 

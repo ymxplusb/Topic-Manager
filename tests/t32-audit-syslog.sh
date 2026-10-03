@@ -398,5 +398,63 @@ print('crit=%s' % any(g.startswith('<82>') and 'bytes free' in g for g in drain(
 }
 tm_case "the-precheck-refuses-a-full-disk" linux a_precheck_measures_free_space
 
+# WO-0006 F3: a long non-ASCII detail used to be cut at the DATAGRAM, which
+# dropped ts=, source= and outcome= (the last keys on the line) while
+# syslog_send still returned True: 2048 characters of "é" are 12 KB of JSON.
+# The detail is shortened instead, marked, and the structural keys arrive -
+# for an ordinary record and for the AUDIT_WRITE_FAILED copy of one.
+a_long_detail_keeps_the_structure() {
+    _setup
+    local out
+    out="$(_run "
+import re
+from tm.config import load_config
+from tm.models import init_db
+from tm import audit
+cfg = load_config(); init_db(cfg)
+LINE = re.compile(r'action=(\"(?:[^\"\\\\]|\\\\.)*\") user=(\"(?:[^\"\\\\]|\\\\.)*\") target=(\"(?:[^\"\\\\]|\\\\.)*\") cluster=(\"(?:[^\"\\\\]|\\\\.)*\") detail=(\"(?:[^\"\\\\]|\\\\.)*\") ts=(\"[^\"]*\") source=(\"[^\"]*\") outcome=(\"[^\"]*\")\$')
+def check(tag, g):
+    body = g.split(']: ', 1)[1]
+    if tag == 'crit':
+        body = body.split(' original: ', 1)[1]
+    m = LINE.search(body)
+    print('%s_bytes_ok=%s' % (tag, len(g.encode('utf-8')) <= 4096))
+    print('%s_parsed=%s' % (tag, bool(m)))
+    if m:
+        detail = json.loads(m.group(5))
+        print('%s_tail=%s|%s|%s' % (tag, bool(re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', json.loads(m.group(6)))), json.loads(m.group(7)), json.loads(m.group(8))))
+        print('%s_marked=%s' % (tag, detail.endswith(' [truncated]')))
+        print('%s_kept=%s' % (tag, len(detail) > 100 and set(detail[:-len(' [truncated]')]) <= set('é😀')))
+long_detail = ('é' * 1000) + ('😀' * 1048)
+sent = audit.log_action(cfg, 'alice', 'CREATE', 'orders', long_detail, 'c1', source='198.51.100.7', outcome='failure')
+got = drain()
+print('ok_sent=%s n=%d' % (sent is not None, len(got)))
+check('info', got[0])
+print('db_detail_whole=%s' % (sqlite3.connect(os.environ['TM_TEST_DB']).execute('SELECT detail FROM audit_log WHERE action=\"CREATE\"').fetchone()[0] == long_detail))
+short = audit.log_action(cfg, 'alice', 'DELETE', 'orders', 'é' * 10, 'c1')
+g = drain()[0]
+print('short_unmarked=%s' % ('[truncated]' not in g and ('\\\\u00e9' * 10) in g))
+break_audit()
+audit.log_action(cfg, 'alice', 'CREATE', 'orders', long_detail, 'c1', best_effort=True, source='198.51.100.7', outcome='failure')
+crit = [x for x in drain() if 'AUDIT_WRITE_FAILED' in x]
+print('crit_n=%d' % len(crit))
+check('crit', crit[0])
+")"
+    tm_assert_eq "ok_sent=True n=1" "$(grep '^ok_sent=' <<<"$out")" "the long record was not sent once: ${out}"
+    local t
+    for t in info crit; do
+        tm_assert_eq "${t}_bytes_ok=True" "$(grep "^${t}_bytes_ok=" <<<"$out")" "the ${t} datagram is over 4096 bytes: ${out}"
+        tm_assert_eq "${t}_parsed=True" "$(grep "^${t}_parsed=" <<<"$out")" "the ${t} line no longer parses as the v1.3 key=value line: ${out}"
+        tm_assert_eq "${t}_tail=True|198.51.100.7|failure" "$(grep "^${t}_tail=" <<<"$out")" \
+            "the ${t} line lost ts, source or outcome to the length cut: ${out}"
+        tm_assert_eq "${t}_marked=True" "$(grep "^${t}_marked=" <<<"$out")" "a shortened detail is not marked truncated: ${out}"
+        tm_assert_eq "${t}_kept=True" "$(grep "^${t}_kept=" <<<"$out")" "the shortened detail is not a prefix of whole characters: ${out}"
+    done
+    tm_assert_eq "db_detail_whole=True" "$(grep '^db_detail_whole=' <<<"$out")" "the DATABASE row was shortened too (only the syslog copy may be)"
+    tm_assert_eq "short_unmarked=True" "$(grep '^short_unmarked=' <<<"$out")" "a record that fits was shortened or marked: ${out}"
+    tm_assert_eq "crit_n=1" "$(grep '^crit_n=' <<<"$out")" "the write failure was not sent as one AUDIT_WRITE_FAILED: ${out}"
+}
+tm_case "a-long-non-ascii-detail-is-shortened-never-the-structural-keys" linux a_long_detail_keeps_the_structure
+
 
 tm_finish

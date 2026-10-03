@@ -20,7 +20,8 @@ from .models import (get_db, create_session, touch_session,
                      delete_session, count_active_sessions, cleanup_expired_sessions,
                      session_state, session_absolute_end, session_verification,
                      mark_verified, end_sessions, list_all_active_sessions,
-                     session_handle, END_REASONS)
+                     session_handle, END_REASONS, issue_consent_token,
+                     find_consent_token, consume_consent_token)
 from .config import (load_config, get_active_cluster, get_cluster_by_id,
                      DEFAULT_SESSION_TIMEOUT_MINUTES)
 
@@ -195,6 +196,26 @@ def _kafka_error_response(what, exc):
                     'reference': ref}), 502
 
 
+#: A cluster profile's certificate or key material that the parser refused.
+#: The parser's own text (library internals) goes to the service log.
+MATERIAL_UNPARSED_MESSAGE = ('The certificate or key material could not be parsed. Check that it '
+                             'is unencrypted PEM; the details are in the service log '
+                             '(journalctl -u topic-manager) under reference %s.')
+
+
+def _cluster_invalid(exc):
+    """The 400 for a refused cluster profile. Our own validation sentence is
+    returned as it is (the Cluster Builder shows which field is wrong); one
+    raised while handling a PARSER's exception carries that library's text, so
+    it is logged under a reference and the browser gets MATERIAL_UNPARSED_MESSAGE
+    (WO-0006, like the Kafka routes)."""
+    if exc.__cause__ is None and exc.__context__ is None:
+        return jsonify({'error': str(exc)}), 400
+    ref = _kafka_failure('cluster profile material', exc)
+    return jsonify({'error': MATERIAL_UNPARSED_MESSAGE % ref, 'code': 'material_unparsed',
+                    'reference': ref}), 400
+
+
 def _write_cluster():
     """(cluster, None) for a write route, or (None, a 409 refusal) when there
     is no usable profile. Before v1.3.0 the lookup sat outside the routes'
@@ -242,6 +263,9 @@ def _refuse_cross_site():
         return None
     if fetch_site is None and request.headers.get(CSRF_HEADER) == '1':
         return None
+    # Not the session user's act: another site's page sent it with their
+    # cookie. _record_refusals logs it as anonymous (WO-0006 F4).
+    g.tm_cross_site = True
     return jsonify({'error': 'Cross-site requests are not permitted', 'code': 'cross_site',
                     'message': 'A request that changes something must come from this site '
                                '(Sec-Fetch-Site: same-origin) or carry %s: 1.' % CSRF_HEADER}), 403
@@ -249,7 +273,7 @@ def _refuse_cross_site():
 
 # ── unsuccessful events (v1.3.0, SRG-APP-000089/000099, DQ7) ───────────────
 # A SIGNED-IN caller's refused write is an audit event: a Kafka 502, a 400
-# validation refusal, a 409, a CSRF 403 — whatever the route. Routes that
+# validation refusal, a 409 — whatever the route. Routes that
 # record their own failure (the Kafka writes, the restart refusals) set
 # g.tm_audited through audit.log_action and are not recorded twice; every
 # other refused write is recorded here as REQUEST_REFUSED, outcome failure.
@@ -259,6 +283,12 @@ def _refuse_cross_site():
 # It goes to the service log through a per-worker limiter, and to nginx's
 # access log as every request does. Failed SIGN-INS are the exception they
 # always were (LOGIN_FAILED, AU-2), and nginx holds those to the login rate.
+#
+# A CROSS-SITE refusal (_refuse_cross_site's 403) is logged as anonymous even
+# when the browser sent a valid session cookie (WO-0006 F4): the request is
+# another site's page acting with that cookie, not the user, and recording it
+# under the user let a sibling host write rows in their name at will - and
+# push real rows out of the table through the row-limit prune.
 _UNAUDITABLE = frozenset({'audit_unavailable', 'audit_write_failed'})
 
 
@@ -331,7 +361,10 @@ def _record_refusals(response):
         unsafe = request.method not in _SAFE_METHODS
         # A refused READ by a signed-in user is neither (require_auth set
         # current_user): not a write, and not anonymous.
-        user = _signed_in_user() if unsafe or getattr(request, 'current_user', None) else None
+        user = None
+        if not getattr(g, 'tm_cross_site', False) \
+                and (unsafe or getattr(request, 'current_user', None)):
+            user = _signed_in_user()
         if user:
             if unsafe and not getattr(g, 'tm_audited', False) and error not in _UNAUDITABLE:
                 audit.log_action(_cfg(), user, 'REQUEST_REFUSED', _log_safe(request.path, 200),
@@ -473,9 +506,16 @@ LOGIN_FAILED_MESSAGE = 'Sign-in failed: the user name or password is wrong, or t
 # ── the consent notice, enforced by the server (v1.3.0, NGNX-APP-000180, DQ9) ─
 # The sign-in page shows the notice (the standard DoD wording, or the
 # operator's own text from Settings) and the browser posts the acceptance
-# here. It is held in the signed session cookie, and POST /api/auth/login
-# refuses a sign-in without a fresh one while the notice is on: nothing but
-# the public pages answers before the notice has been accepted. The
+# here. The acceptance is a ONE-USE server-side token (WO-0006 F5): the signed
+# session cookie carries the token, tm.db its digest (consent_tokens), and the
+# sign-in it enables deletes it in the same transaction that creates the
+# session. A copy of the cookie replayed within the 10 minutes is therefore
+# refused: the cookie alone used to be the whole proof, and nothing on the
+# server remembered it had been used. POST /api/auth/login refuses a sign-in
+# without a fresh, unused one while the notice is on: nothing but the public
+# pages answers before the notice has been accepted. The browser also sends
+# the notice text it DISPLAYED, and an acceptance of text that is no longer
+# the configured notice is refused (409 notice_changed). The
 # acceptance is recorded as CONSENT_ACCEPTED, for the user it then signs in,
 # immediately before their LOGIN row — an anonymous acceptance writes nothing
 # to the audit database (DQ7).
@@ -507,23 +547,31 @@ def accept_consent():
     db = get_db(_cfg())
     try:
         _enabled, text = _consent_settings(db)
+        if data.get('notice') != text:
+            # The page showed other text than the notice now configured (it
+            # changed since the page loaded): that is not acceptance of THIS one.
+            return jsonify({'error': 'The notice has changed since this page loaded. Read the '
+                                     'current notice and accept it again.',
+                            'code': 'notice_changed'}), 409
+        now = time.time()
+        token = issue_consent_token(db, _notice_label(text), CONSENT_VALID_S, now)
     finally:
         db.close()
-    session['consent'] = {'at': time.time(), 'notice': _notice_label(text)}
+    session['consent'] = {'token': token, 'at': now}
     return jsonify({'ok': True, 'valid_seconds': CONSENT_VALID_S})
 
 
-def _fresh_consent():
-    """The consent this browser gave, if it was given in the last
-    CONSENT_VALID_S seconds; else None."""
+def _fresh_consent(db):
+    """The acceptance this browser holds, if the server issued it in the last
+    CONSENT_VALID_S seconds and no sign-in has used it: {'token', 'at',
+    'notice'} from the SERVER's row (never the cookie's word); else None."""
     c = session.get('consent')
     if not isinstance(c, dict):
         return None
-    try:
-        age = time.time() - float(c.get('at'))
-    except (TypeError, ValueError):
+    row = find_consent_token(db, c.get('token'), CONSENT_VALID_S, time.time())
+    if row is None:
         return None
-    return c if 0 <= age <= CONSENT_VALID_S else None
+    return {'token': c['token'], 'at': row[0], 'notice': row[1]}
 
 
 def _consent_gate():
@@ -533,9 +581,9 @@ def _consent_gate():
     db = get_db(_cfg())
     try:
         consent_on, _text = _consent_settings(db)
+        consent = _fresh_consent(db) if consent_on else None
     finally:
         db.close()
-    consent = _fresh_consent()
     if consent_on and consent is None:
         # Before the directory is asked anything: no credential is tried
         # until the notice has been accepted.
@@ -597,6 +645,14 @@ def login():
     active = count_active_sessions(db, result['username'])
     if 0 < max_s <= active:          # a limit of zero means unlimited
         return _refuse_session_limit(cfg, db, result['username'], active, max_s)
+    # One acceptance, one sign-in: used up in the transaction that creates the
+    # session. A second sign-in presenting the same token (a replayed cookie,
+    # or two racing requests) finds it gone and is refused.
+    if consent and not consume_consent_token(db, consent['token'], CONSENT_VALID_S, time.time()):
+        db.rollback()
+        db.close()
+        session.pop('consent', None)
+        return jsonify({'error': CONSENT_REQUIRED_MESSAGE, 'code': 'consent_required'}), 403
 
     sid = create_session(db, result['username'], _timeout(), request.remote_addr)
     ends_at = session_absolute_end(db, sid, _absolute_hours(db))
@@ -820,7 +876,7 @@ def create_cluster():
         cluster = cluster_store.validate(data, existing, cluster_id=None)
         cluster = cluster_store.apply_material(cluster, data, previous=None)
     except cluster_store.ClusterError as exc:
-        return jsonify({'error': str(exc)}), 400
+        return _cluster_invalid(exc)
 
     updated = [dict(c) for c in existing] + [cluster]
     if cluster['active'] or len(updated) == 1:
@@ -861,7 +917,7 @@ def update_cluster(cluster_id):
         cluster = cluster_store.validate(data, existing, cluster_id=cluster_id)
         cluster = cluster_store.apply_material(cluster, data, previous=previous)
     except cluster_store.ClusterError as exc:
-        return jsonify({'error': str(exc)}), 400
+        return _cluster_invalid(exc)
 
     updated = [cluster if c.get('id') == cluster_id else dict(c) for c in existing]
     if cluster['active']:
@@ -995,9 +1051,9 @@ def restart_service():
 
     source = audit.request_source()     # the steps run on a thread, outside this request
 
-    def _record(message):
+    def _record(message, outcome):
         audit.log_action(cfg, user, 'SERVICE_RESTART_STEP', 'systemd', message,
-                         best_effort=True, source=source)
+                         best_effort=True, source=source, outcome=outcome)
 
     service_control.restart_detached(hard_nginx, _record)
     return jsonify({

@@ -894,7 +894,7 @@ const SettingsTab = {
     template: `
 <div>
   <div v-if="hostPanels.capacity?.write_failure?.current" class="host-audit-banner" role="alert">
-    ✕ The audit trail could not be written at {{ hostPanels.capacity.write_failure.failed_at }} ({{ hostPanels.capacity.write_failure.reason }}), and no record has been written since. Changes are refused until it recovers; the record went to the host syslog as AUDIT_WRITE_FAILED.
+    ✕ The audit trail could not be written at {{ hostPanels.capacity.write_failure.failed_at }} ({{ hostPanels.capacity.write_failure.reason }}), and no record has been written since. Changes are refused until it recovers; <template v-if="hostPanels.capacity.write_failure.syslog_delivered === true">the record went to the host syslog as AUDIT_WRITE_FAILED.</template><template v-else-if="hostPanels.capacity.write_failure.syslog_delivered === false">the host syslog did NOT accept the record either: its only copy is the service log (journalctl -u topic-manager, AUDIT_WRITE_FAILED).</template><template v-else>look for AUDIT_WRITE_FAILED in the host syslog, and in the service log (journalctl -u topic-manager) if it is not there.</template>
   </div>
   <div v-if="hostPanels.capacity?.warning" class="host-audit-banner" role="alert">
     ! Audit capacity warning: {{ hostPanels.capacity.rows }} / {{ hostPanels.capacity.max_rows }} rows ({{ hostPanels.capacity.pct }}%).

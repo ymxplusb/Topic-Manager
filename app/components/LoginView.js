@@ -51,8 +51,15 @@ const LoginView = {
                 const r = await fetch('/api/auth/consent', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ accepted: true }),
+                    // The text this page DISPLAYED ('' = the standard wording):
+                    // the server refuses an acceptance of a notice it no longer has.
+                    body: JSON.stringify({ accepted: true, notice: this.consentText }),
                 });
+                if (r.status === 409) {
+                    await this.loadConsent();
+                    this.consentError = 'The notice changed while this page was open. Read the notice now shown and accept it again.';
+                    return;
+                }
                 if (!r.ok) { this.consentError = 'The acceptance could not be recorded (HTTP ' + r.status + '). Try again.'; return; }
             } catch {
                 // Unreachable server: nothing was recorded, so say so and stay on the notice.

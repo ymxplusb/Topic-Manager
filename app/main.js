@@ -19,6 +19,13 @@ const IDLE_WARN_SECONDS = 60;
 // audited - the one event an auditor most wants to see would be the one
 // event reliably missing.
 const LOGOUT_LEAD_MS = 5000;
+// A session the SERVER ended (an administrator's End sessions, a failed group
+// re-check, a lifetime the browser's clock missed): the next request is a
+// 401. Before WO-0006 the app kept its shell and each tab showed
+// "Authentication required" inside it; now any 401 from a signed-in view
+// returns to the sign-in page and says why.
+const ENDED_NOTICE = 'Your session was ended. Sign in again to continue.';
+let tmSessionEnded = null;      // set by App.setup: (reason, error) => void
 
 // CROSS-SITE REQUEST FORGERY (v1.2.0). The backend refuses any request that
 // changes something unless the browser marks it same-origin (Sec-Fetch-Site)
@@ -27,18 +34,29 @@ const LOGOUT_LEAD_MS = 5000;
 // once, to every non-GET request for this origin's /api/ - not at a dozen call
 // sites where the next one added would be the one that forgot it. The browser
 // still sends Sec-Fetch-Site itself; the header covers a browser that does not.
+// The same wrapper sees every /api/ answer, so a 401 is noticed HERE (not in
+// each tab): the sign-in routes (/api/auth/*) answer 401 for their own
+// reasons and are left to the views that called them.
 const TM_REQUEST_HEADER = 'X-TM-Request';
+function tmWatchSession(input, r) {
+    if (r && r.status === 401 && tmSessionEnded && !input.startsWith('/api/auth/')) {
+        const body = typeof r.clone === 'function' ? r.clone().json().catch(() => ({})) : Promise.resolve({});
+        body.then(d => tmSessionEnded((d && d.reason) || '', (d && d.error) || ''));
+    }
+    return r;
+}
 function tmMarkRequests(win) {
     const send = win.fetch.bind(win);
     win.fetch = (input, init) => {
+        if (typeof input !== 'string' || !input.startsWith('/api/')) return send(input, init);
         const opts = init || {};
         const method = String(opts.method || 'GET').toUpperCase();
-        if (method === 'GET' || method === 'HEAD' || typeof input !== 'string' || !input.startsWith('/api/')) {
-            return send(input, init);
+        if (method === 'GET' || method === 'HEAD') {
+            return send(input, init).then(r => tmWatchSession(input, r));
         }
         const headers = new Headers(opts.headers || {});
         headers.set(TM_REQUEST_HEADER, '1');
-        return send(input, { ...opts, headers });
+        return send(input, { ...opts, headers }).then(r => tmWatchSession(input, r));
     };
 }
 tmMarkRequests(window);
@@ -189,6 +207,20 @@ const App = {
             loginNotice.value = { idle: IDLE_NOTICE, absolute: ABSOLUTE_NOTICE }[why] || '';
         }
 
+        // The server ended the session (see tmWatchSession): no sign-out is
+        // posted - there is no session left to record it against, and the
+        // server recorded the end (SESSION_EXPIRED / SESSION_REVOKED /
+        // SESSIONS_ENDED) when it happened.
+        function sessionEnded(reason, error) {
+            if (!user.value) return;
+            clearIdleTimers();
+            if (absoluteTimer) { clearTimeout(absoluteTimer); absoluteTimer = null; }
+            user.value = null; currentTab.value = 'topics'; sessionEndsAt.value = '';
+            loginNotice.value = { idle: IDLE_NOTICE, absolute: ABSOLUTE_NOTICE }[reason]
+                || (reason === 'revoked' && error) || ENDED_NOTICE;
+        }
+        tmSessionEnded = sessionEnded;
+
         // Pressing "Stay signed in" is itself activity: it re-arms the timer
         // and, because it is a real request, slides the server's row too.
         function staySignedIn() {
@@ -263,6 +295,7 @@ const App = {
         onUnmounted(() => {
             clearIdleTimers();
             if (absoluteTimer) clearTimeout(absoluteTimer);
+            if (tmSessionEnded === sessionEnded) tmSessionEnded = null;
             ACTIVITY.forEach(e => document.removeEventListener(e, onActivity));
         });
 

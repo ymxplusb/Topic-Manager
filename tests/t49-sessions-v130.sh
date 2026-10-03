@@ -271,9 +271,16 @@ class FakeConn:
     def __init__(self, server, user=None, password=None, authentication=None, auto_bind=None, **k):
         state['conn_kw'] = k
         if state.get('down'): raise LDAPSocketOpenError('unreachable')
-        self.entries = state.get('entries', [])
-    def search(self, **k): pass
-    def unbind(self): pass
+        self.entries = []
+        self.result = None
+    def search(self, **k):
+        # ldap3 with raise_exceptions=False: a search that did not complete
+        # comes back as a result code and NO entries - not as an exception.
+        rc = state.get('rc', 0)
+        self.result = {'type': 'searchResDone', 'result': rc, 'description': state.get('desc', 'success')}
+        self.entries = state.get('entries', []) if rc == 0 else []
+        return bool(self.entries)
+    def unbind(self): state['unbound'] = state.get('unbound', 0) + 1
 auth.Server, auth.Connection = FakeServer, FakeConn
 cfg = {'auth': {'ldap_server': 'ldaps://dc.example.org:636', 'ldap_base_dn': 'DC=example,DC=org',
                 'ldap_domain': 'example.org', 'required_group': 'CN=G,DC=example,DC=org',
@@ -285,6 +292,24 @@ state['entries'] = [Entry(['CN=Other,DC=example,DC=org'])]
 print('not_member=%s' % auth.check_membership(cfg, 'alice')[0])
 state['entries'] = []
 print('not_found=%s' % auth.check_membership(cfg, 'alice')[0])
+# F2 (WO-0006 assure): a search the directory did not complete is NOT a
+# removed account - busy (51), unavailable (52), a size limit (4), a base DN
+# it does not hold (32). Each must be 'unavailable' (reads only), never
+# 'not_found' (which ends every session of the user).
+state['entries'] = [Entry(['CN=G,DC=example,DC=org'])]
+for rc, desc in ((51, 'busy'), (52, 'unavailable'), (4, 'sizeLimitExceeded'), (32, 'noSuchObject')):
+    state['rc'], state['desc'] = rc, desc
+    print('search_rc_%d=%s' % (rc, auth.check_membership(cfg, 'alice')[0]))
+state['rc'] = 0
+state['unbound'] = 0
+state['rc'] = 51; auth.check_membership(cfg, 'alice'); state['rc'] = 0
+print('unbound_on_failure=%d' % state['unbound'])
+# Sign-in with a search that did not complete: refused as a directory error,
+# not as "User not found", and not an exception (a 500).
+state['rc'], state['desc'] = 51, 'busy'
+ok, why = auth.validate_credentials(cfg, 'alice', 'pw')
+print('signin_failed_search=%s %s' % (ok, why.split(':')[0]))
+state['rc'] = 0
 state['down'] = True
 print('unavailable=%s' % auth.check_membership(cfg, 'alice')[0])
 del cfg['auth']['ldap_bind_dn']
@@ -296,6 +321,14 @@ PYEOF
     tm_assert_eq "not_member=not_member" "$(_line not_member "$out")" "a removed member is not 'not_member'"
     tm_assert_eq "not_found=not_found" "$(_line not_found "$out")" "a deleted account is not 'not_found'"
     tm_assert_eq "unavailable=unavailable" "$(_line unavailable "$out")" "an unreachable directory is not 'unavailable'"
+    local rc
+    for rc in 51 52 4 32; do
+        tm_assert_eq "search_rc_${rc}=unavailable" "$(_line "search_rc_${rc}" "$out")" \
+            "a search the directory did not complete (result ${rc}) is read as something other than 'unavailable' - 'not_found' ends every session of the user: ${out}"
+    done
+    tm_assert_eq "unbound_on_failure=1" "$(_line unbound_on_failure "$out")" "a failed search leaves the service connection bound"
+    tm_assert_eq "signin_failed_search=False LDAP error" "$(_line signin_failed_search "$out")" \
+        "a sign-in whose search did not complete is not refused as a directory error: ${out}"
     tm_assert_eq "unsupported=unsupported" "$(_line unsupported "$out")" "a host with no service account is not 'unsupported'"
 }
 tm_case "the-directory-answers-map-to-the-four-verdicts" tmapp a_check_membership
@@ -344,6 +377,74 @@ JSEOF
     tm_assert_eq "none=0" "$(grep '^none=' <<<"$out")" "a timer was armed with no end from the server"
 }
 tm_case "the-browser-signs-out-at-the-absolute-end-and-says-why" node a_browser_signs_out_at_the_absolute_end
+
+# WO-0006 UI: a session the SERVER ended (End sessions, a failed re-check) is
+# found by the next request's 401. The app returns to the sign-in page and says
+# why, instead of keeping its shell with "Authentication required" in a tab.
+# The real app/main.js under node; the tabs' fetch IS window.fetch.
+a_a_401_returns_to_sign_in() {
+    local out
+    out="$(node - "${TM_MAIN_JS:-${TM_REPO_ROOT}/app/main.js}" <<'JSEOF' 2>&1 | tr -d '\r'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const answer = {}; const posts = [];
+const reply = (status, body) => ({ ok: status < 400, status, json: async () => body, clone() { return reply(status, body); } });
+const win = { fetch: async (url, init) => { if (init && init.method === 'POST') posts.push(url); return answer[url] || reply(200, {}); } };
+const make = () => {
+    let App = null; const timers = [];
+    const Vue = { createApp: a => { App = a; return { mount() {} }; }, ref: v => ({ value: v }), computed: f => ({ get value() { return f(); } }), onMounted() {}, onUnmounted() {} };
+    const stubs = ['LoginView', 'TopBar', 'TopicsTab', 'ConsumerGroupsTab', 'AuditTab', 'SettingsTab', 'AboutModal'];
+    const w = { fetch: win.fetch };
+    new Function('Vue', 'window', 'document', 'fetch', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', ...stubs, src)(
+        Vue, w, { addEventListener() {}, removeEventListener() {} }, (...a) => w.fetch(...a),
+        (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, id => { if (timers[id - 1]) timers[id - 1].cleared = true; },
+        () => 0, () => {}, ...stubs.map(() => ({})));
+    const vm = App.setup();
+    vm.onLoggedIn({ username: 'u' }, 15, new Date(Date.now() + 3600e3).toISOString());
+    vm.currentTab.value = 'audit';
+    return { vm, w, timers };
+};
+const settle = () => new Promise(r => setTimeout(r, 10));
+(async () => {
+    let { vm, w, timers } = make();
+    answer['/api/topics'] = reply(401, { error: 'Session expired', reason: 'ended' });
+    const r = await w.fetch('/api/topics');
+    await settle();
+    console.log('status=' + r.status);
+    console.log('ended=' + vm.user.value + '|' + vm.currentTab.value + '|' + vm.loginNotice.value);
+    console.log('timers=' + timers.filter(t => !t.cleared).length + ' posts=' + posts.length);
+    ({ vm, w } = make());
+    answer['/api/topics'] = reply(401, { error: 'Your access was withdrawn: no longer a member of the required group.', reason: 'revoked' });
+    await w.fetch('/api/topics', { method: 'POST', headers: {}, body: '{}' }); await settle();
+    console.log('revoked=' + vm.user.value + '|' + vm.loginNotice.value);
+    ({ vm, w } = make());
+    answer['/api/topics'] = reply(401, { error: 'Authentication required' });
+    await w.fetch('/api/topics'); await settle();
+    console.log('noreason=' + vm.loginNotice.value);
+    ({ vm, w } = make());
+    answer['/api/topics'] = reply(401, { error: 'Session expired', reason: 'idle' });
+    await w.fetch('/api/topics'); await settle();
+    console.log('idle=' + vm.loginNotice.value.slice(0, 25));
+    ({ vm, w } = make());
+    answer['/api/auth/logout'] = reply(401, {});
+    await w.fetch('/api/auth/logout', { method: 'POST', headers: {} }); await settle();
+    answer['/api/topics'] = reply(503, { code: 'directory_unavailable' });
+    await w.fetch('/api/topics'); await settle();
+    console.log('kept=' + JSON.stringify(vm.user.value) + '|' + vm.loginNotice.value);
+})().catch(e => { console.log('error=' + e.message); });
+JSEOF
+)"
+    tm_assert_eq "status=401" "$(grep '^status=' <<<"$out")" "the wrapper changed the response the caller sees: ${out}"
+    tm_assert_eq "ended=null|topics|Your session was ended. Sign in again to continue." "$(grep '^ended=' <<<"$out")" \
+        "a 401 from a signed-in view did not return to the sign-in page with the reason: ${out}"
+    tm_assert_eq "timers=0 posts=0" "$(grep '^timers=' <<<"$out")" "the ended session left its timers armed or posted a sign-out: ${out}"
+    tm_assert_eq "revoked=null|Your access was withdrawn: no longer a member of the required group." "$(grep '^revoked=' <<<"$out")" \
+        "a revoked session does not say why (or a POST's 401 was not noticed): ${out}"
+    tm_assert_eq "noreason=Your session was ended. Sign in again to continue." "$(grep '^noreason=' <<<"$out")" "a 401 without a reason is not handled: ${out}"
+    tm_assert_eq "idle=You were signed out after" "$(grep '^idle=' <<<"$out")" "an idle end does not say idle: ${out}"
+    tm_assert_eq 'kept={"username":"u"}|' "$(grep '^kept=' <<<"$out")" "a sign-in route's 401 or a 503 signed the user out: ${out}"
+}
+tm_case "a-401-from-a-signed-in-view-returns-to-the-sign-in-page" node a_a_401_returns_to_sign_in
 
 a_absolute_logout_reason() {
     _setup

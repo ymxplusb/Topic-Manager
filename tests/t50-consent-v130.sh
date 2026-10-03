@@ -84,8 +84,18 @@ c = app.test_client()
 r = c.post('/api/auth/login', data=cred, headers=H)
 print('refused=%d %s tried=%d' % (r.status_code, r.get_json().get('code'), len(tried)))
 print('declined=%d' % c.post('/api/auth/consent', data=json.dumps({'accepted': 'yes'}), headers=H).status_code)
-print('csrf=%d' % c.post('/api/auth/consent', data=json.dumps({'accepted': True}), headers={'Content-Type': 'application/json'}).status_code)
-print('accept=%d' % c.post('/api/auth/consent', data=json.dumps({'accepted': True}), headers=H).status_code)
+print('csrf=%d' % c.post('/api/auth/consent', data=json.dumps({'accepted': True, 'notice': ''}), headers={'Content-Type': 'application/json'}).status_code)
+# The acceptance names the text the page displayed; any other text is refused.
+r = c.post('/api/auth/consent', data=json.dumps({'accepted': True, 'notice': 'some other notice'}), headers=H)
+print('changed=%d %s' % (r.status_code, r.get_json().get('code')))
+r = c.post('/api/auth/consent', data=json.dumps({'accepted': True}), headers=H)
+print('unnamed=%d' % r.status_code)
+print('accept=%d' % c.post('/api/auth/consent', data=json.dumps({'accepted': True, 'notice': ''}), headers=H).status_code)
+with c.session_transaction() as s:
+    saved = dict(s['consent'])          # what an attacker copies from the cookie
+print('cookie_token_only=%s' % (sorted(saved) == ['at', 'token']))
+d = db(); stored = [r[0] for r in d.execute('SELECT token_hash FROM consent_tokens')]; d.close()
+print('stored_digest=%s' % (stored == [hashlib.sha256(saved['token'].encode()).hexdigest()]))
 r = c.post('/api/auth/login', data=cred, headers=H)
 print('signin=%d' % r.status_code)
 import datetime
@@ -96,11 +106,39 @@ print('detail=%s' % rows('CONSENT_ACCEPTED')[0][2].split(' accepted ')[0])
 # The same browser, straight away, no sign-out in between: the acceptance
 # was spent by the first sign-in.
 print('reuse=%d' % c.post('/api/auth/login', data=cred, headers=H).status_code)
+# WO-0006 F5: the SAME cookie, replayed from another browser inside the 10
+# minutes. It is validly signed and fresh; only the server remembers it was used.
+c3 = app.test_client()
+with c3.session_transaction() as s:
+    s['consent'] = saved
+n_tried = len(tried)
+r = c3.post('/api/auth/login', data=cred, headers=H)
+print('replay=%d %s tried=%d' % (r.status_code, r.get_json().get('code'), len(tried) - n_tried))
+d = db(); print('spent=%d' % d.execute('SELECT COUNT(*) FROM consent_tokens').fetchone()[0]); d.close()
+# Two sign-ins racing with ONE acceptance: both pass the gate's lookup before
+# either has used it (simulated by a lookup that always finds it). The use in
+# the session's transaction is what lets only one through.
+r1 = app.test_client(); r1.post('/api/auth/consent', data=json.dumps({'accepted': True, 'notice': ''}), headers=H)
+with r1.session_transaction() as s:
+    raced = dict(s['consent'])
+r2 = app.test_client()
+with r2.session_transaction() as s:
+    s['consent'] = raced
+setting('session_max_concurrent', '0')      # unlimited: the race is about consent, not the cap
+real_find = routes.find_consent_token
+routes.find_consent_token = lambda db, token, max_age, now: (now, 'standard DoD notice')
+a1 = r1.post('/api/auth/login', data=cred, headers=H).status_code
+a2 = r2.post('/api/auth/login', data=cred, headers=H).status_code
+routes.find_consent_token = real_find
+print('race=%d %d' % (a1, a2))
 c2 = app.test_client()
-c2.post('/api/auth/consent', data=json.dumps({'accepted': True}), headers=H)
-with c2.session_transaction() as s:
-    s['consent'] = dict(s['consent'], at=time.time() - 601)
+c2.post('/api/auth/consent', data=json.dumps({'accepted': True, 'notice': ''}), headers=H)
+d = db(); d.execute('UPDATE consent_tokens SET accepted_at = accepted_at - 601'); d.commit(); d.close()
 print('stale=%d' % c2.post('/api/auth/login', data=cred, headers=H).status_code)
+# A forged 'at' in the cookie does not refresh a token the server holds as stale.
+with c2.session_transaction() as s:
+    s['consent'] = dict(s['consent'], at=time.time())
+print('stale_forged=%d' % c2.post('/api/auth/login', data=cred, headers=H).status_code)
 print('consent_rows=%d' % len(rows('CONSENT_ACCEPTED')))
 ")"
     tm_assert_eq "off=200" "$(_line off "$out")" "with the notice off a sign-in was refused: ${out}"
@@ -108,15 +146,24 @@ print('consent_rows=%d' % len(rows('CONSENT_ACCEPTED')))
         "a sign-in without the acceptance was let through, or the directory was asked first: ${out}"
     tm_assert_eq "declined=400" "$(_line declined "$out")" "an acceptance that is not literally true was taken"
     tm_assert_eq "csrf=403" "$(_line csrf "$out")" "a cross-site acceptance was taken"
+    tm_assert_eq "changed=409 notice_changed" "$(_line changed "$out")" "an acceptance of text other than the configured notice was taken: ${out}"
+    tm_assert_eq "unnamed=409" "$(_line unnamed "$out")" "an acceptance that does not name the displayed notice was taken"
     tm_assert_eq "accept=200" "$(_line accept "$out")" "an acceptance was refused"
+    tm_assert_eq "cookie_token_only=True" "$(_line cookie_token_only "$out")" "the consent cookie carries more than the one-use token and its time: ${out}"
+    tm_assert_eq "stored_digest=True" "$(_line stored_digest "$out")" "the server does not hold (only) the token's digest: ${out}"
     tm_assert_eq "signin=200" "$(_line signin "$out")" "a sign-in after the acceptance was refused: ${out}"
     tm_assert_eq "ends_h=12" "$(_line ends_h "$out")" "the sign-in does not tell the browser when the session ends"
     tm_assert_eq "rows=[('LOGIN', 'alice'), ('CONSENT_ACCEPTED', 'alice'), ('LOGIN', 'alice')]" "$(_line rows "$out")" \
         "CONSENT_ACCEPTED is not recorded for the user, just before LOGIN: ${out}"
     tm_assert_eq "detail=standard DoD notice" "$(_line detail "$out")" "the acceptance does not name the notice"
     tm_assert_eq "reuse=403" "$(_line reuse "$out")" "one acceptance served a second sign-in"
+    tm_assert_eq "replay=403 consent_required tried=0" "$(_line replay "$out")" \
+        "a replayed copy of a used consent cookie allowed a second sign-in, or the directory was asked first: ${out}"
+    tm_assert_eq "spent=0" "$(_line spent "$out")" "the sign-in did not use its acceptance up on the server"
+    tm_assert_eq "race=200 403" "$(_line race "$out")" "two racing sign-ins both used one acceptance: ${out}"
     tm_assert_eq "stale=403" "$(_line stale "$out")" "an acceptance older than its window was taken"
-    tm_assert_eq "consent_rows=1" "$(_line consent_rows "$out")" "a refused sign-in recorded a consent"
+    tm_assert_eq "stale_forged=403" "$(_line stale_forged "$out")" "the cookie's own time, not the server's, decided freshness"
+    tm_assert_eq "consent_rows=2" "$(_line consent_rows "$out")" "a refused sign-in recorded a consent (two sign-ins succeeded: the first and the race winner)"
 }
 tm_case "the-server-refuses-a-sign-in-without-a-fresh-acceptance" tmapp a_server_enforces
 
@@ -142,7 +189,7 @@ det = rows('SETTINGS_UPDATE')[-1][2]
 digest = hashlib.sha256('NOTICE ONE\n\nParagraph two.'.encode()).hexdigest()[:16]
 print('digest=%s plain=%s' % (digest in det, 'NOTICE ONE' in det))
 a = app.test_client()
-a.post('/api/auth/consent', data=json.dumps({'accepted': True}), headers=H)
+a.post('/api/auth/consent', data=json.dumps({'accepted': True, 'notice': 'NOTICE ONE\\n\\nParagraph two.'}), headers=H)
 a.post('/api/auth/login', data=cred, headers=H)
 print('named=%s' % (('custom notice sha256=' + digest) in rows('CONSENT_ACCEPTED')[-1][2]))
 ")"
@@ -165,12 +212,17 @@ const fs = require('fs'), assert = require('assert');
 const src = fs.readFileSync(process.argv[2], 'utf8');
 const def = new Function('Vue', 'window', src + String.fromCharCode(10) + 'return LoginView;')({}, { location: { hostname: 'h' } });
 const settle = () => new Promise(r => setTimeout(r, 20));   // submit() does not await the sign-in
+let bodies = [], consentAnswers = [];
 const run = async (pub, loginAnswers) => {
     const calls = [];
     global.fetch = async (url, opts = {}) => {
         calls.push(url + ' ' + (opts.method || 'GET'));
         if (url === '/api/settings/public') return { ok: true, status: 200, json: async () => pub };
-        if (url === '/api/auth/consent') return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        if (url === '/api/auth/consent') {
+            bodies.push(JSON.parse(opts.body));
+            const a = consentAnswers.shift() || [200, { ok: true }];
+            return { ok: a[0] < 400, status: a[0], json: async () => a[1] };
+        }
         const a = loginAnswers.shift();
         return { ok: a[0] < 400, status: a[0], json: async () => a[1] };
     };
@@ -190,6 +242,7 @@ const run = async (pub, loginAnswers) => {
     assert.match(vm.error, /accept the notice/, 'declining says why there is no sign-in');
     await vm.agreeConsent();
     assert.equal(vm.consentAccepted, true);
+    assert.deepEqual(bodies.pop(), { accepted: true, notice: '' }, 'the acceptance does not name the notice it displayed');
     await vm.submit(); await settle();
     assert.deepEqual(calls.filter(c => c.startsWith('/api/auth/')), ['/api/auth/consent POST', '/api/auth/login POST'], 'the acceptance is not posted before the sign-in');
     assert.deepEqual(JSON.parse(JSON.stringify(vm.emitted)), [['logged-in', { username: 'u' }, 15, 'E']], 'the session end is not handed to the app: ' + JSON.stringify(vm.emitted));
@@ -200,6 +253,15 @@ const run = async (pub, loginAnswers) => {
     assert.equal(vm.consentAccepted, false);
     ({ vm } = await run({ dow_enabled: 'true', dow_text: 'ONE\n\n  TWO  \n\n\n' }, []));
     assert.deepEqual(vm.consentParagraphs, ['ONE', 'TWO'], 'the custom text is not split into paragraphs');
+    await vm.agreeConsent();
+    assert.deepEqual(bodies.pop(), { accepted: true, notice: 'ONE\n\n  TWO  \n\n\n' }, 'the acceptance does not carry the displayed text exactly');
+    // The notice changed while the page was open: 409, the page reloads it and stays on it.
+    consentAnswers = [[409, { code: 'notice_changed' }]];
+    ({ vm, calls } = await run({ dow_enabled: 'true', dow_text: 'OLD' }, []));
+    await vm.agreeConsent();
+    assert.equal(vm.consentAccepted, false, 'a refused acceptance counted as accepted');
+    assert.match(vm.consentError, /notice changed/, 'a changed notice is not explained');
+    assert.equal(calls.filter(c => c === '/api/settings/public GET').length, 2, 'the changed notice was not reloaded');
     ({ vm, calls } = await run({ dow_enabled: 'false' }, [[200, { user: {}, timeout_minutes: 15 }]]));
     assert.equal(vm.showConsent, false, 'the notice shows while it is off');
     await vm.submit(); await settle();

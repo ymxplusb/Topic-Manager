@@ -54,7 +54,7 @@ const AuditTab = {
     template: `
 <div>
   <div v-if="writeFailure && writeFailure.current" class="host-audit-banner" role="alert">
-    ! The audit trail could not be written at {{ writeFailure.failed_at }} ({{ writeFailure.reason }}), and no record has been written since. Actions are refused until it recovers; the record went to the host syslog as AUDIT_WRITE_FAILED.
+    ! The audit trail could not be written at {{ writeFailure.failed_at }} ({{ writeFailure.reason }}), and no record has been written since. Actions are refused until it recovers; <template v-if="writeFailure.syslog_delivered === true">the record went to the host syslog as AUDIT_WRITE_FAILED.</template><template v-else-if="writeFailure.syslog_delivered === false">the host syslog did NOT accept the record either: its only copy is the service log (journalctl -u topic-manager, AUDIT_WRITE_FAILED).</template><template v-else>look for AUDIT_WRITE_FAILED in the host syslog, and in the service log (journalctl -u topic-manager) if it is not there.</template>
   </div>
   <div class="toolbar">
     <div style="font-size:.72rem;color:var(--text-muted)">{{ total }} total entries</div>

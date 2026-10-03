@@ -26,8 +26,13 @@ log = logging.getLogger(__name__)
 # zero-padded, so string order is still time order: tm/audit_retention.py
 # compares ts as strings and relies on it.
 TS_FORMAT = '%Y-%m-%dT%H:%M:%SZ'
-#: SRG-APP-000099: every row says whether the event succeeded.
+#: SRG-APP-000099: every row says whether the event succeeded. A NEW row is
+#: always one of these two.
 OUTCOMES = ('success', 'failure')
+#: The outcome of a row written before v1.3.0 whose record does not say
+#: whether it succeeded. Only the migration writes it; log_action refuses it
+#: (WO-0006 F1: the migration used to call every such row a success).
+OUTCOME_UNRECORDED = 'unknown'
 #: SRG-APP-000098: the origin of a row written by no client (the prune timer,
 #: the apply-result recorder, the installer).
 SYSTEM_SOURCE = 'system'
@@ -104,16 +109,61 @@ def _field(value, limit=1024):
     return json.dumps(_CONTROL.sub('?', str(value))[:limit])
 
 
-def format_record(record):
+#: The bytes one datagram leaves for the message after the "<pri>ident[pid]: "
+#: header (at most 35 bytes; 64 reserved).
+_MAX_MESSAGE = _MAX_DATAGRAM - 64
+#: Appended to a value format_record had to shorten to fit one datagram.
+TRUNCATED_MARK = ' [truncated]'
+#: (key, record field, character limit), in line order. v1.3.0 APPENDED
+#: source= and outcome= after ts=.
+_LINE_FIELDS = (('action', 'action', 64), ('user', 'user', 128), ('target', 'target', 256),
+                ('cluster', 'cluster_id', 128), ('detail', 'detail', 2048), ('ts', 'ts', 32),
+                ('source', 'source', 64), ('outcome', 'outcome', 16))
+#: The fields shortened, in this order, when a line would not fit. ts, source
+#: and outcome never are: they are what makes the line a record (WO-0006 F3).
+_SHRINK_ORDER = ('detail', 'target', 'cluster_id', 'user', 'action')
+
+
+def _fit(value, room):
+    """_field(value) cut to at most `room` bytes, marked TRUNCATED_MARK. The cut
+    is made on the CHARACTERS before encoding (a binary search on the prefix
+    length), so it never splits a character or a \\u escape: _field's JSON is
+    ASCII, and one non-ASCII character can take 6 or 12 of those bytes."""
+    clean = _CONTROL.sub('?', str(value))
+    lo, hi = 0, len(clean)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if len(json.dumps(clean[:mid] + TRUNCATED_MARK)) <= room:
+            lo = mid
+        else:
+            hi = mid - 1
+    return json.dumps(clean[:lo] + TRUNCATED_MARK)
+
+
+def format_record(record, max_bytes=_MAX_MESSAGE):
     """The syslog text of one audit record. Stable key=value order, every
     value JSON-quoted, so a collector can parse it without guessing. v1.3.0
     APPENDS source= and outcome= after ts=, so a collector that matched the
-    v1.2 line by position still finds every earlier key where it was."""
-    return 'action=%s user=%s target=%s cluster=%s detail=%s ts=%s source=%s outcome=%s' % (
-        _field(record.get('action', ''), 64), _field(record.get('user', ''), 128),
-        _field(record.get('target', ''), 256), _field(record.get('cluster_id', ''), 128),
-        _field(record.get('detail', ''), 2048), _field(record.get('ts', ''), 32),
-        _field(record.get('source', ''), 64), _field(record.get('outcome', ''), 16))
+    v1.2 line by position still finds every earlier key where it was.
+
+    The line is at most `max_bytes` (one datagram). A longer record has its
+    detail shortened first (then target, cluster, user, action), each marked
+    TRUNCATED_MARK — never ts, source or outcome. Cutting the encoded datagram
+    instead dropped exactly those, the last keys on the line, while the send
+    still reported success (WO-0006 F3: 2048 non-ASCII characters of detail are
+    12 KB of JSON)."""
+    values = {f: _field(record.get(f, ''), limit) for _, f, limit in _LINE_FIELDS}
+
+    def line():
+        return ' '.join('%s=%s' % (k, values[f]) for k, f, _ in _LINE_FIELDS)
+
+    for f in _SHRINK_ORDER:
+        over = len(line()) - max_bytes
+        if over <= 0:
+            break
+        room = max(len(json.dumps(TRUNCATED_MARK)), len(values[f]) - over)
+        values[f] = _fit(record.get(f, ''), room)
+    return line()
 
 
 def syslog_send(message, severity=SEV_INFO):
@@ -121,7 +171,12 @@ def syslog_send(message, severity=SEV_INFO):
     datagram was accepted, False otherwise (and says why in the app log)."""
     pri = _LOG_AUTHPRIV * 8 + severity
     data = ('<%d>%s[%d]: %s' % (pri, SYSLOG_IDENT, os.getpid(), message)).encode(
-        'utf-8', 'replace')[:_MAX_DATAGRAM]
+        'utf-8', 'replace')
+    if len(data) > _MAX_DATAGRAM:
+        # Not reached by an audit record (format_record fits its line to one
+        # datagram); said, not silent, if a caller ever sends more.
+        log.warning('audit syslog: a %d-byte message was cut to %d bytes', len(data), _MAX_DATAGRAM)
+        data = data[:_MAX_DATAGRAM]
     af_unix = getattr(socket, 'AF_UNIX', None)
     if af_unix is None:
         log.warning('audit syslog: this platform has no Unix sockets; record not sent')
@@ -185,12 +240,14 @@ def write_failed(record, exc, cfg=None):
     syslog instead" before the send was even tried, and said it again when the
     send then failed. With `cfg`, the failure is also noted beside the database
     for the Settings banner (write_failure_state)."""
-    if cfg is not None:
-        _note_write_failure(cfg, record, exc)
-    msg = 'action=%s reason=%s original: %s' % (
-        _field('AUDIT_WRITE_FAILED'), _field('%s: %s' % (type(exc).__name__, exc), 300),
-        format_record(record))
+    head = 'action=%s reason=%s original: ' % (
+        _field('AUDIT_WRITE_FAILED'), _field('%s: %s' % (type(exc).__name__, exc), 300))
+    msg = head + format_record(record, _MAX_MESSAGE - len(head))
     delivered = syslog_send(msg, SEV_CRIT)
+    if cfg is not None:
+        # AFTER the send, so the banner says where the record went rather
+        # than assuming the syslog took it (WO-0006).
+        _note_write_failure(cfg, record, exc, delivered)
     if delivered:
         log.critical('AUDIT_WRITE_FAILED: the audit database refused a record (%s: %s). '
                      'The record was sent to the host syslog instead: %s',
@@ -251,9 +308,10 @@ def _write_failure_doc(cfg, doc):
         log.warning('could not record the audit write failure state in %s: %s', path, exc)
 
 
-def _note_write_failure(cfg, record, exc):
+def _note_write_failure(cfg, record, exc, syslog_delivered):
     _write_failure_doc(cfg, {'failed_at': utc_ts(), 'action': str(record.get('action', ''))[:64],
-                             'reason': type(exc).__name__, 'recovered_at': None})
+                             'reason': type(exc).__name__, 'recovered_at': None,
+                             'syslog_delivered': bool(syslog_delivered)})
 
 
 def _note_success(cfg):
@@ -269,7 +327,9 @@ def _note_success(cfg):
 
 def write_failure_state(cfg):
     """The last audit write failure {failed_at, action, reason, recovered_at,
-    current}, or None when there has never been one."""
+    current, syslog_delivered}, or None when there has never been one.
+    syslog_delivered: True/False whether the host syslog accepted the
+    AUDIT_WRITE_FAILED copy; None for a state written before it was recorded."""
     try:
         with open(_failure_path(cfg), 'rb') as fh:
             doc = json.loads(fh.read(4096).decode('utf-8'))
@@ -280,6 +340,8 @@ def write_failure_state(cfg):
     out = {k: (str(doc[k])[:64] if doc.get(k) else None)
            for k in ('failed_at', 'action', 'reason', 'recovered_at')}
     out['current'] = out['recovered_at'] is None
+    sent = doc.get('syslog_delivered')
+    out['syslog_delivered'] = sent if isinstance(sent, bool) else None
     return out
 
 
@@ -432,7 +494,10 @@ OLD_TS_GLOB = ('[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] '
 #: recorded, and says so ("unrecorded") rather than guessing.
 ADDRESS_IN_TARGET = ('LOGIN', 'LOGIN_FAILED', 'LOGIN_REFUSED', 'LOGOUT', 'SESSION_EXPIRED')
 #: Old rows whose action word meant a failure. SYSTEM_APPLY_RESULT carried its
-#: state in the detail ("state=ok"); every other old action was a success.
+#: state in the detail ("state=ok"), and a failed SERVICE_RESTART_STEP said
+#: "FAILED" in its detail. Every OTHER old row is OUTCOME_UNRECORDED: v1.2
+#: recorded no outcome, and a step that failed was written like one that did
+#: not, so calling those rows a success would be a claim the record never made.
 FAILURE_ACTIONS = ('LOGIN_FAILED', 'LOGIN_REFUSED', 'SERVICE_RESTART_THROTTLED',
                    'SERVICE_RESTART_REFUSED')
 UNRECORDED_SOURCE = 'unrecorded'
@@ -454,7 +519,7 @@ def migrate_schema(cfg, db):
             "UPDATE audit_log SET ts = substr(ts, 1, 10) || 'T' || substr(ts, 12, 8) || 'Z' "
             'WHERE ts GLOB ?', (OLD_TS_GLOB,)).rowcount
         marks = ','.join('?' * len(ADDRESS_IN_TARGET))
-        backfilled = 0
+        backfilled = unrecorded = 0
         if 'source' in added:
             db.execute("UPDATE audit_log SET source = target WHERE source = '' AND action IN (%s)"
                        % marks, ADDRESS_IN_TARGET)
@@ -466,15 +531,19 @@ def migrate_schema(cfg, db):
             db.execute("UPDATE audit_log SET outcome = CASE WHEN detail LIKE '% state=ok %' "
                        "THEN 'success' ELSE 'failure' END "
                        "WHERE outcome = '' AND action = 'SYSTEM_APPLY_RESULT'")
-            db.execute("UPDATE audit_log SET outcome = 'success' WHERE outcome = ''")
+            db.execute("UPDATE audit_log SET outcome = 'failure' WHERE outcome = '' "
+                       "AND action = 'SERVICE_RESTART_STEP' AND detail LIKE '% FAILED %'")
+            unrecorded = db.execute("UPDATE audit_log SET outcome = ? WHERE outcome = ''",
+                                    (OUTCOME_UNRECORDED,)).rowcount
         record = None
         if added or rewritten:
             total = db.execute(_COUNT_SQL).fetchone()[0]
             detail = ('audit_log v1.3.0: columns added: %s; %d timestamp(s) rewritten to ISO 8601 '
-                      'UTC (Z); %d older row(s) have no recorded source (%s); outcome of older '
-                      'rows inferred from the action; %d row(s) in the table'
+                      'UTC (Z); %d older row(s) have no recorded source (%s); %d older row(s) '
+                      'have no recorded outcome (%s), the rest carry the outcome their record '
+                      'states; %d row(s) in the table'
                       % (', '.join(added) or 'none', rewritten, backfilled, UNRECORDED_SOURCE,
-                         total))
+                         unrecorded, OUTCOME_UNRECORDED, total))
             record = log_action(cfg, SYSTEM_SOURCE, 'AUDIT_SCHEMA_MIGRATED', 'audit_log',
                                 detail, '', db=db, source=SYSTEM_SOURCE)
         db.commit()
