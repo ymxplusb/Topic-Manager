@@ -66,6 +66,8 @@ APPLY_UNITS = {
     'time':   'topic-manager-apply-time.service',
     'nginx':  'topic-manager-apply-nginx.service',
     'tls':    'topic-manager-apply-tls.service',
+    # v1.3.0: measures the host for the compliance page; changes nothing.
+    'compliance': 'topic-manager-apply-compliance.service',
 }
 
 # Exactly the units the polkit rule authorises. Kept here as well so a route

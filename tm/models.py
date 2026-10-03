@@ -60,7 +60,21 @@ def _tighten(path, mode):
 def get_db(cfg):
     db_path = cfg.get('audit', {}).get('db_path', '/opt/topic-manager/data/tm.db')
     _ensure_db_file(db_path)
-    return sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path)
+    _refuse_extensions(conn)
+    return conn
+
+
+def _refuse_extensions(conn):
+    """SRG-APP-000141-DB-000093: no external executable may be loaded into
+    the database engine. Python builds sqlite3 with extension loading OFF, but
+    that is a default, not a decision; this states it on every connection the
+    application opens. An interpreter built without extension support has no
+    enable_load_extension at all, which is the same outcome (t17 asserts that
+    load_extension() is refused either way)."""
+    disable = getattr(conn, 'enable_load_extension', None)
+    if disable is not None:
+        disable(False)
 
 
 def init_db(cfg):
@@ -84,7 +98,9 @@ def init_db(cfg):
             action     TEXT    NOT NULL,
             target     TEXT    NOT NULL,
             detail     TEXT,
-            cluster_id TEXT
+            cluster_id TEXT,
+            source     TEXT    NOT NULL DEFAULT '',
+            outcome    TEXT    NOT NULL DEFAULT ''
         )
     ''')
     cur.execute('''
@@ -103,6 +119,22 @@ def init_db(cfg):
             ip_addr    TEXT
         )
     ''')
+    # v1.3.0 (DQ8): what a session row does not hold, beside it rather than in
+    # it, so the sessions table keeps the shape every earlier release (and every
+    # restore point) has. verified_at: when the directory last confirmed the
+    # user is in required_group (missing = the sign-in itself, created_at).
+    # verify_attempt_at: the last attempt, so an unreachable directory is asked
+    # at most once a minute per session. end_reason: why an administrator or a
+    # failed re-check ended it; the session row stays, expired, so its next
+    # request is told WHY.
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS session_meta (
+            id                TEXT PRIMARY KEY,
+            verified_at       TEXT,
+            verify_attempt_at TEXT,
+            end_reason        TEXT
+        )
+    ''')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user)')
     _fold_session_users(cur)
     # v1.2.0: retention prunes by age (tm/audit_retention.py). Without an index
@@ -110,7 +142,17 @@ def init_db(cfg):
     # is allowed to hold five million rows by default.
     cur.execute('CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts)')
     db.commit()
-    db.close()
+    # v1.3.0: source/outcome columns and ISO 8601 Z timestamps, in ONE
+    # transaction with its own audit row (tm/audit.migrate_schema). Imported
+    # here because tm.audit imports this module.
+    from . import audit
+    try:
+        record = audit.migrate_schema(cfg, db)
+    finally:
+        db.close()
+    if record:
+        audit.emit(record)
+
 
 
 def session_user_key(username):
@@ -151,13 +193,106 @@ def create_session(db, username, timeout_minutes, ip_addr=''):
     return sid
 
 
-def validate_session(db, sid):
+def validate_session(db, sid, absolute_hours=None):
     """Return username if session exists and is not expired, else None."""
+    user, _reason = session_state(db, sid, absolute_hours)
+    return user
+
+
+#: The reasons session_state gives for a session that is no longer valid.
+#: tm/routes.py writes the sentence into the SESSION_EXPIRED audit row
+#: (SRG-APP-000295: the condition that ended it).
+END_REASONS = {
+    'unknown':  'session no longer valid',
+    'idle':     'idle timeout',
+    'absolute': 'absolute session lifetime reached',
+}
+
+
+def session_state(db, sid, absolute_hours=None):
+    """(username, None) for a valid session, else (username or None, reason):
+    'unknown' (no such row), 'idle' (expires_at passed), 'absolute' (older
+    than `absolute_hours` since sign-in, however active), or the end_reason an
+    administrator or a failed group re-check recorded. The absolute limit is
+    measured from created_at, which no request ever moves."""
     row = db.execute(
-        'SELECT user FROM sessions WHERE id=? AND expires_at > ?',
-        (sid, _iso(_now()))
-    ).fetchone()
-    return row[0] if row else None
+        'SELECT s.user, s.created_at, s.expires_at, m.end_reason FROM sessions s '
+        'LEFT JOIN session_meta m ON m.id = s.id WHERE s.id=?', (sid,)).fetchone()
+    if not row:
+        return None, 'unknown'
+    user, created, expires, ended = row
+    now = _now()
+    if ended:
+        return user, ended
+    if absolute_hours and _parse(created) is not None \
+            and now - _parse(created) >= timedelta(hours=absolute_hours):
+        return user, 'absolute'
+    if expires <= _iso(now):
+        return user, 'idle'
+    return user, None
+
+
+def _parse(value):
+    try:
+        dt = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def session_absolute_end(db, sid, absolute_hours):
+    """When the session reaches its absolute lifetime (ISO 8601), or None."""
+    row = db.execute('SELECT created_at FROM sessions WHERE id=?', (sid,)).fetchone()
+    created = _parse(row[0]) if row else None
+    if created is None or not absolute_hours:
+        return None
+    return _iso(created + timedelta(hours=absolute_hours))
+
+
+def session_verification(db, sid):
+    """(verified_at, verify_attempt_at) as datetimes. A session never
+    re-checked was verified by its sign-in: verified_at is its created_at."""
+    row = db.execute(
+        'SELECT s.created_at, m.verified_at, m.verify_attempt_at FROM sessions s '
+        'LEFT JOIN session_meta m ON m.id = s.id WHERE s.id=?', (sid,)).fetchone()
+    if not row:
+        return None, None
+    return _parse(row[1] or row[0]), _parse(row[2])
+
+
+def mark_verified(db, sid, ok):
+    """Record a group re-check: ok moves verified_at and the attempt time,
+    a failed attempt (directory unreachable) moves the attempt time only."""
+    now = _iso(_now())
+    db.execute('INSERT OR IGNORE INTO session_meta (id) VALUES (?)', (sid,))
+    if ok:
+        db.execute('UPDATE session_meta SET verified_at=?, verify_attempt_at=? WHERE id=?',
+                   (now, now, sid))
+    else:
+        db.execute('UPDATE session_meta SET verify_attempt_at=? WHERE id=?', (now, sid))
+    db.commit()
+
+
+def end_sessions(db, reason, user=None, keep_sid=None, commit=True):
+    """End every active session (of `user`, when given), except `keep_sid`:
+    each is expired NOW with `reason` recorded, so its next request is refused
+    and audited with that reason. Returns how many were ended. commit=False
+    leaves the change in the caller's transaction (with its audit row)."""
+    now = _iso(_now())
+    where = ('expires_at > ? AND id != ? AND id NOT IN '
+             '(SELECT id FROM session_meta WHERE end_reason IS NOT NULL)')
+    args = [now, keep_sid or '']
+    if user is not None:
+        where += ' AND user = ?'
+        args.append(session_user_key(user))
+    ids = [r[0] for r in db.execute('SELECT id FROM sessions WHERE ' + where, args).fetchall()]
+    for sid in ids:
+        db.execute('INSERT OR IGNORE INTO session_meta (id) VALUES (?)', (sid,))
+        db.execute('UPDATE session_meta SET end_reason=? WHERE id=?', (str(reason)[:200], sid))
+        db.execute('UPDATE sessions SET expires_at=? WHERE id=?', (now, sid))
+    if commit:
+        db.commit()
+    return len(ids)
 
 
 def touch_session(db, sid, timeout_minutes):
@@ -173,6 +308,7 @@ def touch_session(db, sid, timeout_minutes):
 
 def delete_session(db, sid):
     db.execute('DELETE FROM sessions WHERE id=?', (sid,))
+    db.execute('DELETE FROM session_meta WHERE id=?', (sid,))
     db.commit()
 
 
@@ -184,14 +320,32 @@ def count_active_sessions(db, username):
     return row[0] if row else 0
 
 
-def list_active_sessions(db, username):
+def session_handle(sid):
+    """What a session is called OUTSIDE its own cookie. The id is a bearer
+    secret: the administrator's session list must never show one, or any
+    signed-in user could read another's id and replay it. A one-way digest
+    names it well enough to end it."""
+    import hashlib
+    return hashlib.sha256(str(sid).encode('utf-8')).hexdigest()[:16]
+
+
+def list_all_active_sessions(db):
+    """Every active session, newest activity first, by handle (never id)."""
     rows = db.execute(
-        'SELECT id, created_at, last_seen, ip_addr FROM sessions WHERE user=? AND expires_at > ? ORDER BY last_seen DESC',
-        (session_user_key(username), _iso(_now()))
-    ).fetchall()
-    return [{'id': r[0], 'created_at': r[1], 'last_seen': r[2], 'ip_addr': r[3]} for r in rows]
+        'SELECT id, user, created_at, last_seen, ip_addr FROM sessions '
+        'WHERE expires_at > ? ORDER BY last_seen DESC', (_iso(_now()),)).fetchall()
+    return [{'handle': session_handle(r[0]), 'user': r[1], 'created_at': r[2],
+             'last_seen': r[3], 'ip_addr': r[4] or ''} for r in rows]
+
+
+#: How long an expired session row is kept (v1.3.0). Long enough that the
+#: next request of a session ended by an administrator, a group re-check or the
+#: idle clock is told WHY (session_state) rather than "unknown"; the rows are
+#: never counted as active (every count filters on expires_at).
+EXPIRED_KEEP = timedelta(hours=24)
 
 
 def cleanup_expired_sessions(db):
-    db.execute('DELETE FROM sessions WHERE expires_at <= ?', (_iso(_now()),))
+    db.execute('DELETE FROM sessions WHERE expires_at <= ?', (_iso(_now() - EXPIRED_KEEP),))
+    db.execute('DELETE FROM session_meta WHERE id NOT IN (SELECT id FROM sessions)')
     db.commit()

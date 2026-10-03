@@ -120,6 +120,53 @@ def validate_credentials(cfg, username, password):
     return True, _user_record(entry, sam, upn)
 
 
+# ── the periodic group re-check (v1.3.0, NGNX-APP-003330, DQ8) ────────────────
+# A session used to survive its user's removal from required_group (or the
+# account's deletion) until its idle timeout: the group was read at sign-in
+# and never again. tm/routes.require_auth now asks this every
+# GROUP_RECHECK_MINUTES per session. The verdicts:
+#   member       still in required_group (or no group is required)
+#   not_member   no longer in it                -> the session is ended
+#   not_found    the account is gone            -> the session is ended
+#   unavailable  the directory could not answer -> reads continue, every
+#                write is refused until it does (James 2026-10-02)
+#   unsupported  no service account is configured, so there is nothing to
+#                search with (the user's password is not kept). Reported on
+#                the compliance page; sessions still end at the absolute
+#                lifetime.
+GROUP_RECHECK_MINUTES = 15
+RECHECK_TIMEOUT_S = 5
+RECHECK_VERDICTS = ('member', 'not_member', 'not_found', 'unavailable', 'unsupported')
+
+
+def recheck_supported(cfg):
+    return _uses_service_bind(_auth_section(cfg)) and not missing_ldap_keys(cfg)
+
+
+def check_membership(cfg, username):
+    """(verdict, detail) for `username` now, by the service account. Never
+    raises: anything unexpected is 'unavailable', which refuses writes."""
+    if not recheck_supported(cfg):
+        return 'unsupported', 'no LDAP service account (auth.ldap_bind_dn) is configured'
+    auth_cfg = _auth_section(cfg)
+    try:
+        server = Server(auth_cfg['ldap_server'], get_info=None, tls=_build_tls(cfg), use_ssl=True,
+                        connect_timeout=RECHECK_TIMEOUT_S)
+        ok, err, conn = _ldap_bind(server, auth_cfg['ldap_bind_dn'],
+                                   auth_cfg['ldap_bind_password'], RECHECK_TIMEOUT_S)
+        if not ok:
+            return 'unavailable', 'service bind failed: %s' % err
+        entry, err = _ldap_search_user(conn, auth_cfg['ldap_base_dn'], _normalise_sam(username))
+    except Exception as exc:          # a socket error mid-search, a TLS failure
+        return 'unavailable', '%s: %s' % (type(exc).__name__, str(exc)[:200])
+    if entry is None:
+        return 'not_found', 'the account is no longer in the directory'
+    group = auth_cfg.get('required_group', '')
+    if group and group.lower() not in _member_of(entry):
+        return 'not_member', 'no longer a member of the required group'
+    return 'member', ''
+
+
 def _auth_section(cfg):
     auth_cfg = cfg.get('auth', {}) or {}
     return auth_cfg if isinstance(auth_cfg, dict) else {}
@@ -169,10 +216,13 @@ def _normalise_sam(username):
     return username.lower()
 
 
-def _ldap_bind(server, user, password):
+def _ldap_bind(server, user, password, receive_timeout=None):
+    # A bounded read only where one is asked for (the re-check, which runs
+    # inside a request); sign-in keeps ldap3's own defaults.
+    extra = {'receive_timeout': receive_timeout} if receive_timeout else {}
     try:
         conn = Connection(server, user=user, password=password,
-                          authentication=SIMPLE, auto_bind=True)
+                          authentication=SIMPLE, auto_bind=True, **extra)
         return True, None, conn
     except LDAPBindError:
         return False, 'Invalid credentials', None

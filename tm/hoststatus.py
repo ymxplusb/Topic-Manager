@@ -163,7 +163,33 @@ def tls_status():
         cert, count = tls_check.describe_installed(data)
     except (OSError, tls_check.CertInvalid):
         pass
+    cert = cert or {'subject': '', 'issuer': '', 'not_after': None, 'key_type': 'unknown',
+                    'sans': []}
+    issuer = issuer_status(cert)
     return {'protocols': protocols, 'ciphers': ciphers, 'fips_mode': fips_mode(),
-            'cert': cert or {'subject': '', 'issuer': '', 'not_after': None,
-                             'key_type': 'unknown', 'sans': []},
-            'chain_present': count > 1}
+            'cert': cert, 'chain_present': count > 1,
+            'self_signed': issuer['self_signed'], 'issuer_warning': issuer['warning']}
+
+
+#: NGNX-APP-001900 (v1.3.0, DQ4): the server certificate must come from a
+#: DoD-approved CA. Which CAs those are is the site's PKI and cannot be judged
+#: here, so the product WARNS about the case it can see — a self-signed
+#: certificate, which is what a fresh install serves until one is uploaded —
+#: and otherwise names the issuer for the operator to confirm.
+SELF_SIGNED_WARNING = ('The server certificate is self-signed (its issuer is its own subject). '
+                       'NGNX-APP-001900 requires a certificate issued by a DoD-approved '
+                       'certificate authority: replace it with one from your PKI below.')
+CONFIRM_ISSUER_NOTE = ('Confirm that the issuer is a DoD-approved certificate authority '
+                       '(NGNX-APP-001900). This product cannot judge which authorities '
+                       'your PKI approves.')
+
+
+def issuer_status(cert):
+    """{'self_signed': bool|None, 'warning': str}: None and an empty warning
+    when the certificate could not be read."""
+    subject, issuer = (cert or {}).get('subject') or '', (cert or {}).get('issuer') or ''
+    if not subject or not issuer:
+        return {'self_signed': None, 'warning': ''}
+    if subject == issuer:
+        return {'self_signed': True, 'warning': SELF_SIGNED_WARNING}
+    return {'self_signed': False, 'warning': CONFIRM_ISSUER_NOTE}

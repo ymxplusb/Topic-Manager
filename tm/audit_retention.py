@@ -47,8 +47,11 @@ def _now():
 
 
 def _ts(dt):
-    # The audit_log ts format (tm/audit.py), so string comparison is ordering.
-    return dt.strftime('%Y-%m-%d %H:%M:%S')
+    # The audit_log ts format (tm/audit.TS_FORMAT), so string comparison is
+    # ordering. Every stored row is in it: tm/audit.migrate_schema rewrote the
+    # pre-v1.3.0 rows in one transaction, and main() runs it (init_db) before
+    # anything is pruned.
+    return audit.utc_ts(dt)
 
 
 def _settings(db):
@@ -87,7 +90,7 @@ def prune(cfg, now=None):
             oldest = db.execute(_OLDEST_SQL).fetchone()[0]
             reasons = []
             if by_age:
-                reasons.append('%d older than %d days (before %s UTC)'
+                reasons.append('%d older than %d days (before %s)'
                                % (by_age, s['audit_retention_days'], cutoff))
             if by_rows:
                 reasons.append('%d beyond the %d-row limit'
@@ -95,7 +98,7 @@ def prune(cfg, now=None):
             detail = 'deleted %d: %s; oldest kept %s' % (
                 by_age + by_rows, '; '.join(reasons), oldest or '(none)')
             record = audit.log_action(cfg, SYSTEM_USER, 'AUDIT_PRUNE', 'audit_log',
-                                      detail, '', db=db)
+                                      detail, '', db=db, source=audit.SYSTEM_SOURCE)
         db.execute('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)',
                    (LAST_PRUNE_KEY, now.isoformat()))
         db.commit()
@@ -134,11 +137,11 @@ def _free_bytes(path):
 
 
 def _iso(ts):
-    """An audit ts ('YYYY-MM-DD HH:MM:SS', UTC) as ISO 8601, or None."""
+    """An audit ts (tm/audit.TS_FORMAT, UTC) as ISO 8601, or None."""
     if not ts:
         return None
     try:
-        return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S').replace(
+        return datetime.strptime(ts, audit.TS_FORMAT).replace(
             tzinfo=timezone.utc).isoformat()
     except ValueError:
         return None
@@ -165,7 +168,10 @@ def capacity(cfg, record_crossing=True):
     doc = {'rows': rows, 'max_rows': s['audit_max_rows'], 'oldest': _iso(oldest),
            'retention_days': s['audit_retention_days'], 'pct': pct,
            'warn_pct': s['audit_warn_pct'], 'warning': warning,
-           'last_prune': last_prune}
+           'last_prune': last_prune,
+           # v1.3.0 (SRG-APP-000360): the last audit write failure, for the
+           # banner; None when there has never been one.
+           'write_failure': audit.write_failure_state(cfg)}
     if record_crossing:
         _record_crossing(cfg, warning, doc, pct_rows, pct_disk)
     return doc
@@ -190,7 +196,7 @@ def _record_crossing(cfg, warning, doc, pct_rows, pct_disk):
                       'warning threshold %d%%' % (doc['pct'], pct_rows, doc['max_rows'],
                                                     pct_disk, doc['warn_pct']))
             record = audit.log_action(cfg, SYSTEM_USER, 'AUDIT_CAPACITY_WARNING',
-                                      'audit_log', detail, '', db=db)
+                                      'audit_log', detail, '', db=db, source=audit.SYSTEM_SOURCE)
         db.commit()
     except Exception:
         db.rollback()

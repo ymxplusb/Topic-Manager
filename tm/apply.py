@@ -47,8 +47,13 @@ from .models import get_db, init_db
 
 log = logging.getLogger(__name__)
 
-APPLY_DOMAINS = ('syslog', 'time', 'nginx')          # POST /api/system/apply/<d>
-STATUS_DOMAINS = APPLY_DOMAINS + ('tls',)            # GET  /api/system/apply/<d>
+APPLY_DOMAINS = ('syslog', 'time', 'nginx')          # settings applied to the host
+#: v1.3.0 (DQ3): the root helper MEASURES the host for the compliance page and
+#: changes nothing. Requested like an apply (POST, staged, one fixed unit,
+#: audited), carries no settings, and its verdict holds the measured checks.
+CHECK_DOMAINS = ('compliance',)
+REQUEST_DOMAINS = APPLY_DOMAINS + CHECK_DOMAINS      # POST /api/system/apply/<d>
+STATUS_DOMAINS = APPLY_DOMAINS + ('tls',) + CHECK_DOMAINS   # GET /api/system/apply/<d>
 STATES = ('idle', 'queued', 'running', 'ok', 'failed', 'rolled_back')
 FINAL_STATES = ('ok', 'failed', 'rolled_back')
 
@@ -134,8 +139,31 @@ def new_job():
 
 
 def domain_settings(db, domain):
+    if domain in CHECK_DOMAINS:
+        return {}               # a measurement carries no settings
     keys = settings_schema.DOMAIN_KEYS[domain]
     return settings_schema.read_admin(db, keys)
+
+
+#: What one measured check may carry into the app (the helper is root, but
+#: its result file is still parsed as untrusted input here).
+CHECK_STATUSES = ('pass', 'warn', 'fail', 'info', 'unknown')
+_CHECK_KEY_CHARS = frozenset('abcdefghijklmnopqrstuvwxyz0123456789_')
+
+
+def clean_checks(raw):
+    """The `checks` list of a compliance result, bounded and typed:
+    [{key, status, detail}], at most 64, unknown statuses as 'unknown'."""
+    out = []
+    for c in (raw if isinstance(raw, list) else [])[:64]:
+        if not isinstance(c, dict):
+            continue
+        key = str(c.get('key', ''))[:48]
+        if not key or not set(key) <= _CHECK_KEY_CHARS:
+            continue
+        status = c.get('status') if c.get('status') in CHECK_STATUSES else 'unknown'
+        out.append({'key': key, 'status': status, 'detail': str(c.get('detail', ''))[:500]})
+    return out
 
 
 def write_stage(cfg, domain, settings, user, files=None):
@@ -306,6 +334,8 @@ def _from_result(doc, res):
     doc.update(state=state, finished_at=res.get('finished_at'),
                message=str(res.get('message', ''))[:2000],
                details=[str(x)[:500] for x in (res.get('details') or [])][:50])
+    if 'checks' in res:
+        doc['checks'] = clean_checks(res.get('checks'))
     if 'job' in res:
         doc['job'] = res['job']
     return doc
@@ -320,6 +350,8 @@ def _pending(cfg, domain, last, doc):
     if final and final.get('job') == last.get('job') and final.get('state') in FINAL_STATES:
         doc.update(state=final['state'], finished_at=final.get('finished_at'),
                    message=str(final.get('message', '')), details=list(final.get('details') or []))
+        if 'checks' in final:
+            doc['checks'] = clean_checks(final.get('checks'))
         return doc
     if last.get('start_error'):
         doc.update(state='failed', message='the apply unit could not be started: %s'
@@ -367,8 +399,11 @@ def audit_result(cfg, domain):
         detail = 'job=%s state=%s step=%s: %s' % (
             job, res.get('state'), str(res.get('step', ''))[:40],
             str(res.get('message', ''))[:300])
+        # The helper did this, not whoever happened to be polling: the source
+        # is the system, and the outcome is the helper's own verdict.
         records.append(audit.log_action(cfg, by, 'SYSTEM_APPLY_RESULT', domain, detail,
-                                        '', db=db))
+                                        '', db=db, source=audit.SYSTEM_SOURCE,
+                                        outcome='success' if res.get('state') == 'ok' else 'failure'))
         # The verdict itself, kept: the result file is on /run and a reboot
         # would otherwise turn a finished job back into "queued".
         db.execute(_UPSERT_SETTING,
@@ -376,7 +411,8 @@ def audit_result(cfg, domain):
                        'job': job, 'state': res.get('state'),
                        'finished_at': res.get('finished_at'),
                        'message': str(res.get('message', ''))[:2000],
-                       'details': [str(x)[:500] for x in (res.get('details') or [])][:50]},
+                       'details': [str(x)[:500] for x in (res.get('details') or [])][:50],
+                       **({'checks': clean_checks(res.get('checks'))} if 'checks' in res else {})},
                        sort_keys=True)))
         done = res.get('applied')
         if res.get('state') == 'ok' and isinstance(done, dict):
@@ -390,7 +426,7 @@ def audit_result(cfg, domain):
                 cfg, by, 'TLS_CERT_REPLACED', 'nginx server certificate',
                 ('job=%s key_type=%s not_after=%s chain=%s'
                  % (job, cert.get('key_type', '?'), cert.get('not_after', '?'),
-                    cert.get('chain_count', '?')))[:400], '', db=db))
+                    cert.get('chain_count', '?')))[:400], '', db=db, source=audit.SYSTEM_SOURCE))
         db.commit()
     except Exception:
         db.rollback()
@@ -428,7 +464,7 @@ def _cli_seed(cfg, pairs, by):
         if not sep:
             raise SystemExit('seed: expected key=value, got %r' % p)
         try:
-            values[k] = settings_schema.normalise(k, v)
+            values[k] = settings_schema.normalise_seed(k, v)
         except settings_schema.InvalidSetting as exc:
             raise SystemExit('seed: %s' % exc)
     if not values:
@@ -439,7 +475,8 @@ def _cli_seed(cfg, pairs, by):
         for k, v in values.items():
             db.execute(_UPSERT_SETTING, (k, v))
         detail = 'changed: %s' % '; '.join('%s -> %r' % (k, v) for k, v in sorted(values.items()))
-        rec = audit.log_action(cfg, by, 'SETTINGS_UPDATE', 'app_settings', detail[:500], '', db=db)
+        rec = audit.log_action(cfg, by, 'SETTINGS_UPDATE', 'app_settings', detail[:500], '', db=db,
+                               source=audit.SYSTEM_SOURCE)
         db.commit()
     except Exception:
         db.rollback()
@@ -463,7 +500,8 @@ def _cli_stage(cfg, domains, by):
             raise SystemExit('stage %s: %s' % (domain, '; '.join(problems)))
         job = write_stage(cfg, domain, vals, by)
         try:
-            audit.log_action(cfg, by, 'SYSTEM_APPLY_REQUESTED', domain, 'job=%s' % job)
+            audit.log_action(cfg, by, 'SYSTEM_APPLY_REQUESTED', domain, 'job=%s' % job,
+                             source=audit.SYSTEM_SOURCE)
         except audit.AuditUnavailable as exc:
             # The request is withdrawn: a change whose audit record cannot be
             # written does not happen, whoever asks for it.

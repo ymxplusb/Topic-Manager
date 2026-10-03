@@ -34,6 +34,9 @@ ADMIN_DEFAULTS = {
     'syslog_app_id':           'topic-manager',
     'ntp_servers':             '',
     'session_max_concurrent':  '3',
+    # v1.3.0 (SRG-APP-000295, DQ8): hours from sign-in after which a session
+    # ends however active it is. Organisation-defined; 12 by ruling.
+    'session_absolute_hours':  '12',
     'ratelimit_login_per_min': '10',
     'ratelimit_login_burst':   '5',
     'ratelimit_api_per_min':   '300',
@@ -61,6 +64,7 @@ DOMAIN_KEYS = {
 _INT_RANGES = {
     'syslog_port':             (1, 65535),
     'session_max_concurrent':  (0, 50),
+    'session_absolute_hours':  (1, 24),
     'ratelimit_login_per_min': (1, 600),
     'ratelimit_login_burst':   (0, 100),
     'ratelimit_api_per_min':   (10, 6000),
@@ -224,6 +228,53 @@ _KEY_VALIDATORS = {
     'syslog_host':     _norm_host,
     'ntp_servers':     _norm_ntp,
 }
+
+
+# ── the consent notice (v1.3.0, NGNX-APP-000180, DQ9) ───────────────────────
+# Two PUBLIC settings (the sign-in page reads them before anyone has signed
+# in), each with a validator: dow_enabled switches the notice on, dow_text is
+# an operator-supplied replacement for the standard DoD wording ("keep a custom
+# selection panel in case DoD needs to change", James). Empty dow_text = the
+# standard wording built into the sign-in page. They are NOT administrator
+# keys (ADMIN_KEYS is never published) and are validated here so that PUT
+# /api/settings, the installer's seed and the sign-in gate agree.
+CONSENT_KEY = 'dow_enabled'
+CONSENT_TEXT_KEY = 'dow_text'
+CONSENT_TEXT_MAX = 4000
+_CONSENT_TEXT_BAD = re.compile(r'[\x00-\x09\x0b-\x1f\x7f-\x9f\u2028\u2029]')
+
+
+def _norm_consent_text(key, text):
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    if len(text) > CONSENT_TEXT_MAX:
+        raise InvalidSetting(key, 'at most %d characters' % CONSENT_TEXT_MAX)
+    if _CONSENT_TEXT_BAD.search(text):
+        raise InvalidSetting(key, 'no control characters (line breaks are allowed)')
+    return text
+
+
+PUBLIC_VALIDATORS = {
+    CONSENT_KEY: _norm_bool,
+    CONSENT_TEXT_KEY: _norm_consent_text,
+}
+
+
+def normalise_public(key, value):
+    """The stored form of a validated PUBLIC setting, or InvalidSetting."""
+    if key not in PUBLIC_VALIDATORS:
+        raise InvalidSetting(key, 'not a validated public setting')
+    if isinstance(value, str) and key == CONSENT_TEXT_KEY:
+        return _norm_consent_text(key, value.strip())
+    return PUBLIC_VALIDATORS[key](key, _as_text(key, value))
+
+
+def normalise_seed(key, value):
+    """What the installer may seed (python -m tm.apply seed): every
+    administrator setting, and the consent switch (install.sh turns it ON on a
+    fresh install unless --no-consent-banner)."""
+    if key == CONSENT_KEY:
+        return normalise_public(key, value)
+    return normalise(key, value)
 
 
 def int_setting(values, key):
