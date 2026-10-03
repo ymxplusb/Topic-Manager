@@ -1,0 +1,29 @@
+{
+ "_doc": "Engine provenance attestations (check-engine-provenance.py). A row counts only when wo, approved_by, date and authored_by are all non-empty; approved_by null = PENDING, deliberately not counted.",
+ "attested": [
+  {
+   "wo": "WO-0006",
+   "seat": "ai-panel (design questions DQ1-DQ10, /decide)",
+   "engine": "deepseek-coder-v2:16b (Luna2024, restricted origin CN)",
+   "role": "ADVISORY ONLY - may advise, may not author",
+   "outcome": "NOT REACHED: Luna2024 192.168.50.183 TCP 11434, 11435 and 22 all timed out 2026-10-02; no prompt was sent, no advice received",
+   "authored": "nothing",
+   "authored_by": "claude",
+   "date": "2026-10-02",
+   "approved_by": "James (via /decide ruling 2026-10-02)",
+   "approval_status": "APPROVED 2026-10-02 by James: the seat was SILENT on both runs, advised and authored nothing; rulings came from Claude, Gemini and Codex."
+  },
+  {
+   "wo": "WO-0006",
+   "seat": "ai-panel run 2 (re-ask DQ1/DQ4/DQ5/DQ7/DQ8, /decide)",
+   "engine": "deepseek-coder-v2:16b (Luna2024, restricted origin CN)",
+   "role": "ADVISORY ONLY - may advise, may not author",
+   "outcome": "SILENT: Luna2024 192.168.50.183 TCP 11434 single probe failed 2026-10-02; no prompt sent, no advice received",
+   "authored": "nothing",
+   "authored_by": "claude",
+   "date": "2026-10-02",
+   "approved_by": "James (via /decide ruling 2026-10-02)",
+   "approval_status": "APPROVED 2026-10-02 by James: the seat was SILENT on both runs, advised and authored nothing; rulings came from Claude, Gemini and Codex."
+  }
+ ]
+}

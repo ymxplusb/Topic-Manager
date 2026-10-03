@@ -934,3 +934,18 @@ principles:
   - "Topic create/delete reaches the production Jarvis Kafka cluster. Treat every
      write path as production-affecting."
   - "No agent holds a deploy verb for this project. Deployment is operator-run."
+
+# ── engine policy (house standard, copied verbatim from codex-registry/cortex-prod 2026-10-02) ──
+# Read by ~/.claude/skills/decide/scripts/check-engine-provenance.py at /decide and /assure.
+engine_policy:
+  allowed:
+    claude: {may_author: true, origin: US}
+    codex: {may_author: true, origin: US}
+    gpt-oss: {may_author: true, origin: US}
+    llama4: {may_author: true, origin: US}
+    gemini: {may_author: false, origin: US}
+    nemotron: {may_author: false, origin: US}
+    devstral: {may_author: false, origin: FR}
+  restricted:
+    qwen3-coder: {may_author: false, origin: CN, requires_human_approval: true}
+    deepseek-coder-v2: {may_author: false, origin: CN, requires_human_approval: true}
