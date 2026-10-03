@@ -46,6 +46,7 @@ declare -A TARGET_PATH=(
   [loginview]="${TM_REPO_ROOT}/app/components/LoginView.js"
   [sonar]="${TM_REPO_ROOT}/tools/sonar-local.sh"
   [surfaces]="${TM_REPO_ROOT}/tools/check-version-surfaces.sh"
+  [settings]="${TM_REPO_ROOT}/app/components/SettingsTab.js"
 )
 declare -A TARGET_ENV=(
   [upgrade]="TM_UPGRADE_SH"
@@ -56,6 +57,7 @@ declare -A TARGET_ENV=(
   [loginview]="TM_LOGINVIEW_JS"
   [sonar]="TM_SONAR_LOCAL"
   [surfaces]="TM_VERSION_SURFACES"
+  [settings]="TM_SETTINGS_SOURCE"
 )
 # v1.2.0: a Python module is named TARGET|py:<module> (tm/<module>.py). The
 # harness copies the whole tm/ package into the scratch directory, mutates the

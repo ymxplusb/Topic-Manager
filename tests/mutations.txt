@@ -4078,3 +4078,1109 @@ TARGET|install
 EQUIV|no
 ANCHOR|os.fchmod(fd, mode)
 REPLACE|pass
+
+# ─── v1.2.1 (WO-0005): quiet apply panes (t30 quiet) and REG-0031 (t47) ─────
+# Mechanical: every line of settingsApplyView/settingsStatusGlyph and the notice
+# plumbing (comparison flipped, guard inverted/neutralised, constant changed,
+# result discarded, line deleted), and for each of the five apply-status blocks
+# every line put back to its v1.2.0 binding and every v-if removed. The nginx
+# blocks are identical, so their anchors start at the section message above.
+--- M521
+DESC|v1.2.1 settings: the quiet set no longer holds ok
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|const SETTINGS_QUIET_STATES = new Set(['idle', 'ok']);
+REPLACE|const SETTINGS_QUIET_STATES = new Set(['idle']);
+
+--- M522
+DESC|v1.2.1 settings: the quiet set no longer holds idle
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|const SETTINGS_QUIET_STATES = new Set(['idle', 'ok']);
+REPLACE|const SETTINGS_QUIET_STATES = new Set(['ok']);
+
+--- M523
+DESC|v1.2.1 settings: the quiet-state guard is inverted
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    if (SETTINGS_QUIET_STATES.has(job.state)) {
+REPLACE|    if (!SETTINGS_QUIET_STATES.has(job.state)) {
+
+--- M524
+DESC|v1.2.1 settings: the quiet-state guard is neutralised (every state is shown)
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    if (SETTINGS_QUIET_STATES.has(job.state)) {
+REPLACE|    if (false) {
+
+--- M525
+DESC|v1.2.1 settings: a settled success shows Applied without a user apply
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        return justApplied ? { ...SETTINGS_APPLY_NOTHING, state: 'ok', title: '✓ Applied.' } : SETTINGS_APPLY_NOTHING;
+REPLACE|        return true ? { ...SETTINGS_APPLY_NOTHING, state: 'ok', title: '✓ Applied.' } : SETTINGS_APPLY_NOTHING;
+
+--- M526
+DESC|v1.2.1 settings: a user apply success shows nothing
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        return justApplied ? { ...SETTINGS_APPLY_NOTHING, state: 'ok', title: '✓ Applied.' } : SETTINGS_APPLY_NOTHING;
+REPLACE|        return false ? { ...SETTINGS_APPLY_NOTHING, state: 'ok', title: '✓ Applied.' } : SETTINGS_APPLY_NOTHING;
+
+--- M527
+DESC|v1.2.1 settings: the success line is the old verbose state word
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        return justApplied ? { ...SETTINGS_APPLY_NOTHING, state: 'ok', title: '✓ Applied.' } : SETTINGS_APPLY_NOTHING;
+REPLACE|        return justApplied ? { ...SETTINGS_APPLY_NOTHING, state: 'ok', title: '✓ ok' } : SETTINGS_APPLY_NOTHING;
+
+--- M528
+DESC|v1.2.1 settings: the success line loses its state colour
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        return justApplied ? { ...SETTINGS_APPLY_NOTHING, state: 'ok', title: '✓ Applied.' } : SETTINGS_APPLY_NOTHING;
+REPLACE|        return justApplied ? { ...SETTINGS_APPLY_NOTHING, state: null, title: '✓ Applied.' } : SETTINGS_APPLY_NOTHING;
+
+--- M529
+DESC|v1.2.1 settings: a quiet pane returns the success view instead of nothing
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        return justApplied ? { ...SETTINGS_APPLY_NOTHING, state: 'ok', title: '✓ Applied.' } : SETTINGS_APPLY_NOTHING;
+REPLACE|        return justApplied ? { ...SETTINGS_APPLY_NOTHING, state: 'ok', title: '✓ Applied.' } : { ...SETTINGS_APPLY_NOTHING, state: 'ok', title: '✓ Applied.' };
+
+--- M530
+DESC|v1.2.1 settings: the failed test is inverted
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    const failed = SETTINGS_FAILED_STATES.has(job.state);
+REPLACE|    const failed = !SETTINGS_FAILED_STATES.has(job.state);
+
+--- M531
+DESC|v1.2.1 settings: every shown state counts as failed (job + details on running/unknown)
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    const failed = SETTINGS_FAILED_STATES.has(job.state);
+REPLACE|    const failed = true;
+
+--- M532
+DESC|v1.2.1 settings: no state counts as failed (a failure loses its job and details)
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    const failed = SETTINGS_FAILED_STATES.has(job.state);
+REPLACE|    const failed = false;
+
+--- M533
+DESC|v1.2.1 settings: the shown state loses its glyph
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        state: job.state, title: settingsStatusGlyph(job.state) + ' ' + job.state, message: job.message,
+REPLACE|        state: job.state, title: job.state, message: job.message,
+
+--- M534
+DESC|v1.2.1 settings: the shown state loses its message
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        state: job.state, title: settingsStatusGlyph(job.state) + ' ' + job.state, message: job.message,
+REPLACE|        state: job.state, title: settingsStatusGlyph(job.state) + ' ' + job.state, message: '',
+
+--- M535
+DESC|v1.2.1 settings: the shown state loses its colour
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        state: job.state, title: settingsStatusGlyph(job.state) + ' ' + job.state, message: job.message,
+REPLACE|        state: null, title: settingsStatusGlyph(job.state) + ' ' + job.state, message: job.message,
+
+--- M536
+DESC|v1.2.1 settings: the job id is shown for every state
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        job: failed ? job.job : '', details: failed ? job.details : [],
+REPLACE|        job: job.job, details: failed ? job.details : [],
+
+--- M537
+DESC|v1.2.1 settings: the job id is never shown
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        job: failed ? job.job : '', details: failed ? job.details : [],
+REPLACE|        job: '', details: failed ? job.details : [],
+
+--- M538
+DESC|v1.2.1 settings: details are shown for every state
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        job: failed ? job.job : '', details: failed ? job.details : [],
+REPLACE|        job: failed ? job.job : '', details: job.details,
+
+--- M539
+DESC|v1.2.1 settings: details are never shown
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        job: failed ? job.job : '', details: failed ? job.details : [],
+REPLACE|        job: failed ? job.job : '', details: [],
+
+--- M540
+DESC|v1.2.1 settings: the glyph test for ok is inverted
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    if (state === 'ok') return '✓';
+REPLACE|    if (state !== 'ok') return '✓';
+
+--- M541
+DESC|v1.2.1 settings: failed and pending glyphs are swapped
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    return SETTINGS_FAILED_STATES.has(state) ? '✕' : '!';
+REPLACE|    return SETTINGS_FAILED_STATES.has(state) ? '!' : '✕';
+
+--- M542
+DESC|v1.2.1 settings: the notices map is not initialised
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|            applyNotices: {},
+
+--- M543
+DESC|v1.2.1 settings: the notice test is inverted
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                .map(([domain, job]) => [domain, settingsApplyView(job, this.applyNotices[domain] === true)]));
+REPLACE|                .map(([domain, job]) => [domain, settingsApplyView(job, this.applyNotices[domain] !== true)]));
+
+--- M544
+DESC|v1.2.1 settings: every pane is treated as just applied
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                .map(([domain, job]) => [domain, settingsApplyView(job, this.applyNotices[domain] === true)]));
+REPLACE|                .map(([domain, job]) => [domain, settingsApplyView(job, true)]));
+
+--- M545
+DESC|v1.2.1 settings: no pane is ever treated as just applied
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                .map(([domain, job]) => [domain, settingsApplyView(job, this.applyNotices[domain] === true)]));
+REPLACE|                .map(([domain, job]) => [domain, settingsApplyView(job, false)]));
+
+--- M546
+DESC|v1.2.1 settings: messages are cleared only when the SAME group is selected
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|            if (id !== this.activeGroup) this.clearSettledMessages();
+REPLACE|            if (id === this.activeGroup) this.clearSettledMessages();
+
+--- M547
+DESC|v1.2.1 settings: messages are cleared on any selection, same group included
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|            if (id !== this.activeGroup) this.clearSettledMessages();
+REPLACE|            this.clearSettledMessages();
+
+--- M548
+DESC|v1.2.1 settings: messages are never cleared on a change of group
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|            if (id !== this.activeGroup) this.clearSettledMessages();
+
+--- M549
+DESC|v1.2.1 settings: a change of group keeps the Applied line
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|            this.applyNotices = {};
+
+--- M550
+DESC|v1.2.1 settings: a change of group clears failed saves and keeps Saved
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                if (message.startsWith('✓')) this.sectionMessages[section] = '';
+REPLACE|                if (!message.startsWith('✓')) this.sectionMessages[section] = '';
+
+--- M551
+DESC|v1.2.1 settings: a change of group clears a failed save too
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                if (message.startsWith('✓')) this.sectionMessages[section] = '';
+REPLACE|                this.sectionMessages[section] = '';
+
+--- M552
+DESC|v1.2.1 settings: a change of group clears no save message
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                if (message.startsWith('✓')) this.sectionMessages[section] = '';
+
+--- M553
+DESC|v1.2.1 settings: a new run of the domain keeps the old Applied line
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|            delete this.applyNotices[domain];
+
+--- M554
+DESC|v1.2.1 settings: a status check (no apply) shows Applied
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                if (options && job.state === 'ok') this.applyNotices[domain] = true;
+REPLACE|                if (job.state === 'ok') this.applyNotices[domain] = true;
+
+--- M555
+DESC|v1.2.1 settings: the notice is set on a non-ok settle
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                if (options && job.state === 'ok') this.applyNotices[domain] = true;
+REPLACE|                if (options && job.state !== 'ok') this.applyNotices[domain] = true;
+
+--- M556
+DESC|v1.2.1 settings: the notice is set for any user apply, whatever it settled as
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                if (options && job.state === 'ok') this.applyNotices[domain] = true;
+REPLACE|                if (options) this.applyNotices[domain] = true;
+
+--- M557
+DESC|v1.2.1 settings: the notice is never set
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                if (options && job.state === 'ok') this.applyNotices[domain] = true;
+
+--- M558
+DESC|v1.2.1 settings: [nginx-rate pane] data-state bound to the raw job state again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.nginx.state">
+
+--- M559
+DESC|v1.2.1 settings: [nginx-rate pane] the title element renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong>{{ applyViews.nginx.title }}</strong>
+
+--- M560
+DESC|v1.2.1 settings: [nginx-rate pane] the title is the raw job state again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong>{{ statusGlyph(applyJobs.nginx.state) }} {{ applyJobs.nginx.state }}</strong>
+
+--- M561
+DESC|v1.2.1 settings: [nginx-rate pane] the message element renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+ANCHOR|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|      <span>{{ applyViews.nginx.message }}</span>
+
+--- M562
+DESC|v1.2.1 settings: [nginx-rate pane] the message is the raw job message again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+ANCHOR|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|      <span v-if="applyJobs.nginx.message">{{ applyJobs.nginx.message }}</span>
+
+--- M563
+DESC|v1.2.1 settings: [nginx-rate pane] the job line renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+ANCHOR|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+ANCHOR|      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+REPLACE|      <span>Job: {{ applyViews.nginx.job }}</span>
+
+--- M564
+DESC|v1.2.1 settings: [nginx-rate pane] the job id is the raw job id again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+ANCHOR|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+ANCHOR|      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+REPLACE|      <span v-if="applyJobs.nginx.job">Job: {{ applyJobs.nginx.job }}</span>
+
+--- M565
+DESC|v1.2.1 settings: [nginx-rate pane] the details list renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+ANCHOR|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+ANCHOR|      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+ANCHOR|      <ul v-if="applyViews.nginx.details.length"><li v-for="(detail, i) in applyViews.nginx.details" :key="i">{{ detail }}</li></ul>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+REPLACE|      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+REPLACE|      <ul><li v-for="(detail, i) in applyViews.nginx.details" :key="i">{{ detail }}</li></ul>
+
+--- M566
+DESC|v1.2.1 settings: [nginx-rate pane] the details are the raw job details again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+ANCHOR|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+ANCHOR|      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+ANCHOR|      <ul v-if="applyViews.nginx.details.length"><li v-for="(detail, i) in applyViews.nginx.details" :key="i">{{ detail }}</li></ul>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.rate }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+REPLACE|      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+REPLACE|      <ul v-if="applyJobs.nginx.details.length"><li v-for="(detail, i) in applyJobs.nginx.details" :key="i">{{ detail }}</li></ul>
+
+--- M567
+DESC|v1.2.1 settings: [nginx-redirect pane] data-state bound to the raw job state again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.nginx.state">
+
+--- M568
+DESC|v1.2.1 settings: [nginx-redirect pane] the title element renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong>{{ applyViews.nginx.title }}</strong>
+
+--- M569
+DESC|v1.2.1 settings: [nginx-redirect pane] the title is the raw job state again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong>{{ statusGlyph(applyJobs.nginx.state) }} {{ applyJobs.nginx.state }}</strong>
+
+--- M570
+DESC|v1.2.1 settings: [nginx-redirect pane] the message element renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+ANCHOR|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|      <span>{{ applyViews.nginx.message }}</span>
+
+--- M571
+DESC|v1.2.1 settings: [nginx-redirect pane] the message is the raw job message again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+ANCHOR|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|      <span v-if="applyJobs.nginx.message">{{ applyJobs.nginx.message }}</span>
+
+--- M572
+DESC|v1.2.1 settings: [nginx-redirect pane] the job line renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+ANCHOR|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+ANCHOR|      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+REPLACE|      <span>Job: {{ applyViews.nginx.job }}</span>
+
+--- M573
+DESC|v1.2.1 settings: [nginx-redirect pane] the job id is the raw job id again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+ANCHOR|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+ANCHOR|      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+REPLACE|      <span v-if="applyJobs.nginx.job">Job: {{ applyJobs.nginx.job }}</span>
+
+--- M574
+DESC|v1.2.1 settings: [nginx-redirect pane] the details list renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+ANCHOR|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+ANCHOR|      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+ANCHOR|      <ul v-if="applyViews.nginx.details.length"><li v-for="(detail, i) in applyViews.nginx.details" :key="i">{{ detail }}</li></ul>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+REPLACE|      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+REPLACE|      <ul><li v-for="(detail, i) in applyViews.nginx.details" :key="i">{{ detail }}</li></ul>
+
+--- M575
+DESC|v1.2.1 settings: [nginx-redirect pane] the details are the raw job details again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+ANCHOR|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+ANCHOR|    <div class="host-actions">
+ANCHOR|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+ANCHOR|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+ANCHOR|    </div>
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+ANCHOR|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+ANCHOR|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+ANCHOR|      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+ANCHOR|      <ul v-if="applyViews.nginx.details.length"><li v-for="(detail, i) in applyViews.nginx.details" :key="i">{{ detail }}</li></ul>
+REPLACE|    <p class="host-status" role="status">{{ sectionMessages.redirect }}</p>
+REPLACE|    <p class="host-note">Save changes first. Apply to host uses the saved settings.</p>
+REPLACE|    <div class="host-actions">
+REPLACE|      <button type="button" class="btn btn-sm" @click="applyToHost('nginx')" :disabled="!settingsLoaded || sectionSaving.rate || sectionSaving.redirect || applyJobs.nginx.busy || applyJobs.nginx.uncertain">Apply to host</button>
+REPLACE|      <button type="button" class="btn btn-sm" @click="runHostApply('nginx')" :disabled="applyJobs.nginx.busy">Check status</button>
+REPLACE|    </div>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.nginx.state">
+REPLACE|      <strong v-if="applyViews.nginx.title">{{ applyViews.nginx.title }}</strong>
+REPLACE|      <span v-if="applyViews.nginx.message">{{ applyViews.nginx.message }}</span>
+REPLACE|      <span v-if="applyViews.nginx.job">Job: {{ applyViews.nginx.job }}</span>
+REPLACE|      <ul v-if="applyJobs.nginx.details.length"><li v-for="(detail, i) in applyJobs.nginx.details" :key="i">{{ detail }}</li></ul>
+
+--- M576
+DESC|v1.2.1 settings: [tls pane] data-state bound to the raw job state again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.tls.state">
+
+--- M577
+DESC|v1.2.1 settings: [tls pane] the title element renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+ANCHOR|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+REPLACE|      <strong>{{ applyViews.tls.title }}</strong>
+
+--- M578
+DESC|v1.2.1 settings: [tls pane] the title is the raw job state again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+ANCHOR|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+REPLACE|      <strong>{{ statusGlyph(applyJobs.tls.state) }} {{ applyJobs.tls.state }}</strong>
+
+--- M579
+DESC|v1.2.1 settings: [tls pane] the message element renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+ANCHOR|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+ANCHOR|      <span v-if="applyViews.tls.message">{{ applyViews.tls.message }}</span>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+REPLACE|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+REPLACE|      <span>{{ applyViews.tls.message }}</span>
+
+--- M580
+DESC|v1.2.1 settings: [tls pane] the message is the raw job message again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+ANCHOR|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+ANCHOR|      <span v-if="applyViews.tls.message">{{ applyViews.tls.message }}</span>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+REPLACE|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+REPLACE|      <span v-if="applyJobs.tls.message">{{ applyJobs.tls.message }}</span>
+
+--- M581
+DESC|v1.2.1 settings: [tls pane] the job line renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+ANCHOR|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+ANCHOR|      <span v-if="applyViews.tls.message">{{ applyViews.tls.message }}</span>
+ANCHOR|      <span v-if="applyViews.tls.job">Job: {{ applyViews.tls.job }}</span>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+REPLACE|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+REPLACE|      <span v-if="applyViews.tls.message">{{ applyViews.tls.message }}</span>
+REPLACE|      <span>Job: {{ applyViews.tls.job }}</span>
+
+--- M582
+DESC|v1.2.1 settings: [tls pane] the job id is the raw job id again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+ANCHOR|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+ANCHOR|      <span v-if="applyViews.tls.message">{{ applyViews.tls.message }}</span>
+ANCHOR|      <span v-if="applyViews.tls.job">Job: {{ applyViews.tls.job }}</span>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+REPLACE|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+REPLACE|      <span v-if="applyViews.tls.message">{{ applyViews.tls.message }}</span>
+REPLACE|      <span v-if="applyJobs.tls.job">Job: {{ applyJobs.tls.job }}</span>
+
+--- M583
+DESC|v1.2.1 settings: [tls pane] the details list renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+ANCHOR|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+ANCHOR|      <span v-if="applyViews.tls.message">{{ applyViews.tls.message }}</span>
+ANCHOR|      <span v-if="applyViews.tls.job">Job: {{ applyViews.tls.job }}</span>
+ANCHOR|      <ul v-if="applyViews.tls.details.length"><li v-for="(detail, i) in applyViews.tls.details" :key="i">{{ detail }}</li></ul>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+REPLACE|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+REPLACE|      <span v-if="applyViews.tls.message">{{ applyViews.tls.message }}</span>
+REPLACE|      <span v-if="applyViews.tls.job">Job: {{ applyViews.tls.job }}</span>
+REPLACE|      <ul><li v-for="(detail, i) in applyViews.tls.details" :key="i">{{ detail }}</li></ul>
+
+--- M584
+DESC|v1.2.1 settings: [tls pane] the details are the raw job details again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+ANCHOR|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+ANCHOR|      <span v-if="applyViews.tls.message">{{ applyViews.tls.message }}</span>
+ANCHOR|      <span v-if="applyViews.tls.job">Job: {{ applyViews.tls.job }}</span>
+ANCHOR|      <ul v-if="applyViews.tls.details.length"><li v-for="(detail, i) in applyViews.tls.details" :key="i">{{ detail }}</li></ul>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.tls.state">
+REPLACE|      <strong v-if="applyViews.tls.title">{{ applyViews.tls.title }}</strong>
+REPLACE|      <span v-if="applyViews.tls.message">{{ applyViews.tls.message }}</span>
+REPLACE|      <span v-if="applyViews.tls.job">Job: {{ applyViews.tls.job }}</span>
+REPLACE|      <ul v-if="applyJobs.tls.details.length"><li v-for="(detail, i) in applyJobs.tls.details" :key="i">{{ detail }}</li></ul>
+
+--- M585
+DESC|v1.2.1 settings: [syslog pane] data-state bound to the raw job state again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.syslog.state">
+
+--- M586
+DESC|v1.2.1 settings: [syslog pane] the title element renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+ANCHOR|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+REPLACE|      <strong>{{ applyViews.syslog.title }}</strong>
+
+--- M587
+DESC|v1.2.1 settings: [syslog pane] the title is the raw job state again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+ANCHOR|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+REPLACE|      <strong>{{ statusGlyph(applyJobs.syslog.state) }} {{ applyJobs.syslog.state }}</strong>
+
+--- M588
+DESC|v1.2.1 settings: [syslog pane] the message element renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+ANCHOR|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+ANCHOR|      <span v-if="applyViews.syslog.message">{{ applyViews.syslog.message }}</span>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+REPLACE|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+REPLACE|      <span>{{ applyViews.syslog.message }}</span>
+
+--- M589
+DESC|v1.2.1 settings: [syslog pane] the message is the raw job message again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+ANCHOR|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+ANCHOR|      <span v-if="applyViews.syslog.message">{{ applyViews.syslog.message }}</span>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+REPLACE|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+REPLACE|      <span v-if="applyJobs.syslog.message">{{ applyJobs.syslog.message }}</span>
+
+--- M590
+DESC|v1.2.1 settings: [syslog pane] the job line renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+ANCHOR|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+ANCHOR|      <span v-if="applyViews.syslog.message">{{ applyViews.syslog.message }}</span>
+ANCHOR|      <span v-if="applyViews.syslog.job">Job: {{ applyViews.syslog.job }}</span>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+REPLACE|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+REPLACE|      <span v-if="applyViews.syslog.message">{{ applyViews.syslog.message }}</span>
+REPLACE|      <span>Job: {{ applyViews.syslog.job }}</span>
+
+--- M591
+DESC|v1.2.1 settings: [syslog pane] the job id is the raw job id again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+ANCHOR|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+ANCHOR|      <span v-if="applyViews.syslog.message">{{ applyViews.syslog.message }}</span>
+ANCHOR|      <span v-if="applyViews.syslog.job">Job: {{ applyViews.syslog.job }}</span>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+REPLACE|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+REPLACE|      <span v-if="applyViews.syslog.message">{{ applyViews.syslog.message }}</span>
+REPLACE|      <span v-if="applyJobs.syslog.job">Job: {{ applyJobs.syslog.job }}</span>
+
+--- M592
+DESC|v1.2.1 settings: [syslog pane] the details list renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+ANCHOR|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+ANCHOR|      <span v-if="applyViews.syslog.message">{{ applyViews.syslog.message }}</span>
+ANCHOR|      <span v-if="applyViews.syslog.job">Job: {{ applyViews.syslog.job }}</span>
+ANCHOR|      <ul v-if="applyViews.syslog.details.length"><li v-for="(detail, i) in applyViews.syslog.details" :key="i">{{ detail }}</li></ul>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+REPLACE|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+REPLACE|      <span v-if="applyViews.syslog.message">{{ applyViews.syslog.message }}</span>
+REPLACE|      <span v-if="applyViews.syslog.job">Job: {{ applyViews.syslog.job }}</span>
+REPLACE|      <ul><li v-for="(detail, i) in applyViews.syslog.details" :key="i">{{ detail }}</li></ul>
+
+--- M593
+DESC|v1.2.1 settings: [syslog pane] the details are the raw job details again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+ANCHOR|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+ANCHOR|      <span v-if="applyViews.syslog.message">{{ applyViews.syslog.message }}</span>
+ANCHOR|      <span v-if="applyViews.syslog.job">Job: {{ applyViews.syslog.job }}</span>
+ANCHOR|      <ul v-if="applyViews.syslog.details.length"><li v-for="(detail, i) in applyViews.syslog.details" :key="i">{{ detail }}</li></ul>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.syslog.state">
+REPLACE|      <strong v-if="applyViews.syslog.title">{{ applyViews.syslog.title }}</strong>
+REPLACE|      <span v-if="applyViews.syslog.message">{{ applyViews.syslog.message }}</span>
+REPLACE|      <span v-if="applyViews.syslog.job">Job: {{ applyViews.syslog.job }}</span>
+REPLACE|      <ul v-if="applyJobs.syslog.details.length"><li v-for="(detail, i) in applyJobs.syslog.details" :key="i">{{ detail }}</li></ul>
+
+--- M594
+DESC|v1.2.1 settings: [time pane] data-state bound to the raw job state again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyJobs.time.state">
+
+--- M595
+DESC|v1.2.1 settings: [time pane] the title element renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+ANCHOR|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+REPLACE|      <strong>{{ applyViews.time.title }}</strong>
+
+--- M596
+DESC|v1.2.1 settings: [time pane] the title is the raw job state again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+ANCHOR|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+REPLACE|      <strong>{{ statusGlyph(applyJobs.time.state) }} {{ applyJobs.time.state }}</strong>
+
+--- M597
+DESC|v1.2.1 settings: [time pane] the message element renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+ANCHOR|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+ANCHOR|      <span v-if="applyViews.time.message">{{ applyViews.time.message }}</span>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+REPLACE|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+REPLACE|      <span>{{ applyViews.time.message }}</span>
+
+--- M598
+DESC|v1.2.1 settings: [time pane] the message is the raw job message again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+ANCHOR|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+ANCHOR|      <span v-if="applyViews.time.message">{{ applyViews.time.message }}</span>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+REPLACE|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+REPLACE|      <span v-if="applyJobs.time.message">{{ applyJobs.time.message }}</span>
+
+--- M599
+DESC|v1.2.1 settings: [time pane] the job line renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+ANCHOR|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+ANCHOR|      <span v-if="applyViews.time.message">{{ applyViews.time.message }}</span>
+ANCHOR|      <span v-if="applyViews.time.job">Job: {{ applyViews.time.job }}</span>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+REPLACE|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+REPLACE|      <span v-if="applyViews.time.message">{{ applyViews.time.message }}</span>
+REPLACE|      <span>Job: {{ applyViews.time.job }}</span>
+
+--- M600
+DESC|v1.2.1 settings: [time pane] the job id is the raw job id again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+ANCHOR|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+ANCHOR|      <span v-if="applyViews.time.message">{{ applyViews.time.message }}</span>
+ANCHOR|      <span v-if="applyViews.time.job">Job: {{ applyViews.time.job }}</span>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+REPLACE|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+REPLACE|      <span v-if="applyViews.time.message">{{ applyViews.time.message }}</span>
+REPLACE|      <span v-if="applyJobs.time.job">Job: {{ applyJobs.time.job }}</span>
+
+--- M601
+DESC|v1.2.1 settings: [time pane] the details list renders with no v-if
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+ANCHOR|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+ANCHOR|      <span v-if="applyViews.time.message">{{ applyViews.time.message }}</span>
+ANCHOR|      <span v-if="applyViews.time.job">Job: {{ applyViews.time.job }}</span>
+ANCHOR|      <ul v-if="applyViews.time.details.length"><li v-for="(detail, i) in applyViews.time.details" :key="i">{{ detail }}</li></ul>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+REPLACE|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+REPLACE|      <span v-if="applyViews.time.message">{{ applyViews.time.message }}</span>
+REPLACE|      <span v-if="applyViews.time.job">Job: {{ applyViews.time.job }}</span>
+REPLACE|      <ul><li v-for="(detail, i) in applyViews.time.details" :key="i">{{ detail }}</li></ul>
+
+--- M602
+DESC|v1.2.1 settings: [time pane] the details are the raw job details again
+TESTS|t30-settings-v120.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+ANCHOR|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+ANCHOR|      <span v-if="applyViews.time.message">{{ applyViews.time.message }}</span>
+ANCHOR|      <span v-if="applyViews.time.job">Job: {{ applyViews.time.job }}</span>
+ANCHOR|      <ul v-if="applyViews.time.details.length"><li v-for="(detail, i) in applyViews.time.details" :key="i">{{ detail }}</li></ul>
+REPLACE|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.time.state">
+REPLACE|      <strong v-if="applyViews.time.title">{{ applyViews.time.title }}</strong>
+REPLACE|      <span v-if="applyViews.time.message">{{ applyViews.time.message }}</span>
+REPLACE|      <span v-if="applyViews.time.job">Job: {{ applyViews.time.job }}</span>
+REPLACE|      <ul v-if="applyJobs.time.details.length"><li v-for="(detail, i) in applyJobs.time.details" :key="i">{{ detail }}</li></ul>
+
+--- M603
+DESC|REG-0031: THE DEFECT: the success path disarms every EXIT handler again
+TESTS|t47-round6-lock-and-docs.sh
+EQUIV|no
+ANCHOR|trap 'result_line "$?"' EXIT   # verdict only: no rollback past this point
+REPLACE|trap - EXIT
+
+--- M604
+DESC|REG-0031: the success path re-arms the rollback handler
+TESTS|t47-round6-lock-and-docs.sh
+EQUIV|no
+ANCHOR|trap 'result_line "$?"' EXIT   # verdict only: no rollback past this point
+REPLACE|trap _on_exit EXIT
+
+--- M605
+DESC|REG-0031: the success path leaves the rollback handler armed
+TESTS|t47-round6-lock-and-docs.sh
+EQUIV|no
+ANCHOR|trap 'result_line "$?"' EXIT   # verdict only: no rollback past this point
+
+--- M606
+DESC|REG-0031: the success-path verdict always says 0
+TESTS|t47-round6-lock-and-docs.sh
+EQUIV|no
+ANCHOR|trap 'result_line "$?"' EXIT   # verdict only: no rollback past this point
+REPLACE|trap 'result_line 0' EXIT
+
+--- M607
+DESC|REG-0031: the success-path verdict is armed on ERR, not EXIT
+TESTS|t47-round6-lock-and-docs.sh
+EQUIV|no
+ANCHOR|trap 'result_line "$?"' EXIT   # verdict only: no rollback past this point
+REPLACE|trap 'result_line "$?"' ERR
