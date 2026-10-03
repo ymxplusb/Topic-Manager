@@ -1,0 +1,97 @@
+{
+  "id": "WO-0005",
+  "intent": "Topic Manager v1.2.1 patch: (1) Settings host-apply panes stop showing the last job's verdict, job id and details on every visit (James 2026-10-02, screenshot of Settings > System > Time source: 'the green text on every tab. We don't need that context.'): success/idle shows nothing, a user Apply that succeeds shows one transient line '✓ Applied.', failed/uncertain/running keep state + message (failures also details); section '✓ Saved.' messages transient the same way. (2) REG-0031: a successful full upgrade never printed its final 'RESULT: exit N' line. (3) version cascade to 1.2.1.",
+  "project": "Topic Manager",
+  "release": "patch",
+  "opened": "2026-10-02",
+  "status": "assuring",
+  "depends_on": "v1.2.0 (tag 2c4a267, LIVE on prod .90). Branch release/v1.2.1 from b869f63 (release/v1.2.0 records head) in worktree /Users/jamesrodman/Scripts/topic-manager-v121.",
+  "scout": {
+    "method": "NO independent scout pass. Scope and consumers were set by the coordinator's brief (James's ask + REG-0031's recorded root cause) and confirmed by the builder reading every touched site; recorded so the assure lane knows the scoping check was not independent.",
+    "blast_radius": "frontend (one component + one CSS rule) + the upgrade script's success-path trap; no backend, schema, dependency or host-file change",
+    "scope": [
+      "app/components/SettingsTab.js: the five apply-status blocks (nginx x2 ~L919/940, tls ~L975, syslog ~L1013, time ~L1096), sectionMessages, selectGroup, runHostApply",
+      "app/styles/main.css: .host-status",
+      "install/upgrade-full.sh:3252 success-path trap",
+      "tests/t30 + tests/lib/settings-v120-probe.js, tests/t47, tests/mutate.sh + tests/mutations.txt",
+      "every surface in project.yml surfaces (cascade) + CHANGELOG",
+      ".work/REGISTER.json REG-0031"
+    ],
+    "consumers": [
+      "applyJobs.<d>.state/message/job/details/applied: rendered ONLY by the five status blocks (grep of app/); statusGlyph() only by them",
+      "the t30 probe's integration scenario asserted the template binds applyJobs.<d>.job and applyJobs.tls.applied.<field> (the v1.2.0 render)",
+      "result_line/_on_exit: t01 (models the trap by hand), t47 (round-7 M1 case); M516-M518 anchor the two existing trap lines"
+    ]
+  },
+  "openproject": null,
+  "decisions": [
+    {
+      "by": "James",
+      "date": "2026-10-02",
+      "id": "quiet-apply-results",
+      "ruling": "success/idle shows nothing persistent; only right after the user's Apply succeeds, one line '✓ Applied.' (no job id, no details), cleared on group change or reload; failed/uncertain/running keep state + message (+ details for failures); a failure must never become silent; '✓ Saved.' the same."
+    }
+  ],
+  "builder": {
+    "by": "builder",
+    "date": "2026-10-02",
+    "worktree": "/Users/jamesrodman/Scripts/topic-manager-v121, branch release/v1.2.1 (base b869f63)",
+    "commits": [
+      "a2e2fbb fix (v1.2.1): Settings apply panes stop repeating the last success",
+      "07264b0 fix (v1.2.1): REG-0031 - a successful full upgrade ends with RESULT: exit 0",
+      "4a88bb7 tests (v1.2.1): mutation controls M521-M607; SettingsTab.js is a target",
+      "f4d5530 release: version cascade to 1.2.1",
+      "48fefec tests (v1.2.1): an apply that settles idle does not claim Applied"
+    ],
+    "root_cause": "(1) The five apply-status blocks bound applyJobs.<d> directly, and the page-open status check (runHostApply with no options) fills applyJobs with the LAST job's verdict, so every visit re-rendered that verdict, job id and details in green: the template had no notion of 'news' vs 'record'. (2) REG-0031: install/upgrade-full.sh's success path ran `trap - EXIT`, which removed the only handler that prints 'RESULT: exit <N>' (_on_exit had replaced result_line's trap), to keep a late failure from rolling back a finished upgrade.",
+    "files_changed": [
+      "app/components/SettingsTab.js: settingsApplyView()/settingsStatusGlyph() (module), applyNotices (data), applyViews (computed), clearSettledMessages() called from selectGroup on a real change of group, runHostApply clears the domain notice at start and sets it when a user apply settles ok; the five status blocks render applyViews only; the TLS block no longer repeats the certificate summary; PPSM Version row 1.2.1",
+      "app/styles/main.css: .host-status:empty { margin:0 } (empty pane takes no space, stays a live region); header 1.2.1",
+      "install/upgrade-full.sh: success path re-arms trap 'result_line \"$?\"' EXIT instead of trap - EXIT",
+      "tests/lib/settings-v120-probe.js: a renderer for the shipped status blocks (v-if, v-for, :data-state, {{ }}; refuses unknown directives) + scenario 'quiet' (84 assertions); integration scenario updated to the v1.2.1 bindings (79)",
+      "tests/t30-settings-v120.sh: quiet:84, integration:79, 10 cases",
+      "tests/t47-round6-lock-and-docs.sh: a-successful-full-upgrade-ends-with-result-exit-0",
+      "tests/mutate.sh: TARGET settings (TM_SETTINGS_SOURCE); tests/mutations.txt M521-M607",
+      "cascade: VERSION, tm/VERSION, PPSM.csv, install.sh, prepare-offline.sh, SBOM.md (version, serial, date), docs/INSTALL.md, README.md (title, health, + a paragraph on what an apply pane shows), index.html (14) + TopBar.js + AboutModal.js ?v=1201, CHANGELOG [1.2.1] - 2026-10-02, TROUBLESHOOTING (bundle note no longer v1.2.0-only)"
+    ],
+    "amendments": [],
+    "consumers_addressed": "3/3: all five status blocks moved to applyViews (no other renderer of applyJobs verdicts); t30 integration assertions updated (they pinned the v1.2.0 bindings); M516-M518 anchors still match once (the new trap line carries a comment) and were re-run RED. t01's hand-modelled success_trap_cleared scenario left as is: it models a cleared trap, not the script's line.",
+    "self_check": "bash -n upgrade-full.sh + t47; node --check SettingsTab.js (Linux, node 18); git diff re-read for the SettingsTab hazards: no apostrophe in a single-quoted literal, no backtick or ${ added inside the template, no && or < in a new attribute expression.",
+    "gates": {
+      "where": "Linux python:3.12-bookworm container on 192.168.202.81, git bundle --all of 48fefec (all 9 tags), CI TEST_SETUP (node v18.20.4); container --rm",
+      "test_command": "check-requirements-lock --require-online PASS (15 packages); tests/run.sh --strict 496 passed, 0 failed, 0 skipped, exit 0 (t08 16/0/0, t15 11/0/0, t30 10/0/0, t47 13/0/0)",
+      "python-syntax": "exit 0",
+      "shell-syntax": "exit 0",
+      "frontend-syntax": "exit 0",
+      "config-example": "exit 0",
+      "heredoc-python": "exit 0",
+      "sbom-consistency": "exit 0",
+      "sca": "exit 0",
+      "ppsm-consistency": "exit 0",
+      "pipefail-consumers": "exit 0",
+      "env-neutral": "exit 0",
+      "version-surfaces": "exit 0 (1.2.1, 16 tokens ?v=1201)",
+      "requirements-lock": "exit 0",
+      "sonar-local": "--base v1.2.0, head 48fefec: PASS exit 0, new_violations=0; 5 of 7 conditions judged and hold (new_violations, new_duplicated_lines_density, bugs, vulnerabilities, reliability_rating); new_security_hotspots_reviewed no value (nothing new); security_hotspots_reviewed KNOWN DIFFERENCE (not judged); S4502 tm/app.py:46 the known estate-reviewed hotspot. Indexed head 145 / base 145. Docker volumes 134 before and after, no sonar network or container left.",
+      "note": "the records commit after 48fefec touches only .work/ (export-ignored); the gates above ran on 48fefec"
+    },
+    "mutation_controls": {
+      "run1": "f4d5530: M521-M607, 87 run, 86 killed, 1 SURVIVED",
+      "survivors_found_and_closed": [
+        "M556 (the notice set for ANY user apply, whatever it settled as) SURVIVED: no case had a user apply settle on a non-ok state without throwing, so a stale 'Applied' over an 'idle' verdict was invisible. Closed by t30 quiet 'an apply that settles idle does not claim Applied' (48fefec); M556 re-run against a hand-built mutant: RED, then RED again in run2."
+      ],
+      "run2": "48fefec: M01-M05 + M516-M518 (pre-existing controls over the touched trap code) + M521-M607: 95 run, 95 killed, 0 survived, 0 aborted, 0 equivalents; every target sha256 unchanged",
+      "where": "tests/mutate.sh inside the same Linux container (tools/mutate.py does not exist in this repo; its mutate.sh/mutations.txt is the mechanical harness)",
+      "not_mutated": "app/styles/main.css (.host-status:empty): no test can see CSS; unproven until a render proof"
+    },
+    "not_done": [
+      "No render proof: the panes were not loaded in a browser (prod .90 and tm-qc were out of bounds). The t30 renderer evaluates the shipped template but is not Vue; the :empty collapse in particular is unverified.",
+      "Infra rows (SBOM/AboutModal) not re-measured: that needs prod .90. No component changed in this patch.",
+      "'Check status' that finds the host OK now shows nothing (per the ruling only Apply shows '✓ Applied.'); the button greys while it runs and that is the only feedback.",
+      "The Audit retention readout's '✓ Audit capacity below warning threshold.' (data-state ok, green) is not an apply result and was left as is; it is the one remaining green line on Logging.",
+      "OpenProject ticket not opened (brief: later). Not pushed, not tagged; promote.prod.running_version in the contract still says 1.1.1 (prod answers 1.2.0) - not measured here."
+    ],
+    "status": "ready for assure"
+  },
+  "stages": {}
+}

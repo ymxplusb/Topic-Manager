@@ -323,13 +323,15 @@
     {
       "id": "REG-0031",
       "severity": "Medium",
-      "status": "open",
+      "status": "fixed",
       "source": "prod deploy v1.2.0 on .90, 2026-09-30",
       "finding": "The FULL online upgrade (upgrade-full.sh with --repo-url, no --audit-only/--backup-only) does not print the final 'RESULT: exit N' line promised by round 7 (M1); --audit-only and --backup-only do. README/INSTALL tell the operator to read `tail -n 1` of the log, which on the full run shows the Rollback line instead.",
       "where": "install/upgrade-full.sh (the full-run exit path after the post-upgrade checklist)",
       "repro": "prod .90: /root/tm-upgrade-1.2.0-full.log ends with 'Rollback: sudo bash /root/tm-v1.2.0/install/upgrade-full.sh --restore 20260930-033204', no RESULT line; t47 covers the doc/script agreement but not this exit path.",
       "closes_when": "a t47 case runs the full-upgrade exit path and asserts the last line is RESULT: exit 0",
-      "root_cause": "install/upgrade-full.sh:3252 `trap - EXIT` on the success path disables the handler that prints RESULT; confirmed on tm-qc (both offline upgrades) and prod (online)."
+      "root_cause": "install/upgrade-full.sh:3252 `trap - EXIT` on the success path disables the handler that prints RESULT; confirmed on tm-qc (both offline upgrades) and prod (online).",
+      "fixed": "v1.2.1 (WO-0005), commit 07264b0 on release/v1.2.1 (unreleased until the v1.2.1 tag): the success path re-arms the result-only trap (trap 'result_line \"$?\"' EXIT) instead of `trap - EXIT`, so every exit ends with RESULT: exit <N> and a failure after completion still does not roll back. closes_when met: t47 a-successful-full-upgrade-ends-with-result-exit-0 runs the REAL tail of the script behind the real _on_exit (online and --offline end with RESULT: exit 0; a post-completion failure ends with RESULT: exit 7 and no rollback); mutation controls M603-M607.",
+      "disposition": "fixed in v1.2.1"
     },
     {
       "id": "REG-0032",
