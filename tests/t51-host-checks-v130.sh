@@ -356,8 +356,8 @@ print('clean=%s' % sorted(c['key'] for c in st['checks']))
 d = sqlite3.connect(os.environ['TM_CONFIG'].replace('config.yaml', 'data/tm.db'))
 print('result_row=%s' % d.execute("SELECT source, outcome FROM audit_log WHERE action='SYSTEM_APPLY_RESULT' AND target='compliance'").fetchall())
 d.close()
-# A result that lands while the service runs, recorded by a BROWSER's status
-# poll: still the system's row, with the helper's own (failed) outcome.
+# A result that lands while the service runs, recorded by a status poll from a browser:
+# still the system's row, with the helper's own (failed) outcome.
 open(os.path.join(os.environ['TM_APPLY_RESULT_DIR'], 'nginx.result'), 'w').write(json.dumps({'domain': 'nginx', 'job': '00000000000000e1', 'state': 'rolled_back', 'requested_by': 'admin', 'finished_at': '2026-10-02T11:00:00+00:00', 'message': 'nginx failed', 'details': []}))
 c.get('/api/system/apply/nginx')
 d = sqlite3.connect(os.environ['TM_CONFIG'].replace('config.yaml', 'data/tm.db'))

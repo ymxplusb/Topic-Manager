@@ -230,14 +230,19 @@ def find_consent_token(db, token, max_age_s, now):
                       (_token_hash(token), now - max_age_s, now)).fetchone()
 
 
-def consume_consent_token(db, token, max_age_s, now):
+def consume_consent_token(db, token, max_age_s, now, notice=None):
     """Use the token up, inside the CALLER'S transaction (not committed here).
     True only for the one caller that deleted it: two sign-ins presenting the
-    same token cannot both succeed."""
+    same token cannot both succeed. With `notice`, only a token issued for
+    that notice is used: an acceptance of a notice since replaced is not."""
     if not isinstance(token, str) or not token:
         return False
-    return db.execute('DELETE FROM consent_tokens WHERE token_hash = ? AND accepted_at >= ?',
-                      (_token_hash(token), now - max_age_s)).rowcount == 1
+    sql = 'DELETE FROM consent_tokens WHERE token_hash = ? AND accepted_at >= ?'
+    args = (_token_hash(token), now - max_age_s)
+    if notice is not None:
+        sql += ' AND notice = ?'
+        args += (notice,)
+    return db.execute(sql, args).rowcount == 1
 
 
 def validate_session(db, sid, absolute_hours=None):

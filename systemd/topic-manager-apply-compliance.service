@@ -41,11 +41,19 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 # Read-only everywhere else. The result directory (RuntimeDirectory above,
-# named again so the writable set reads in one line), nginx's pid file if
-# `nginx -T` touches it, /var/log/nginx because `nginx -T` opens the logs it
-# would write, and the staging it deletes. NOT all of /run (WO-0006): a
-# read-only measurement has no business writing other daemons' sockets and
-# state. A leading - means "if present".
+# named again so the writable set reads in one line), the staging it deletes,
+# and the two paths `nginx -T` opens FOR WRITING even though it writes neither.
+# MEASURED (WO-0006 af2, nginx 1.22 with /run and /var/log/nginx bind-mounted
+# read-only, the way ProtectSystem=strict leaves them): without /run/nginx.pid,
+# `[emerg] open() "/run/nginx.pid" failed (30: Read-only file system)`, test
+# failed - in test mode nginx opens the pid file (creating it if absent) but
+# does not truncate or write it; the running nginx's pid was unchanged after.
+# Without /var/log/nginx, `[emerg] open() "/var/log/nginx/error.log" failed
+# (30: ...)` - it opens every log for append to test it, writing nothing.
+# With both writable `nginx -T` succeeds, so the compliance page can read the
+# effective configuration. NOT all of /run (WO-0006): a read-only measurement
+# has no business writing other daemons' sockets and state. A leading - means
+# "if present".
 ReadWritePaths=-/opt/topic-manager/data/apply /run/topic-manager-apply -/run/nginx.pid /var/log/nginx
 
 # No [Install] section: never enabled, only started on demand.

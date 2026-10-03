@@ -276,7 +276,7 @@ cases = {
     "unset":   ("session:\n  max_concurrent: 5\n", ""),
     # THE ONE THAT MATTERS: timeout_minutes under a DIFFERENT top-level key is
     # not this setting. A parser taking the first match anywhere would report a
-    # stranger's number and warn about the wrong thing.
+    # number belonging to another key and warn about the wrong thing.
     "other":   ("session:\n  max_concurrent: 5\nother:\n  timeout_minutes: 999\n", ""),
 }
 

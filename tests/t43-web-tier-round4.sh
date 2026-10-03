@@ -197,8 +197,9 @@ g = lambda q: c.get('/api/audit?' + q)
 for q in ('per_page=-1', 'per_page=0', 'per_page=501', 'per_page=100000000', 'page=0', 'page=-3'):
     r = g(q); print('%s=%d %d' % (q, r.status_code, len((r.get_json() or {}).get('entries', []))))
 r = g('per_page=500'); print('max=%d %d' % (r.status_code, len(r.get_json()['entries'])))
-# v1.3.0: each read writes its AUDIT_READ first, so newest first the table is
-# READ(this), READ(max), t2, t1, t0 by now: page 4 of one row is t1.
+# v1.3.0: each read writes its AUDIT_READ AFTER it has read (WO-0006 af2), so
+# newest first the table this read sees is READ(max), t2, t1, t0: page 4 of
+# one row is t0.
 r = g('per_page=1&page=4'); print('paged=%d %d %s' % (r.status_code, len(r.get_json()['entries']), r.get_json()['entries'][0]['target']))
 r = g(''); print('default=%d %d' % (r.status_code, r.get_json()['per_page']))
 ")"
@@ -206,10 +207,10 @@ r = g(''); print('default=%d %d' % (r.status_code, r.get_json()['per_page']))
     for q in per_page=-1 per_page=0 per_page=501 per_page=100000000 page=0 page=-3; do
         tm_assert_eq "${q}=400 0" "$(_line "$q" "$out")" "an unbounded or invalid audit page was served (${q}): ${out}"
     done
-    # 3 rows + the AUDIT_READ (v1.3.0) the max read itself writes before it reads:
+    # 3 rows: the max read's own AUDIT_READ is written after it has read, and
     # the refused reads before it are not audit reads and record nothing.
-    tm_assert_eq "max=200 4" "$(_line max "$out")" "the largest allowed page was refused"
-    tm_assert_eq "paged=200 1 t1" "$(_line paged "$out")" "paging no longer works"
+    tm_assert_eq "max=200 3" "$(_line max "$out")" "the largest allowed page was refused, or recorded itself before reading"
+    tm_assert_eq "paged=200 1 t0" "$(_line paged "$out")" "paging no longer works"
     tm_assert_eq "default=200 50" "$(_line default "$out")" "the default page size changed"
 }
 tm_case "the-audit-list-page-is-bounded" tmapp a_audit_page_bounded

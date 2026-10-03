@@ -58,6 +58,13 @@ def _build_tls(cfg):
     return Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=ca_file)
 
 
+#: Interactive sign-in against the directory: seconds to open the connection
+#: (TCP and the TLS handshake) and to wait for each answer. No config.yaml key
+#: sets them; they are the product's bound on how long a sign-in may wait.
+SIGN_IN_CONNECT_TIMEOUT_S = 5
+SIGN_IN_RECEIVE_TIMEOUT_S = 10
+
+
 def validate_credentials(cfg, username, password):
     """
     Bind to AD with user credentials, verify group membership.
@@ -91,13 +98,17 @@ def validate_credentials(cfg, username, password):
     use_service_bind = _uses_service_bind(auth_cfg)
 
     tls = _build_tls(cfg)
-    server = Server(ldap_url, get_info=ALL, tls=tls, use_ssl=True)
+    # Bounded (WO-0006 af2): with ldap3's defaults a directory that accepts the
+    # connection and then says nothing held the sign-in request, and the
+    # gunicorn worker serving it, until the OS gave up on the socket.
+    server = Server(ldap_url, get_info=ALL, tls=tls, use_ssl=True,
+                    connect_timeout=SIGN_IN_CONNECT_TIMEOUT_S)
 
     if use_service_bind:
         ok, err, conn = _ldap_bind(server, auth_cfg['ldap_bind_dn'],
-                                   auth_cfg['ldap_bind_password'])
+                                   auth_cfg['ldap_bind_password'], SIGN_IN_RECEIVE_TIMEOUT_S)
     else:
-        ok, err, conn = _ldap_bind(server, upn, password)
+        ok, err, conn = _ldap_bind(server, upn, password, SIGN_IN_RECEIVE_TIMEOUT_S)
     if not ok:
         return False, err
 
@@ -186,7 +197,7 @@ def _uses_service_bind(auth_cfg):
 
 
 def _verify_user_password(server, upn, password):
-    ok, err, user_conn = _ldap_bind(server, upn, password)
+    ok, err, user_conn = _ldap_bind(server, upn, password, SIGN_IN_RECEIVE_TIMEOUT_S)
     if ok:
         user_conn.unbind()
     return ok, err
@@ -222,8 +233,8 @@ def _normalise_sam(username):
 
 
 def _ldap_bind(server, user, password, receive_timeout=None):
-    # A bounded read only where one is asked for (the re-check, which runs
-    # inside a request); sign-in keeps ldap3's own defaults.
+    # A bounded read where one is asked for: every caller does (sign-in and
+    # the re-check both run inside a request).
     extra = {'receive_timeout': receive_timeout} if receive_timeout else {}
     try:
         conn = Connection(server, user=user, password=password,

@@ -40,6 +40,17 @@ l_agrees() {
     [ ! -f "${TM_REPO_ROOT}/.gitlab-ci.yml" ] \
         || grep -q 'check-requirements-lock.sh --require-online' "${TM_REPO_ROOT}/.gitlab-ci.yml" \
         || _tm_afail "CI does not run the lock gate with --require-online"
+    # WO-0006 af2: and the CI test lane installs what the installers install:
+    # the LOCK, hash-checked, wheels only - never requirements.txt.
+    if [ -f "${TM_REPO_ROOT}/.gitlab-ci.yml" ]; then
+        local setup; setup="$(grep -E '^[[:space:]]*TEST_SETUP:' "${TM_REPO_ROOT}/.gitlab-ci.yml")"
+        tm_assert_eq "1" "$(grep -c 'pip install --quiet --require-hashes --only-binary :all: -r requirements.lock"$' <<<"$setup")" \
+            "CI TEST_SETUP does not install requirements.lock with --require-hashes --only-binary :all:: ${setup}"
+        grep -q 'requirements[.]txt' <<<"$setup" && _tm_afail "CI TEST_SETUP still installs from requirements.txt: ${setup}"
+        grep -q -- '--require-hashes --only-binary :all: -r "$LOCK_FILE"' "$(tm_install_sh)" \
+            || _tm_afail "install.sh no longer installs the lock with the flags CI is held to"
+    fi
+    true
 }
 tm_case "the-lock-agrees-with-requirements-txt" none l_agrees
 

@@ -347,7 +347,7 @@ const Vue = { createApp: a => { App = a; return { mount() {} }; }, ref: v => ({ 
 const stubs = ['LoginView', 'TopBar', 'TopicsTab', 'ConsumerGroupsTab', 'AuditTab', 'SettingsTab', 'AboutModal'];
 const g = { setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: id => { if (timers[id - 1]) timers[id - 1].cleared = true; },
             setInterval: () => 0, clearInterval() {}, Date: { now: () => now, parse: Date.parse } };
-// In a browser the components' bare fetch IS window.fetch (which main.js wraps).
+// In a browser the bare fetch of the components IS window.fetch (which main.js wraps).
 new Function('Vue', 'window', 'document', 'fetch', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', ...stubs, src)(
     Vue, win, { addEventListener() {}, removeEventListener() {} }, (...a) => win.fetch(...a), g.setTimeout, g.clearTimeout, g.setInterval, g.clearInterval, g.Date, ...stubs.map(() => ({})));
 const vm = App.setup();
@@ -389,7 +389,7 @@ const fs = require('fs');
 const src = fs.readFileSync(process.argv[2], 'utf8');
 const answer = {}; const posts = [];
 const reply = (status, body) => ({ ok: status < 400, status, json: async () => body, clone() { return reply(status, body); } });
-const win = { fetch: async (url, init) => { if (init && init.method === 'POST') posts.push(url); return answer[url] || reply(200, {}); } };
+const win = { fetch: async (url, init) => { if (init && init.method === 'POST') posts.push(url); const a = answer[url]; return (typeof a === 'function' ? a() : a) || reply(200, {}); } };
 const make = () => {
     let App = null; const timers = [];
     const Vue = { createApp: a => { App = a; return { mount() {} }; }, ref: v => ({ value: v }), computed: f => ({ get value() { return f(); } }), onMounted() {}, onUnmounted() {} };
@@ -431,6 +431,27 @@ const settle = () => new Promise(r => setTimeout(r, 10));
     answer['/api/topics'] = reply(503, { code: 'directory_unavailable' });
     await w.fetch('/api/topics'); await settle();
     console.log('kept=' + JSON.stringify(vm.user.value) + '|' + vm.loginNotice.value);
+    // WO-0006 af2: a 401 that arrives late, from a request the PREVIOUS
+    // session sent, does not sign the new session out.
+    ({ vm, w } = make());
+    let late = null;
+    answer['/api/topics'] = () => new Promise(res => { late = res; });
+    const pending = w.fetch('/api/topics');
+    await settle();
+    await vm.logout();
+    vm.onLoggedIn({ username: 'v' }, 15, new Date(Date.now() + 3600e3).toISOString());
+    late(reply(401, { error: 'Session expired', reason: 'ended' }));
+    await pending; await settle();
+    console.log('late=' + JSON.stringify(vm.user.value) + '|' + vm.loginNotice.value);
+    // ...while a 401 sent under the CURRENT session still ends it (control).
+    answer['/api/topics'] = reply(401, { error: 'Session expired', reason: 'ended' });
+    await w.fetch('/api/topics'); await settle();
+    console.log('current=' + vm.user.value);
+    // "Stay signed in" asks whoami; its 401 is this session ending.
+    ({ vm, w } = make());
+    answer['/api/auth/whoami'] = reply(401, { error: 'Session expired', reason: 'idle' });
+    vm.staySignedIn(); await settle();
+    console.log('whoami=' + vm.user.value + '|' + vm.loginNotice.value.slice(0, 25));
 })().catch(e => { console.log('error=' + e.message); });
 JSEOF
 )"
@@ -443,6 +464,10 @@ JSEOF
     tm_assert_eq "noreason=Your session was ended. Sign in again to continue." "$(grep '^noreason=' <<<"$out")" "a 401 without a reason is not handled: ${out}"
     tm_assert_eq "idle=You were signed out after" "$(grep '^idle=' <<<"$out")" "an idle end does not say idle: ${out}"
     tm_assert_eq 'kept={"username":"u"}|' "$(grep '^kept=' <<<"$out")" "a sign-in route's 401 or a 503 signed the user out: ${out}"
+    tm_assert_eq 'late={"username":"v"}|' "$(grep '^late=' <<<"$out")" "a late 401 from the previous session signed the new one out: ${out}"
+    tm_assert_eq 'current=null' "$(grep '^current=' <<<"$out")" "a 401 under the current session no longer ends it: ${out}"
+    tm_assert_eq 'whoami=null|You were signed out after' "$(grep '^whoami=' <<<"$out")" \
+        "a 401 from whoami (Stay signed in) was ignored: ${out}"
 }
 tm_case "a-401-from-a-signed-in-view-returns-to-the-sign-in-page" node a_a_401_returns_to_sign_in
 
@@ -458,5 +483,58 @@ print('detail=%s' % rows('LOGOUT')[-1][2])
         "a sign-out at the absolute lifetime is recorded as something else: ${out}"
 }
 tm_case "an-absolute-sign-out-is-recorded-as-one" tmapp a_absolute_logout_reason
+
+# WO-0006 af2: the interactive sign-in's connection to the directory is
+# bounded. A directory that accepts the connection and then says nothing (here:
+# a socket that accepts and never answers the TLS handshake) used to hold the
+# sign-in, and its gunicorn worker, for as long as the OS kept the socket.
+a_sign_in_ldap_is_bounded() {
+    _setup
+    local out
+    out="$(PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 TM_CONFIG="${TM_TMP}/config.yaml" \
+        TM_CLUSTERS_DIR="${TM_TMP}/clusters.d" TM_SYSLOG_SOCKET="${TM_TMP}/none.sock" "$PY" - <<'PYEOF' 2>"${TM_TMP}/err" | tr -d '\r'
+import socket, threading, time, copy
+from tm import auth
+from tm.config import load_config
+cfg = load_config()
+ls = socket.socket(); ls.bind(('127.0.0.1', 0)); ls.listen(16)
+held = []
+def accept():
+    while True:
+        c, _ = ls.accept(); held.append(c)          # accepted, never answered
+threading.Thread(target=accept, daemon=True).start()
+cfg['auth']['ldap_server'] = 'ldaps://127.0.0.1:%d' % ls.getsockname()[1]
+direct = copy.deepcopy(cfg); direct['auth']['ldap_bind_dn'] = ''
+print('defaults=%s %s' % (auth.SIGN_IN_CONNECT_TIMEOUT_S, auth.SIGN_IN_RECEIVE_TIMEOUT_S))
+seen = []
+real_server = auth.Server
+def server(*a, **k):
+    seen.append(k.get('connect_timeout')); return real_server(*a, **k)
+auth.Server = server
+# Shortened for the test; the connect bound is set LONGER than the receive
+# bound, so an answer inside 4 s proves the receive bound is the one applied.
+auth.SIGN_IN_CONNECT_TIMEOUT_S, auth.SIGN_IN_RECEIVE_TIMEOUT_S = 8, 1
+def timed(fn):
+    out = {}
+    def go():
+        t = time.monotonic(); out['r'] = fn(); out['t'] = time.monotonic() - t
+    th = threading.Thread(target=go, daemon=True); th.start(); th.join(30)
+    return ('%s %s' % (out['r'][0], 'fast' if out['t'] < 4 else 'slow %.1fs' % out['t'])) if 'r' in out else 'HUNG'
+print('service=%s' % timed(lambda: auth.validate_credentials(cfg, 'alice', 'pw')))
+print('direct=%s' % timed(lambda: auth.validate_credentials(direct, 'alice', 'pw')))
+# The second bind of the service-account path (the password of the user).
+srv = real_server(cfg['auth']['ldap_server'], use_ssl=True, tls=auth._build_tls(cfg),
+                  connect_timeout=auth.SIGN_IN_CONNECT_TIMEOUT_S)
+print('userbind=%s' % timed(lambda: auth._verify_user_password(srv, 'alice@example.org', 'pw')))
+print('connect=%s' % sorted(set(seen)))
+PYEOF
+)"
+    tm_assert_eq "defaults=5 10" "$(_line defaults "$out")" "the sign-in timeouts are not 5 s to connect and 10 s per answer: ${out} $(cat "${TM_TMP}/err")"
+    tm_assert_eq "service=False fast" "$(_line service "$out")" "a stalled directory held the service-account sign-in: ${out} $(cat "${TM_TMP}/err")"
+    tm_assert_eq "direct=False fast" "$(_line direct "$out")" "a stalled directory held the direct sign-in: ${out}"
+    tm_assert_eq "userbind=False fast" "$(_line userbind "$out")" "a stalled directory held the user's password bind: ${out}"
+    tm_assert_eq "connect=[8]" "$(_line connect "$out")" "the sign-in connection is opened without the connect bound: ${out}"
+}
+tm_case "a-stalled-directory-fails-the-sign-in-fast" tmapp a_sign_in_ldap_is_bounded
 
 tm_finish

@@ -385,10 +385,22 @@ a_audit_reads_are_audited() {
     local out
     out="$(_app "
 r = c.get('/api/audit?page=1&per_page=10')
-print('read=%d %s' % (r.status_code, r.get_json()['entries'][0]['action']))
+print('read=%d %s' % (r.status_code, [e['action'] for e in r.get_json()['entries']]))
 r = c.get('/api/audit/export')
 print('export=%d %s' % (r.status_code, r.get_data(as_text=True).splitlines()[1].split(',')[2]))
-print('rows=%s' % rows(\"SELECT action, detail FROM audit_log WHERE action IN ('AUDIT_READ','AUDIT_EXPORT') ORDER BY id\"))
+print('rows=%s' % rows(\"SELECT action, detail, outcome FROM audit_log WHERE action IN ('AUDIT_READ','AUDIT_EXPORT') ORDER BY id\"))
+# WO-0006 af2: the row is written AFTER the read, and a read that FAILS is a
+# failure row, not the success row it used to be (written first, then the read
+# raised). The read itself is broken here; the audit store is not.
+real_get, real_csv = audit.get_audit_log, audit.export_audit_csv
+def boom(*a, **k): raise OSError('disk I/O error')
+audit.get_audit_log = boom; audit.export_audit_csv = boom
+r = c.get('/api/audit?page=2&per_page=5')
+print('readfail=%d %s %s' % (r.status_code, r.get_json().get('code'), 'disk' in r.get_data(as_text=True)))
+r = c.get('/api/audit/export')
+print('exportfail=%d %s' % (r.status_code, r.get_json().get('code')))
+audit.get_audit_log, audit.export_audit_csv = real_get, real_csv
+print('failrows=%s' % rows(\"SELECT action, detail, outcome FROM audit_log WHERE outcome = 'failure' AND action IN ('AUDIT_READ','AUDIT_EXPORT') ORDER BY id\"))
 d = db(); d.execute(\"CREATE TRIGGER t_broken BEFORE INSERT ON audit_log BEGIN SELECT RAISE(ABORT, 'broken'); END\"); d.commit(); d.close()
 r = c.get('/api/audit/export')
 print('broken=%d %s %s' % (r.status_code, r.get_json().get('error'), 'timestamp' in r.get_data(as_text=True)))
@@ -401,18 +413,23 @@ audit.syslog_send = lambda msg, sev=6: crit.append(msg) or True
 r = c.delete('/api/topics/orders', headers=H)
 print('refused_broken=%d %s crit=%d' % (r.status_code, r.get_json().get('error'), sum('AUDIT_WRITE_FAILED' in m for m in crit)))
 ")"
-    tm_assert_eq "read=200 AUDIT_READ" "$(_line read "$out")" "an audit read is not recorded before it is served"
-    tm_assert_eq 'export=200 "AUDIT_EXPORT"' "$(_line export "$out")" "an export is not recorded before it is built"
+    # The read does not contain its own row: it was written after the read.
+    tm_assert_eq "read=200 []" "$(_line read "$out")" "an audit read recorded itself BEFORE it read (or not at all): ${out}"
+    tm_assert_eq 'export=200 "AUDIT_READ"' "$(_line export "$out")" "an export recorded itself BEFORE it was built: ${out}"
     case "$(_line rows "$out")" in
-        "rows=[('AUDIT_READ', 'page=1 per_page=10'), ('AUDIT_EXPORT', 'CSV export of 1 row(s)')]") ;;
+        "rows=[('AUDIT_READ', 'page=1 per_page=10', 'success'), ('AUDIT_EXPORT', 'CSV export of 1 row(s)', 'success')]") ;;
         *) _tm_afail "the read and export rows do not say what was read: ${out}" ;;
     esac
+    tm_assert_eq "readfail=500 audit_read_failed False" "$(_line readfail "$out")" "a failed audit read was not a 500 (or leaked the database's words): ${out}"
+    tm_assert_eq "exportfail=500 audit_read_failed" "$(_line exportfail "$out")" "a failed export was not a 500: ${out}"
+    tm_assert_eq "failrows=[('AUDIT_READ', 'page=2 per_page=5 failed: OSError', 'failure'), ('AUDIT_EXPORT', 'CSV export failed: OSError', 'failure')]" \
+        "$(_line failrows "$out")" "a failed audit read or export was not recorded as a failure: ${out}"
     tm_assert_eq "broken=503 audit_unavailable False" "$(_line broken "$out")" "an export was served with its record unwritable"
     tm_assert_eq "broken_read=503" "$(_line broken_read "$out")" "a read was served with its record unwritable"
     tm_assert_eq "refused_broken=503 audit_unavailable crit=1" "$(_line refused_broken "$out")" \
         "a change refused for a broken audit store was recorded twice (or not refused): ${out}"
 }
-tm_case "every-audit-read-and-export-is-recorded-first" tmapp a_audit_reads_are_audited
+tm_case "every-audit-read-and-export-is-recorded-after-with-its-outcome" tmapp a_audit_reads_are_audited
 
 a_write_failure_banner() {
     _setup

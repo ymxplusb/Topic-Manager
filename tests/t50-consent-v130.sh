@@ -167,6 +167,69 @@ print('consent_rows=%d' % len(rows('CONSENT_ACCEPTED')))
 }
 tm_case "the-server-refuses-a-sign-in-without-a-fresh-acceptance" tmapp a_server_enforces
 
+# WO-0006 af2 (BLOCKING): an acceptance is of ONE notice. Accept A, the
+# administrator replaces it with B, and a sign-in inside the 600 s must not go
+# through without B. Checked twice: by the gate (before the directory is asked)
+# and inside the transaction that uses the token up (the notice can change
+# while the directory is being asked). And no token is issued while the notice
+# is off: one would be spent on a notice turned on later.
+a_notice_bound() {
+    _setup
+    local out
+    out="$(_app "
+setting('dow_enabled', 'false')
+c = app.test_client()
+r = c.post('/api/auth/consent', data=json.dumps({'accepted': True, 'notice': ''}), headers=H)
+d = db(); n = d.execute('SELECT COUNT(*) FROM consent_tokens').fetchone()[0]; d.close()
+print('off_issue=%d %s tokens=%d' % (r.status_code, r.get_json().get('code'), n))
+setting('dow_enabled', 'true'); setting('dow_text', 'NOTICE A')
+setting('session_max_concurrent', '0')
+c = app.test_client()
+print('accept_a=%d' % c.post('/api/auth/consent', data=json.dumps({'accepted': True, 'notice': 'NOTICE A'}), headers=H).status_code)
+setting('dow_text', 'NOTICE B')
+n0 = len(tried)
+r = c.post('/api/auth/login', data=cred, headers=H)
+print('gate=%d %s tried=%d' % (r.status_code, r.get_json().get('code'), len(tried) - n0))
+# The notice changes WHILE the directory is asked: the gate saw A, the
+# transaction that would use the token sees B.
+setting('dow_text', 'NOTICE A')
+c = app.test_client()
+c.post('/api/auth/consent', data=json.dumps({'accepted': True, 'notice': 'NOTICE A'}), headers=H)
+def changing(cfg, u, p):
+    setting('dow_text', 'NOTICE B'); return (True, {'username': u, 'display_name': u})
+auth.validate_credentials = changing
+r = c.post('/api/auth/login', data=cred, headers=H)
+d = db(); s = d.execute('SELECT COUNT(*) FROM sessions').fetchone()[0]; d.close()
+print('txn=%d %s sessions=%d' % (r.status_code, r.get_json().get('code'), s))
+# The notice turned ON while the directory is asked: no acceptance at all.
+setting('dow_enabled', 'false')
+def turning_on(cfg, u, p):
+    setting('dow_enabled', 'true'); return (True, {'username': u, 'display_name': u})
+auth.validate_credentials = turning_on
+r = app.test_client().post('/api/auth/login', data=cred, headers=H)
+print('turned_on=%d %s' % (r.status_code, r.get_json().get('code')))
+# Control: the CURRENT notice accepted still signs in.
+auth.validate_credentials = fake
+setting('dow_text', 'NOTICE B')
+c = app.test_client()
+c.post('/api/auth/consent', data=json.dumps({'accepted': True, 'notice': 'NOTICE B'}), headers=H)
+print('current=%d' % c.post('/api/auth/login', data=cred, headers=H).status_code)
+print('logins=%d' % len(rows('LOGIN')))
+")"
+    tm_assert_eq "off_issue=409 consent_off tokens=0" "$(_line off_issue "$out")" \
+        "a consent token was issued while the notice is off: ${out}"
+    tm_assert_eq "accept_a=200" "$(_line accept_a "$out")" "the acceptance of notice A was refused: ${out}"
+    tm_assert_eq "gate=403 consent_required tried=0" "$(_line gate "$out")" \
+        "an acceptance of a REPLACED notice signed in, or the directory was asked first: ${out}"
+    tm_assert_eq "txn=403 consent_required sessions=0" "$(_line txn "$out")" \
+        "the notice changed during the sign-in and the old acceptance was still used: ${out}"
+    tm_assert_eq "turned_on=403 consent_required" "$(_line turned_on "$out")" \
+        "the notice was turned on during the sign-in and it went through without one: ${out}"
+    tm_assert_eq "current=200" "$(_line current "$out")" "an acceptance of the current notice was refused: ${out}"
+    tm_assert_eq "logins=1" "$(_line logins "$out")" "a refused sign-in wrote a LOGIN row: ${out}"
+}
+tm_case "an-acceptance-is-of-the-notice-in-force-at-sign-in" tmapp a_notice_bound
+
 a_custom_text() {
     _setup
     local out

@@ -29,7 +29,14 @@ variables:
   # An empty TEST_COMMAND would mean the job is ABSENT from the pipeline
   # rather than present and skipping. Its exit code is the job verdict; the
   # publish job waits on it.
-  TEST_SETUP: "apt-get update -qq && apt-get install -y -qq --no-install-recommends sudo nodejs jq curl nginx && pip install --quiet -r requirements.txt"
+  #
+  # WO-0006 af2: the Python dependencies come from requirements.lock with
+  # --require-hashes --only-binary :all:, exactly as install.sh, the upgrade
+  # and prepare-offline.sh install them. From requirements.txt the test lane
+  # took whatever PyPI served for the pins (transitives unpinned, no hash
+  # checked) and so tested a different closure from the one that ships. t25
+  # holds this line to the installers' flags.
+  TEST_SETUP: "apt-get update -qq && apt-get install -y -qq --no-install-recommends sudo nodejs jq curl nginx && pip install --quiet --require-hashes --only-binary :all: -r requirements.lock"
   # REG-0007 (v1.2.0): the lock's completeness is verified ONLINE at release
   # time. The test lane stubs the network for it (t25), so the gate runs here
   # first with --require-online: offline, or with a closure it cannot verify,

@@ -336,4 +336,23 @@ a_compliance_api_and_v130_verify_documented() {
 }
 tm_case "the-compliance-api-and-the-v130-verify-steps-are-documented" none a_compliance_api_and_v130_verify_documented
 
+# WO-0006 af2 (LOW, docs): how a SCRIPT signs in to use the compliance API,
+# and that a newer offline bundle goes into an emptied directory.
+a_script_sign_in_and_empty_staging() {
+    local readme="${TM_REPO_ROOT}/README.md" ir="${TM_REPO_ROOT}/install/README.md" f
+    grep -qF -- '-d @/root/tm-login.json "$U/api/auth/login"' "$readme" || _tm_afail "README does not show a script signing in with POST /api/auth/login"
+    grep -qF 'Then `POST /api/auth/login` with JSON `{"username", "password"}`' "$readme" || _tm_afail "README does not name the sign-in body"
+    grep -qF -- '"$U/api/auth/consent"' "$readme" || _tm_afail "README does not show the consent acceptance a script needs while the notice is on"
+    grep -qF 'send `X-TM-Request: 1` on every POST' "$readme" || _tm_afail "README does not say a script must send X-TM-Request: 1"
+    grep -qF 'curl -sS -c "$J" -b "$J" -H "$H" -H "$T"' "$readme" || _tm_afail "README does not keep the session in a cookie jar"
+    # The emptying comes BEFORE the extraction, in each place the extraction is shown.
+    for f in "$readme" "$ir"; do
+        awk '/find \/var\/lib\/topic-manager\/offline-src -mindepth 1 -delete/ { e = NR }
+             /tar xzf topic-manager-offline-<version>.tar.gz +-C \/var\/lib\/topic-manager\/offline-src/ { if (!e || e > NR) bad = 1; t = NR }
+             END { exit (bad || !t || !e) }' "$f" \
+            || _tm_afail "${f#${TM_REPO_ROOT}/}: offline-src is not emptied before the newer bundle is extracted into it"
+    done
+}
+tm_case "a-script-sign-in-and-an-emptied-offline-staging-are-documented" none a_script_sign_in_and_empty_staging
+
 tm_finish

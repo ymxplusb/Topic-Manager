@@ -26,6 +26,12 @@ const LOGOUT_LEAD_MS = 5000;
 // returns to the sign-in page and says why.
 const ENDED_NOTICE = 'Your session was ended. Sign in again to continue.';
 let tmSessionEnded = null;      // set by App.setup: (reason, error) => void
+// Which session a request belongs to (WO-0006 af2). Moved on every sign-in
+// and sign-out; each request remembers the value it was SENT under, and only
+// a 401 sent under the current one ends anything. Without it a slow request
+// from the session just signed out could answer 401 after the next sign-in
+// and sign the NEW session out.
+let tmSessionGeneration = 0;
 
 // CROSS-SITE REQUEST FORGERY (v1.2.0). The backend refuses any request that
 // changes something unless the browser marks it same-origin (Sec-Fetch-Site)
@@ -36,10 +42,12 @@ let tmSessionEnded = null;      // set by App.setup: (reason, error) => void
 // still sends Sec-Fetch-Site itself; the header covers a browser that does not.
 // The same wrapper sees every /api/ answer, so a 401 is noticed HERE (not in
 // each tab): the sign-in routes (/api/auth/*) answer 401 for their own
-// reasons and are left to the views that called them.
+// reasons and are left to the views that called them - except whoami, which
+// asks about THIS session ("Stay signed in"): its 401 means the session ended.
 const TM_REQUEST_HEADER = 'X-TM-Request';
-function tmWatchSession(input, r) {
-    if (r?.status === 401 && tmSessionEnded && !input.startsWith('/api/auth/')) {
+function tmWatchSession(input, r, generation) {
+    const watched = !input.startsWith('/api/auth/') || input.startsWith('/api/auth/whoami');
+    if (r?.status === 401 && tmSessionEnded && watched && generation === tmSessionGeneration) {
         const body = typeof r.clone === 'function' ? r.clone().json().catch(() => ({})) : Promise.resolve({});
         body.then(d => tmSessionEnded(d?.reason || '', d?.error || ''));
     }
@@ -51,12 +59,13 @@ function tmMarkRequests(win) {
         if (typeof input !== 'string' || !input.startsWith('/api/')) return send(input, init);
         const opts = init || {};
         const method = String(opts.method || 'GET').toUpperCase();
+        const generation = tmSessionGeneration;
         if (method === 'GET' || method === 'HEAD') {
-            return send(input, init).then(r => tmWatchSession(input, r));
+            return send(input, init).then(r => tmWatchSession(input, r, generation));
         }
         const headers = new Headers(opts.headers || {});
         headers.set(TM_REQUEST_HEADER, '1');
-        return send(input, { ...opts, headers }).then(r => tmWatchSession(input, r));
+        return send(input, { ...opts, headers }).then(r => tmWatchSession(input, r, generation));
     };
 }
 tmMarkRequests(window);
@@ -131,6 +140,7 @@ const App = {
                 const r = await fetch('/api/auth/whoami');
                 if (r.ok) {
                     const d = await r.json();
+                    tmSessionGeneration += 1;
                     user.value = d.user;
                     // A RELOAD MUST RE-ARM FROM THE SERVER'S NUMBER. Taking the
                     // frontend default here would run a 15-minute clock against
@@ -203,6 +213,7 @@ const App = {
                     body: JSON.stringify({ reason: why }),
                 });
             } catch { /* the session still ends locally; the row may be missed */ }
+            tmSessionGeneration += 1;
             user.value = null; currentTab.value = 'topics'; sessionEndsAt.value = '';
             loginNotice.value = { idle: IDLE_NOTICE, absolute: ABSOLUTE_NOTICE }[why] || '';
         }
@@ -215,6 +226,7 @@ const App = {
             if (!user.value) return;
             clearIdleTimers();
             if (absoluteTimer) { clearTimeout(absoluteTimer); absoluteTimer = null; }
+            tmSessionGeneration += 1;
             user.value = null; currentTab.value = 'topics'; sessionEndsAt.value = '';
             loginNotice.value = { idle: IDLE_NOTICE, absolute: ABSOLUTE_NOTICE }[reason]
                 || (reason === 'revoked' && error) || ENDED_NOTICE;
@@ -229,6 +241,7 @@ const App = {
         }
 
         function onLoggedIn(u, timeout, endsAt) {
+            tmSessionGeneration += 1;
             user.value = u;
             if (timeout) timeoutMinutes.value = timeout;
             sessionEndsAt.value = endsAt || '';

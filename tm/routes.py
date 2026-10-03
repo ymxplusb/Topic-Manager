@@ -546,7 +546,12 @@ def accept_consent():
         return jsonify({'error': 'The notice was not accepted.', 'code': 'consent_declined'}), 400
     db = get_db(_cfg())
     try:
-        _enabled, text = _consent_settings(db)
+        enabled, text = _consent_settings(db)
+        if not enabled:
+            # Nothing to accept: a token issued now would be held for a
+            # notice that is not shown, and spent on a later one (WO-0006 af2).
+            return jsonify({'error': 'The notice is not in use; sign in directly.',
+                            'code': 'consent_off'}), 409
         if data.get('notice') != text:
             # The page showed other text than the notice now configured (it
             # changed since the page loaded): that is not acceptance of THIS one.
@@ -580,10 +585,14 @@ def _consent_gate():
     browser holds no fresh acceptance."""
     db = get_db(_cfg())
     try:
-        consent_on, _text = _consent_settings(db)
+        consent_on, text = _consent_settings(db)
         consent = _fresh_consent(db) if consent_on else None
     finally:
         db.close()
+    if consent is not None and consent['notice'] != _notice_label(text):
+        # Accepted, but a notice the administrator has since replaced: that
+        # is not acceptance of the one in force now (WO-0006 af2).
+        consent = None
     if consent_on and consent is None:
         # Before the directory is asked anything: no credential is tried
         # until the notice has been accepted.
@@ -607,8 +616,16 @@ def _use_consent(db, consent):
     open transaction on `db` (committed with the session it creates). A second
     sign-in presenting the same token (a replayed cookie, or two racing
     requests) finds it gone: the transaction is rolled back, `db` closed, and
-    the 403 returned. None when there is nothing to use or it was used now."""
-    if not consent or consume_consent_token(db, consent['token'], CONSENT_VALID_S, time.time()):
+    the 403 returned. The notice is read again INSIDE that transaction, and the
+    token is used up only if it was issued for the notice in force now: an
+    administrator who changed the notice (or turned it on) after the gate looked
+    is not raced past (WO-0006 af2). None when there is nothing to use or it was
+    used now."""
+    consent_on, text = _consent_settings(db)
+    if not consent_on and not consent:
+        return None
+    if consent and consume_consent_token(db, consent['token'], CONSENT_VALID_S, time.time(),
+                                         _notice_label(text) if consent_on else None):
         return None
     db.rollback()
     db.close()
@@ -1269,14 +1286,32 @@ def get_audit():
         return jsonify({'error': 'per_page must be a whole number from 1 to %d'
                                  % AUDIT_PAGE_MAX}), 400
     # v1.3.0 (SRG-APP-000089, DQ7): reading the audit trail is itself audited,
-    # and the read is refused when that record cannot be written.
+    # and nothing read is served when that record cannot be written. The row
+    # is written AFTER the read (WO-0006 af2): written first, it said
+    # "success" for a read that then failed.
     cfg = _cfg()
+    detail = 'page=%d per_page=%d' % (page, per_page)
     try:
-        audit.log_action(cfg, session['user']['username'], 'AUDIT_READ', 'audit_log',
-                         'page=%d per_page=%d' % (page, per_page), '')
+        data = audit.get_audit_log(cfg, page, per_page)
+    except Exception as exc:
+        return _audit_read_failed(cfg, 'AUDIT_READ', detail, exc)
+    try:
+        audit.log_action(cfg, session['user']['username'], 'AUDIT_READ', 'audit_log', detail, '')
     except audit.AuditUnavailable as exc:
         return _audit_unavailable(exc)
-    return jsonify(audit.get_audit_log(cfg, page, per_page))
+    return jsonify(data)
+
+
+def _audit_read_failed(cfg, action, detail, exc):
+    """The audit trail could not be read: recorded as `action` with outcome
+    failure (best effort: nothing was served, so nothing is hidden), and the
+    500 answered without the database's own words."""
+    log.error('%s failed: %s: %s', action, type(exc).__name__, exc)
+    audit.log_action(cfg, session['user']['username'], action, 'audit_log',
+                     '%s failed: %s' % (detail, type(exc).__name__), '',
+                     best_effort=True, outcome='failure')
+    return jsonify({'error': 'The audit trail could not be read. An administrator must '
+                             'check the audit database.', 'code': 'audit_read_failed'}), 500
 
 
 @bp.route('/audit/export', methods=['GET'])
@@ -1284,11 +1319,14 @@ def get_audit():
 def export_audit():
     cfg = _cfg()
     try:
-        audit.log_action(cfg, session['user']['username'], 'AUDIT_EXPORT', 'audit_log',
-                         'CSV export of %d row(s)' % audit.count_rows(cfg), '')
+        csv_data = audit.export_audit_csv(cfg)
+        detail = 'CSV export of %d row(s)' % audit.count_rows(cfg)
+    except Exception as exc:
+        return _audit_read_failed(cfg, 'AUDIT_EXPORT', 'CSV export', exc)
+    try:
+        audit.log_action(cfg, session['user']['username'], 'AUDIT_EXPORT', 'audit_log', detail, '')
     except audit.AuditUnavailable as exc:
         return _audit_unavailable(exc)
-    csv_data = audit.export_audit_csv(cfg)
     resp = make_response(csv_data)
     resp.headers['Content-Type'] = 'text/csv'
     resp.headers['Content-Disposition'] = 'attachment; filename="topic-manager-audit.csv"'

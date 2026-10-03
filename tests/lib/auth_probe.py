@@ -109,13 +109,16 @@ class FakeTls:
 
 
 class FakeServer:
-    def __init__(self, url, get_info=None, tls=None, use_ssl=None):
-        CALLS.append('server %s use_ssl=%s tls=%s' % (url, use_ssl, type(tls).__name__))
+    def __init__(self, url, get_info=None, tls=None, use_ssl=None, connect_timeout=None):
+        CALLS.append('server %s use_ssl=%s tls=%s connect_timeout=%s'
+                     % (url, use_ssl, type(tls).__name__, connect_timeout))
 
 
 class FakeConnection:
-    def __init__(self, server, user=None, password=None, authentication=None, auto_bind=None):
-        CALLS.append('bind %s auth=%s auto_bind=%s' % (user, authentication, auto_bind))
+    def __init__(self, server, user=None, password=None, authentication=None, auto_bind=None,
+                 receive_timeout=None):
+        CALLS.append('bind %s auth=%s auto_bind=%s receive_timeout=%s'
+                     % (user, authentication, auto_bind, receive_timeout))
         if user in BROKEN:
             raise LDAPSocketOpenError('socket unreachable')
         if PASSWORDS.get(user) != password:
