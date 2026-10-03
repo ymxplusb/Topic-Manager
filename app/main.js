@@ -26,11 +26,12 @@ const LOGOUT_LEAD_MS = 5000;
 // returns to the sign-in page and says why.
 const ENDED_NOTICE = 'Your session was ended. Sign in again to continue.';
 let tmSessionEnded = null;      // set by App.setup: (reason, error) => void
-// Which session a request belongs to (WO-0006 af2). Moved on every sign-in
-// and sign-out; each request remembers the value it was SENT under, and only
-// a 401 sent under the current one ends anything. Without it a slow request
-// from the session just signed out could answer 401 after the next sign-in
-// and sign the NEW session out.
+// Which session a request belongs to (WO-0006 af2). A new one begins at every
+// sign-in; each request remembers the value it was SENT under, and only a 401
+// sent under the current one ends anything. Without it a slow request from
+// before the sign-in (the last session's, or a whoami sent while signed out)
+// could answer 401 after it and sign the NEW session out. Nothing needs it
+// moved at a sign-out: with no one signed in a 401 ends nothing.
 let tmSessionGeneration = 0;
 
 // CROSS-SITE REQUEST FORGERY (v1.2.0). The backend refuses any request that
@@ -140,7 +141,6 @@ const App = {
                 const r = await fetch('/api/auth/whoami');
                 if (r.ok) {
                     const d = await r.json();
-                    tmSessionGeneration += 1;
                     user.value = d.user;
                     // A RELOAD MUST RE-ARM FROM THE SERVER'S NUMBER. Taking the
                     // frontend default here would run a 15-minute clock against
@@ -213,7 +213,6 @@ const App = {
                     body: JSON.stringify({ reason: why }),
                 });
             } catch { /* the session still ends locally; the row may be missed */ }
-            tmSessionGeneration += 1;
             user.value = null; currentTab.value = 'topics'; sessionEndsAt.value = '';
             loginNotice.value = { idle: IDLE_NOTICE, absolute: ABSOLUTE_NOTICE }[why] || '';
         }
@@ -226,7 +225,6 @@ const App = {
             if (!user.value) return;
             clearIdleTimers();
             if (absoluteTimer) { clearTimeout(absoluteTimer); absoluteTimer = null; }
-            tmSessionGeneration += 1;
             user.value = null; currentTab.value = 'topics'; sessionEndsAt.value = '';
             loginNotice.value = { idle: IDLE_NOTICE, absolute: ABSOLUTE_NOTICE }[reason]
                 || (reason === 'revoked' && error) || ENDED_NOTICE;

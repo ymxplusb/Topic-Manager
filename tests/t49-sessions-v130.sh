@@ -447,6 +447,19 @@ const settle = () => new Promise(r => setTimeout(r, 10));
     answer['/api/topics'] = reply(401, { error: 'Session expired', reason: 'ended' });
     await w.fetch('/api/topics'); await settle();
     console.log('current=' + vm.user.value);
+    // A whoami sent while signed out (the session check of a page load) that
+    // answers 401 only after the person has signed in ends nothing either.
+    ({ vm, w } = make());
+    await vm.logout();
+    let slow = null;
+    answer['/api/auth/whoami'] = () => new Promise(res => { slow = res; });
+    const check = w.fetch('/api/auth/whoami');
+    await settle();
+    vm.onLoggedIn({ username: 'w' }, 15, new Date(Date.now() + 3600e3).toISOString());
+    slow(reply(401, { error: 'Authentication required' }));
+    await check; await settle();
+    console.log('prelogin=' + JSON.stringify(vm.user.value));
+    delete answer['/api/auth/whoami'];
     // "Stay signed in" asks whoami; its 401 is this session ending.
     ({ vm, w } = make());
     answer['/api/auth/whoami'] = reply(401, { error: 'Session expired', reason: 'idle' });
@@ -465,6 +478,7 @@ JSEOF
     tm_assert_eq "idle=You were signed out after" "$(grep '^idle=' <<<"$out")" "an idle end does not say idle: ${out}"
     tm_assert_eq 'kept={"username":"u"}|' "$(grep '^kept=' <<<"$out")" "a sign-in route's 401 or a 503 signed the user out: ${out}"
     tm_assert_eq 'late={"username":"v"}|' "$(grep '^late=' <<<"$out")" "a late 401 from the previous session signed the new one out: ${out}"
+    tm_assert_eq 'prelogin={"username":"w"}' "$(grep '^prelogin=' <<<"$out")" "a 401 sent before the sign-in signed the new session out: ${out}"
     tm_assert_eq 'current=null' "$(grep '^current=' <<<"$out")" "a 401 under the current session no longer ends it: ${out}"
     tm_assert_eq 'whoami=null|You were signed out after' "$(grep '^whoami=' <<<"$out")" \
         "a 401 from whoami (Stay signed in) was ignored: ${out}"
