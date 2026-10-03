@@ -34,6 +34,12 @@
 #   sudo bash upgrade-full.sh --restore TS       # roll back to a restore point
 #   sudo bash upgrade-full.sh --force            # proceed past BLOCK findings
 #   sudo bash upgrade-full.sh --no-bind-probe    # skip the live LDAP bind entirely
+#   sudo bash upgrade-full.sh --syslog-host H [--syslog-port P --syslog-protocol udp|tcp|tls]
+#                                                # v1.3.0: name the audit collector
+#   sudo bash upgrade-full.sh --no-remote-syslog # v1.3.0: acknowledge there is none
+#                                                (one of the two is REQUIRED when the
+#                                                host does not already forward;
+#                                                --force does not override it)
 #   sudo bash upgrade-full.sh --repo-url URL --repo-commit SHA [--repo-branch REF]
 #                                                # online source (or TM_REPO_URL /
 #                                                # TM_REPO_COMMIT / TM_REPO_BRANCH);
@@ -122,7 +128,8 @@ APPLY_HELPER_FILES=("755 install/libexec/tm-apply tm-apply"
 # Release files and links at fixed paths elsewhere. t45 parses every install,
 # cp and ln both scripts run and holds them to these lists.
 HOST_FILES=(/etc/nginx/snippets/tm-security-headers.conf
-            /etc/nginx/sites-available/topic-manager /etc/logrotate.d/topic-manager)
+            /etc/nginx/sites-available/topic-manager /etc/logrotate.d/topic-manager
+            /etc/nginx/conf.d/topic-manager-log-format.conf)
 HOST_LINKS=(/etc/nginx/sites-enabled/topic-manager)
 # v1.2.0: the files Settings > "Apply to host" manages (rendered by the root
 # helper /usr/libexec/topic-manager/tm-apply). They are OPERATOR STATE, like
@@ -208,6 +215,64 @@ write_install_manifest() {   # write_install_manifest <source-tree> [pending]
     mv -f -- "$tmp" "$out"
 }
 # <<< the product's host artefacts
+
+# >>> v1.3.0 host STIG checks — byte-identical in install.sh and install/upgrade-full.sh (t51)
+# James 2026-10-02 (DQ1/DQ2): host state this product does not own — the web
+# server account, files under /etc/nginx that are not its own, loaded nginx
+# modules — is CHECKED and REPORTED, never changed. The product's OWN files
+# are created correctly here, and a drift BLOCKS: ensure_site_logs below, and
+# the root helper's checks at the end of the run, where a FAIL stops it.
+#
+# NGNX-APP-000400: nginx creates a log it is told to write when the file is
+# absent, 0644 under its root master's umask (measured on a STIG host:
+# topic-manager-error.log 0644, readable by every local account; the access
+# log holds client addresses). The two logs are created here FIRST, 0640
+# <web account>:adm, which is what Ubuntu's /etc/logrotate.d/nginx recreates
+# them as at every rotation; an existing one is narrowed to that, and a
+# rotated copy loses its "other" bits. Never through a symlink.
+SITE_LOG_NAMES=(topic-manager-access.log topic-manager-error.log)
+ensure_site_logs() {   # ensure_site_logs <log-dir> <web-user>; 1 + the problems on stdout
+    local dir="$1" web="$2" grp=adm f p got m bad=""
+    getent group "$grp" >/dev/null 2>&1 || grp=root
+    id "$web" >/dev/null 2>&1 || web=root
+    if [[ -L "$dir" ]]; then echo "${dir} is a symlink; refusing to create logs through it"; return 1; fi
+    [[ -d "$dir" ]] || install -d -m 755 -o root -g "$grp" "$dir"
+    for f in "${SITE_LOG_NAMES[@]}"; do
+        p="${dir}/${f}"
+        if [[ -L "$p" ]]; then bad="${bad} ${p} (a symlink)"; continue; fi
+        if [[ -e "$p" ]]; then
+            chown "${web}:${grp}" "$p" && chmod u-x,g-wx,o-rwx "$p"
+        else
+            install -m 640 -o "$web" -g "$grp" /dev/null "$p"
+        fi
+        got="$(stat -c '%a %U %G' "$p" 2>/dev/null || echo 'missing - -')"
+        m="${got%% *}"
+        if [[ ! "$m" =~ ^[0-7]+$ ]] || (( (8#$m & 8#137) != 0 )) \
+                || [[ ! " ${got#* } " =~ ^\ (${web}|root)\ (${grp}|root)\ $ ]]; then
+            bad="${bad} ${p} (${got})"
+        fi
+    done
+    for p in "${dir}"/topic-manager-*.log.*; do
+        [[ -f "$p" && ! -L "$p" ]] || continue
+        chmod o-rwx "$p" || bad="${bad} ${p} (could not narrow)"
+    done
+    if [[ -n "$bad" ]]; then echo "not 0640 ${web}:${grp}:${bad}"; return 1; fi
+    return 0
+}
+
+# host_stig_report <helper> — the release's own root helper measures the host,
+# read-only (tm-apply compliance --report): one "STATUS<TAB>check<TAB>detail"
+# line per check; exit 1 when a check FAILS (this product's own files or
+# configuration drifted), 0 otherwise. A helper that is not there is SAID,
+# never skipped silently.
+host_stig_report() {   # host_stig_report <helper>
+    if [[ ! -f "$1" ]]; then
+        printf 'UNKNOWN\thost_checks\t%s is missing, so the host STIG checks were not run\n' "$1"
+        return 0
+    fi
+    python3 -I "$1" compliance --report
+}
+# <<< v1.3.0 host STIG checks
 # Where a retired unit's RuntimeDirectory= lives (remove_retired_runtime).
 OWNED_RUNTIME_DIR="/run"
 # Where systemd keeps a persistent timer's last-trigger stamp. It outlives the
@@ -299,6 +364,7 @@ BASELINE_PATHS=(
 
 V120_UNITS=(topic-manager-apply-syslog.service topic-manager-apply-time.service
             topic-manager-apply-nginx.service topic-manager-apply-tls.service
+            topic-manager-apply-compliance.service
             topic-manager-audit-prune.service topic-manager-audit-prune.timer
             topic-manager-apply-audit.service topic-manager-apply-audit.path)
 
@@ -315,6 +381,7 @@ trap 'result_line "$?"' EXIT
 SKIP_OS=false; OFFLINE_FORCED=false; BACKUP_ONLY=false; DRY_RUN=false
 AUDIT_ONLY=false; LIST_BACKUPS=false; FORCE=false; RESTORE_TS=""
 NO_BIND_PROBE=false
+OPT_SYSLOG_HOST=""; OPT_SYSLOG_PORT=""; OPT_SYSLOG_PROTOCOL=""; NO_REMOTE_SYSLOG=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-os)       SKIP_OS=true ;;
@@ -333,6 +400,11 @@ while [[ $# -gt 0 ]]; do
                          [[ -n "$REPO_COMMIT" ]] || { echo "--repo-commit needs a 40-hex commit id" >&2; exit 2; } ;;
         --restore)       shift; RESTORE_TS="${1:-}"
                          [[ -n "$RESTORE_TS" ]] || { echo "--restore needs a timestamp (see --list-backups)" >&2; exit 2; } ;;
+        --syslog-host)   shift; OPT_SYSLOG_HOST="${1:-}"
+                         [[ -n "$OPT_SYSLOG_HOST" ]] || { echo "--syslog-host needs a host" >&2; exit 2; } ;;
+        --syslog-port)   shift; OPT_SYSLOG_PORT="${1:-}" ;;
+        --syslog-protocol) shift; OPT_SYSLOG_PROTOCOL="${1:-}" ;;
+        --no-remote-syslog) NO_REMOTE_SYSLOG=true ;;
         -h|--help)       sed -n '2,62p' "$0"; exit 0 ;;
         *)               echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
     esac
@@ -2406,6 +2478,82 @@ else
     row PASS "session idle timeout" "${CFG_TIMEOUT} min (at or below the ${TM_DEFAULT_TIMEOUT} min default)"
 fi
 
+# ─── v1.3.0: the STIG decisions of 2026-10-02 ────────────────────────────────
+echo
+echo "  ── v1.3.0 STIG rows (docs/STIG-COMPLIANCE.md)"
+# saved_setting <key> — a value saved in the INSTALLED tm.db, read-only, by the
+# system python3 (the sqlite3 CLI is not on a stock host); empty when unset.
+saved_setting() {   # saved_setting <key>
+    [[ -f "${APP_HOME}/data/tm.db" ]] || return 0
+    python3 - "${APP_HOME}/data/tm.db" "$1" <<'PYSAVED' 2>/dev/null || true
+import sqlite3, sys
+con = sqlite3.connect('file:%s?mode=ro' % sys.argv[1], uri=True)
+row = con.execute('SELECT value FROM app_settings WHERE key = ?', (sys.argv[2],)).fetchone()
+print(row[0] if row else '')
+PYSAVED
+}
+# DQ10: the audit trail leaves the host, or the operator says it does not.
+# A hard block like the directory keys: --force does NOT override it.
+SYSLOG_HARD_BLOCK=false
+if [[ -n "$OPT_SYSLOG_HOST" && $NO_REMOTE_SYSLOG == true ]]; then
+    row BLOCK "remote syslog" "--syslog-host and --no-remote-syslog contradict each other"
+    SYSLOG_HARD_BLOCK=true
+elif [[ "$(saved_setting syslog_enabled)" == true ]]; then
+    row PASS "remote syslog" "on (saved: $(saved_setting syslog_host))"
+elif [[ -n "$OPT_SYSLOG_HOST" ]]; then
+    SEED_ERR="$(python3 - "$(dirname "$SELF")/.." "$OPT_SYSLOG_HOST" "$OPT_SYSLOG_PORT" "$OPT_SYSLOG_PROTOCOL" <<'PYSEED' 2>&1
+import os, sys
+sys.path.insert(0, sys.argv[1])
+try:
+    from tm import settings_schema as s
+except ImportError:
+    sys.exit(0)            # the script was copied without its tree: Phase 12 validates
+vals = dict(s.ADMIN_DEFAULTS, syslog_enabled='true', syslog_host=sys.argv[2])
+if sys.argv[3]: vals['syslog_port'] = sys.argv[3]
+if sys.argv[4]: vals['syslog_protocol'] = sys.argv[4]
+for problem in s.check_domain('syslog', vals):
+    print(problem); sys.exit(1)
+PYSEED
+)"
+    if [[ -z "$SEED_ERR" ]]; then
+        row PASS "remote syslog" "will be turned on: ${OPT_SYSLOG_HOST} (--syslog-host)"
+    else
+        row BLOCK "remote syslog" "--syslog-host: ${SEED_ERR}"
+        SYSLOG_HARD_BLOCK=true
+    fi
+elif [[ $NO_REMOTE_SYSLOG == true ]]; then
+    row WARN "remote syslog" "OFF, acknowledged (--no-remote-syslog): the audit trail stays on this host — an open item on the compliance page"
+else
+    row BLOCK "remote syslog" "OFF: re-run with --syslog-host <collector> or --no-remote-syslog (SRG-APP-000515); --force does not override this"
+    SYSLOG_HARD_BLOCK=true
+fi
+# DQ9: an upgraded host keeps its consent setting; OFF is reported.
+if [[ "$(saved_setting dow_enabled)" == true ]]; then
+    row PASS "consent notice (NGNX-APP-000180)" "on; v1.3.0 enforces it at sign-in"
+else
+    row WARN "consent notice (NGNX-APP-000180)" "OFF — kept as it is; turn it on in Settings > General > DoW Consent Banner"
+fi
+# DQ8: the 15-minute group re-check needs the service account.
+if [[ -n "$(awk '/^auth:/{a=1;next} /^[^[:space:]#]/{a=0} a && $1=="ldap_bind_dn:"{print $2; exit}' "$CONFIG_FILE" 2>/dev/null | tr -d "\"'")" ]]; then
+    row PASS "group re-check (NGNX-APP-003330)" "every 15 min with the LDAP service account"
+else
+    row WARN "group re-check (NGNX-APP-003330)" "no LDAP service account (auth.ldap_bind_dn): a user removed from required_group keeps a live session until it ends"
+fi
+# DQ1/DQ2: what the release's root helper measures, read-only. Host state the
+# product does not own is a WARN; a FAIL here is this product's OWN file as the
+# INSTALLED release left it, which this upgrade replaces or narrows and then
+# checks again in Phase 12, where a FAIL rolls the upgrade back.
+STIG_HELPER="$(dirname "$SELF")/libexec/tm-apply"
+STIG_OUT="$(host_stig_report "$STIG_HELPER")" || true
+while IFS=$'\t' read -r _st _key _detail; do
+    [[ -n "${_st:-}" ]] || continue
+    case "$_st" in
+        PASS|INFO) row PASS "host: ${_key}" "$_detail" ;;
+        FAIL)      row WARN "host: ${_key}" "${_detail} — this upgrade replaces or narrows it, then re-checks" ;;
+        *)         row WARN "host: ${_key}" "$_detail" ;;
+    esac
+done <<<"$STIG_OUT"
+
 # ─── audit verdict ───────────────────────────────────────────────────────────
 # Reported here; ENFORCED after the backup. A blocker must never stand between
 # an operator and a restore point — a broken system is exactly when you most
@@ -2592,6 +2740,12 @@ The new version has no built-in LDAP defaults and would lock every user out.
 Nothing has been changed — and a verified backup was still taken:
   ${BACKUP_DIR}"
 fi
+if [[ $SYSLOG_HARD_BLOCK == true ]]; then
+    fail "Refusing to upgrade: the audit trail would stay on this host without anyone saying so.
+Re-run with --syslog-host <collector> or with --no-remote-syslog (SRG-APP-000515).
+--force does not override this. Nothing has been changed — and a verified backup was still taken:
+  ${BACKUP_DIR}"
+fi   # the remote-syslog hard block (t51)
 if [[ $AUDIT_BLOCK -gt 0 ]]; then
     if [[ $FORCE == true ]]; then
         warn "--force given: proceeding despite ${AUDIT_BLOCK} blocker(s). This is on you."
@@ -2819,6 +2973,8 @@ mkdir -p /etc/nginx/snippets
 # location declares its own — every location must include this snippet.
 cp "${WORK_DIR}/nginx/tm-security-headers.conf" /etc/nginx/snippets/tm-security-headers.conf
 cp "${WORK_DIR}/nginx/topic-manager.conf" /etc/nginx/sites-available/topic-manager
+# v1.3.0 (NGNX-APP-000240): the DoD log format the sites log in, at http level.
+install -m 644 -o root -g root "${WORK_DIR}/nginx/tm-log-format.conf" /etc/nginx/conf.d/topic-manager-log-format.conf
 PREV_SN="$(grep -m1 -oP 'server_name\s+\K[^;]+' "${BACKUP_DIR}/system/topic-manager.nginx" 2>/dev/null || true)"
 if [[ -n "$PREV_SN" ]] && ! grep -q "YOUR-HOSTNAME" <<<"$PREV_SN"; then
     sed -i "s|server_name .*;|server_name ${PREV_SN};|" /etc/nginx/sites-available/topic-manager
@@ -3116,6 +3272,18 @@ success "config.yaml valid"
 # put back on failure inside the function; the whole-file copy taken in Phase 4
 # is what restore_from_backup puts back if a LATER phase fails.
 manage_nginx_ssl_protocols /etc/nginx/nginx.conf "${BACKUP_DIR}/system/nginx.conf.before-tls-edit"
+# v1.3.0 (DQ1): the product's OWN files are enforced, and a drift blocks.
+# NGNX-APP-000400: the site logs 0640 web:adm, created before nginx opens them.
+SITE_LOG_PROBLEM="$(ensure_site_logs /var/log/nginx "$WEB_USER")" \
+    || fail "The Topic Manager nginx logs could not be made private: ${SITE_LOG_PROBLEM}"
+success "Site logs private: /var/log/nginx/topic-manager-{access,error}.log 0640"
+# NGNX-APP-000730: the TLS key root-only, as install.sh holds a kept key
+# (Phase 10 put back the recorded mode; this only ever narrows it).
+TLS_KEY_PATH="${CONFIG_DIR}/tls/server.key"
+if [[ -f "$TLS_KEY_PATH" && ! -L "$TLS_KEY_PATH" ]]; then
+    chown root:root "$TLS_KEY_PATH" && chmod go-rwx,u-x "$TLS_KEY_PATH" \
+        || fail "Could not narrow ${TLS_KEY_PATH} to root-only."
+fi
 nginx -t >/dev/null 2>&1 || fail "nginx config test failed."
 success "nginx config test passed"
 
@@ -3194,6 +3362,23 @@ check_headers "/api/health"             "api"
 [[ $HDR_FAIL -eq 0 ]] && success "Security headers served on all route classes" \
     || fail "${HDR_FAIL} security header(s) not served. The add_header inheritance bug has regressed."
 
+# --- v1.3.0 (DQ1): the host STIG checks again, now against what this upgrade
+# installed. A FAIL is the product's own file or configuration and rolls the
+# upgrade back; host state it does not own is reported only.
+info "Host STIG checks after the upgrade (read-only):"
+STIG_RC=0
+STIG_OUT="$(host_stig_report "${OWNED_LIBEXEC_DIR}/tm-apply")" || STIG_RC=$?
+while IFS=$'\t' read -r _st _key _detail; do
+    [[ -n "${_st:-}" ]] || continue
+    case "$_st" in
+        PASS|INFO) success "  ${_key}: ${_detail}" ;;
+        FAIL)      warn "  FAIL ${_key}: ${_detail}" ;;
+        *)         warn "  ${_key}: ${_detail}" ;;
+    esac
+done <<<"$STIG_OUT"
+[[ $STIG_RC -eq 0 ]] || fail "A host STIG check FAILED on Topic Manager's own files or configuration (above).
+Rolling back."
+
 # --- The bind that gates every login on the new version.
 if [[ "$LDAP_ST" == "OK" ]]; then
     success "LDAP service bind verified pre-upgrade — logins should work"
@@ -3215,6 +3400,16 @@ fi
 systemctl enable --now topic-manager-apply-audit.path >/dev/null 2>&1 \
     && success "Apply results are audited as they finish: topic-manager-apply-audit.path" \
     || warn "topic-manager-apply-audit.path could not be enabled: apply results are audited only when polled, at service start and by the daily prune. Run: systemctl enable --now topic-manager-apply-audit.path"
+# v1.3.0 (DQ10): a collector named on the command line is SAVED first, through
+# the application's own validator, and applied with the rest below.
+if [[ -n "$OPT_SYSLOG_HOST" ]]; then
+    _pairs=("syslog_enabled=true" "syslog_host=${OPT_SYSLOG_HOST}")
+    [[ -z "$OPT_SYSLOG_PORT" ]] || _pairs+=("syslog_port=${OPT_SYSLOG_PORT}")
+    [[ -z "$OPT_SYSLOG_PROTOCOL" ]] || _pairs+=("syslog_protocol=${OPT_SYSLOG_PROTOCOL}")
+    run_as_app seed "${_pairs[@]}" >/dev/null \
+        || fail "Could not save --syslog-host ${OPT_SYSLOG_HOST} (see above). Rolling back."
+    success "Remote syslog saved: ${OPT_SYSLOG_HOST} (applied below)"
+fi
 info "Re-applying the saved host settings (syslog, time, nginx) ..."
 REAPPLY_FAILED=""
 if run_as_app stage all >/dev/null; then

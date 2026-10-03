@@ -2,12 +2,14 @@
 """
 tm-apply — Topic Manager's ROOT apply helper (v1.2.0).
 
-    /usr/libexec/topic-manager/tm-apply <syslog|time|nginx|tls>
+    /usr/libexec/topic-manager/tm-apply <syslog|time|nginx|tls|compliance>
+    /usr/libexec/topic-manager/tm-apply compliance --report
 
-Run ONLY by the four fixed one-shot units
-topic-manager-apply-{syslog,time,nginx,tls}.service (root), which the
-application may START through polkit and nothing else. It applies the settings
-an administrator SAVED in Topic Manager to the host:
+Run ONLY by the five fixed one-shot units
+topic-manager-apply-{syslog,time,nginx,tls,compliance}.service (root), which
+the application may START through polkit and nothing else — and, with
+--report, by install.sh and install/upgrade-full.sh from the release tree. It
+applies the settings an administrator SAVED in Topic Manager to the host:
 
   syslog  rsyslog forwarding of the audit trail and the nginx logs
           (/etc/rsyslog.d/30-topic-manager.conf + /etc/nginx/snippets/tm-syslog.conf)
@@ -16,6 +18,17 @@ an administrator SAVED in Topic Manager to the host:
   nginx   rate limits, connection limit (conf.d + three snippets) and the
           HTTP->HTTPS redirect (the topic-manager-http site + ufw 80/tcp)
   tls     the server certificate, key and chain (/etc/topic-manager/tls)
+
+and, v1.3.0, MEASURES the host for the compliance page without changing it:
+
+  compliance  the STIG checks only root can make (the web server account's
+          password lock, the effective nginx configuration from `nginx -T`,
+          modes and owners under /etc/nginx and /var/log/nginx). The verdict
+          carries the checks; nothing is rendered, backed up or reloaded.
+          --report prints the same checks, one per line, for the installer
+          and the upgrade (James 2026-10-02, DQ1: host state the product does
+          not own is CHECKED and WARNED about; its OWN files are enforced by
+          the installer and the upgrade and FAIL here when they drift).
 
 THE TRUST BOUNDARY. The request arrives as a staging file written by the
 service account (/opt/topic-manager/data/apply/<domain>.json, 0600). Everything
@@ -68,7 +81,7 @@ import sys
 import tempfile
 import traceback
 
-DOMAINS = ('syslog', 'time', 'nginx', 'tls')
+DOMAINS = ('syslog', 'time', 'nginx', 'tls', 'compliance')
 SVC_USER = 'topic-manager'
 PROD_LIB = '/usr/libexec/topic-manager/lib'
 
@@ -130,6 +143,13 @@ PEM_MAX = 64 * 1024
 CMD_TIMEOUT = 60
 HEADER = ('# Managed by Topic Manager (tm-apply %s), rendered from Settings.\n'
           '# Hand edits are replaced on the next apply; change the setting instead.\n')
+
+
+class _Measured(Exception):
+    """The compliance domain's verdict: it measured, and changes nothing."""
+    def __init__(self, checks):
+        super().__init__('measured')
+        self.checks = checks
 
 
 class ApplyError(Exception):
@@ -323,7 +343,12 @@ def load_job(ctx, schema, tls_check, domain):
         raise ApplyError('validate', 'the staged request has no valid job id')
     by = re.sub(r'[^A-Za-z0-9 ._@\\-]', '?', str(doc.get('requested_by', '?')))[:128]
     values = {}
-    if domain in schema.DOMAIN_KEYS:
+    if domain == 'compliance':
+        given = doc.get('settings')
+        if given not in (None, {}) or doc.get('files') not in (None, {}):
+            raise ApplyError('validate', 'refused: a compliance measurement carries no settings '
+                             'and no files')
+    elif domain in schema.DOMAIN_KEYS:
         given = doc.get('settings')
         if not isinstance(given, dict):
             raise ApplyError('validate', 'the staged request carries no settings')
@@ -826,8 +851,9 @@ def render_nginx_syslog(v):
     return (head +
             '# Included in the topic-manager server block. The local rsyslog forwards\n'
             '# these (/etc/rsyslog.d/30-topic-manager.conf); the files stay as they are.\n'
+            '# tm_dod is the site file\'s DoD log format (NGNX-APP-000240).\n'
             'access_log syslog:server=unix:/dev/log,facility=local5,tag=tm_nginx_access,'
-            'severity=info;\n'
+            'severity=info tm_dod;\n'
             'error_log  syslog:server=unix:/dev/log,facility=local5,tag=tm_nginx_error warn;\n'
             ).encode()
 
@@ -1147,10 +1173,377 @@ def plan_tls(ctx, tls_check, blobs):
     return plan
 
 
+# ── domain: compliance (v1.3.0) — measure, never change ─────────────────────
+WEB_USER_DEFAULT = 'www-data'
+NOLOGIN_SHELLS = ('/usr/sbin/nologin', '/sbin/nologin', '/bin/false', '/usr/bin/false')
+#: NGNX-APP-000150: groups that confer administration on Ubuntu (and wheel,
+#: admin elsewhere). adm reads every log on the host.
+ADMIN_GROUPS = ('sudo', 'adm', 'wheel', 'admin', 'root')
+SITE_LOGS = ('/var/log/nginx/topic-manager-access.log', '/var/log/nginx/topic-manager-error.log')
+SITE_LOG_DIR = '/var/log/nginx'
+SITE_LOG_PREFIX = 'topic-manager-'
+SITE_LOG_GROUP = 'adm'
+NGINX_DIR = '/etc/nginx'
+MODULES_ENABLED = '/etc/nginx/modules-enabled'
+SECURITY_HEADERS = '/etc/nginx/snippets/tm-security-headers.conf'
+LOG_FORMAT_CONF = '/etc/nginx/conf.d/topic-manager-log-format.conf'
+#: The product's own files under /etc/nginx: drift is a FAIL (DQ1), anything
+#: else under /etc/nginx is the OS package's or the operator's and a WARN.
+PRODUCT_NGINX_FILES = (NGINX_SITE, HTTP_SITE_AVAILABLE, LIMITS_CONF, SNIP_SERVER, SNIP_LOGIN,
+                       SNIP_API, NGINX_SYSLOG_SNIPPET, SECURITY_HEADERS, LOG_FORMAT_CONF)
+#: NGNX-APP-000240: the fields the STIG names for the access log.
+LOG_FORMAT_NAME = 'tm_dod'
+DOD_LOG_FIELDS = ('$server_name', '$server_addr', '$remote_addr', '$remote_user', '$time_local',
+                  '$status', '$request', '$request_id', '$http_user_agent',
+                  '$http_x_forwarded_for')
+
+
+def _check(key, status, detail):
+    return {'key': key, 'status': status, 'detail': str(detail)[:500]}
+
+
+def _read_table(ctx, path):
+    """/etc/passwd-style colon records as lists, or None when unreadable."""
+    try:
+        with open(ctx.p(path), encoding='utf-8', errors='replace') as fh:
+            return [l.rstrip('\n').split(':') for l in fh if l.strip() and not l.startswith('#')]
+    except OSError:
+        return None
+
+
+def nginx_effective(ctx):
+    """`nginx -T` with comments stripped, or None when nginx will not dump
+    its configuration (not installed, or a configuration that does not test)."""
+    rc, out = run(ctx, 'nginx', ['-T'])
+    if rc != 0 or not out:
+        return None
+    # nginx -T marks each file it dumps with "# configuration file <path>:";
+    # those markers are kept (without the "#"), every other comment dropped.
+    return '\n'.join(l[2:] if l.startswith('# configuration file ') else l.split('#', 1)[0]
+                     for l in out.splitlines())
+
+
+def nginx_web_user(dump):
+    m = re.search(r'^\s*user\s+([A-Za-z0-9._-]+)', dump or '', re.M)
+    return m.group(1) if m else WEB_USER_DEFAULT
+
+
+def check_web_account(ctx, user):
+    """NGNX-APP-000140, -000150, -003040: the account nginx's workers run
+    as. Read from the account databases; nothing is changed (DQ2)."""
+    out = []
+    pw = _read_table(ctx, '/etc/passwd')
+    entry = next((r for r in pw or [] if r and r[0] == user), None)
+    if pw is None:
+        out.append(_check('web_account_shell', 'unknown', '/etc/passwd could not be read'))
+    elif entry is None or len(entry) < 7:
+        out.append(_check('web_account_shell', 'warn', 'nginx runs as %s, which has no '
+                          '/etc/passwd entry' % user))
+    elif entry[6] in NOLOGIN_SHELLS:
+        out.append(_check('web_account_shell', 'pass', '%s has the shell %s' % (user, entry[6])))
+    else:
+        out.append(_check('web_account_shell', 'warn', '%s has the login shell %s (expected '
+                          '/usr/sbin/nologin). This product does not change the account; '
+                          'the host baseline owns it.' % (user, entry[6] or '(empty)')))
+    groups = _read_table(ctx, '/etc/group')
+    if groups is None or entry is None or len(entry) < 4:
+        out.append(_check('web_account_groups', 'unknown', 'the group memberships of %s '
+                          'could not be read' % user))
+    else:
+        mine = {g[0] for g in groups if len(g) > 3 and (g[2] == entry[3] or user in g[3].split(','))}
+        bad = sorted(mine & set(ADMIN_GROUPS))
+        if bad:
+            out.append(_check('web_account_groups', 'warn', '%s is in the administrative '
+                              'group(s) %s. This product does not change the account; the host '
+                              'baseline owns it.' % (user, ', '.join(bad))))
+        else:
+            out.append(_check('web_account_groups', 'pass', '%s is in %s only'
+                              % (user, ', '.join(sorted(mine)) or 'no group')))
+    shadow = _read_table(ctx, '/etc/shadow')
+    sentry = next((r for r in shadow or [] if r and r[0] == user), None)
+    if shadow is None or sentry is None or len(sentry) < 2:
+        out.append(_check('web_account_password', 'unknown', 'the shadow entry of %s could not '
+                          'be read' % user))
+    elif sentry[1].startswith(('!', '*')):
+        out.append(_check('web_account_password', 'pass', 'the password of %s is locked' % user))
+    else:
+        out.append(_check('web_account_password', 'warn', 'the password of %s is %s, not '
+                          'locked. This product does not change the account; the host baseline '
+                          'owns it.' % (user, 'EMPTY' if not sentry[1] else 'set')))
+    return out
+
+
+def _walk_nginx(ctx):
+    top = ctx.p(NGINX_DIR)
+    for dirpath, dirnames, filenames in os.walk(top):
+        for name in dirnames + filenames:
+            yield os.path.join(dirpath, name)
+    yield top
+
+
+def check_nginx_config_modes(ctx):
+    """NGNX-APP-000250/-001590: nothing under /etc/nginx may be writable by
+    group or other, or owned by anyone but root. A symlink is judged by what
+    it is (its own mode means nothing)."""
+    product = {ctx.p(f) for f in PRODUCT_NGINX_FILES}
+    mine, theirs = [], []
+    if not os.path.isdir(ctx.p(NGINX_DIR)):
+        return [_check('nginx_config_modes', 'unknown', '%s does not exist' % NGINX_DIR)]
+    for path in _walk_nginx(ctx):
+        try:
+            st = os.lstat(path)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st.st_mode):
+            continue
+        if st.st_uid != 0 or st.st_mode & 0o022:
+            what = '%s (%o, uid %d)' % (path[len(ctx.root):] if ctx.root else path,
+                                       stat.S_IMODE(st.st_mode), st.st_uid)
+            (mine if path in product else theirs).append(what)
+    if mine:
+        return [_check('nginx_config_modes', 'fail', 'Topic Manager files under /etc/nginx are '
+                       'not root-owned or are writable by group/other: %s'
+                       % '; '.join(mine[:8]))]
+    if theirs:
+        return [_check('nginx_config_modes', 'warn', 'not root-owned or writable by group/other '
+                       '(the OS package or another tool owns them): %s' % '; '.join(theirs[:8]))]
+    return [_check('nginx_config_modes', 'pass', 'everything under /etc/nginx is root-owned and '
+                   'writable by root only')]
+
+
+def _gid(ctx, name):
+    for g in _read_table(ctx, '/etc/group') or []:
+        if len(g) > 2 and g[0] == name and g[2].isdigit():
+            return int(g[2])
+    return None
+
+
+def _uid(ctx, name):
+    for u in _read_table(ctx, '/etc/passwd') or []:
+        if len(u) > 2 and u[0] == name and u[2].isdigit():
+            return int(u[2])
+    return None
+
+
+def check_site_logs(ctx, web_user):
+    """NGNX-APP-000400: the product's OWN logs. The two live files must be
+    0640 or tighter, owned by the web account (or root) and group adm (or
+    root) — what the installer and the upgrade create them as and what
+    Ubuntu's logrotate recreates them as. Rotated copies must not be readable
+    by other. Drift is a FAIL (DQ1): the access log holds client addresses."""
+    owners = {0, _uid(ctx, web_user)}
+    groups = {0, _gid(ctx, SITE_LOG_GROUP)}
+    bad, missing = [], []
+    for path in SITE_LOGS:
+        try:
+            st = os.lstat(ctx.p(path))
+        except FileNotFoundError:
+            missing.append(path)
+            continue
+        if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o137 or st.st_uid not in owners \
+                or st.st_gid not in groups:
+            bad.append('%s (%o, uid %d, gid %d)' % (path, stat.S_IMODE(st.st_mode), st.st_uid,
+                                                   st.st_gid))
+    try:
+        names = sorted(os.listdir(ctx.p(SITE_LOG_DIR)))
+    except OSError:
+        names = []
+    for name in names:
+        path = os.path.join(SITE_LOG_DIR, name)
+        if not name.startswith(SITE_LOG_PREFIX) or path in SITE_LOGS:
+            continue
+        try:
+            st = os.lstat(ctx.p(path))
+        except OSError:
+            continue
+        if st.st_mode & 0o007:
+            bad.append('%s (%o: readable by other)' % (path, stat.S_IMODE(st.st_mode)))
+    if bad:
+        return [_check('site_log_modes', 'fail', 'Topic Manager logs readable beyond root, %s '
+                       'and %s: %s' % (web_user, SITE_LOG_GROUP, '; '.join(bad[:6])))]
+    if missing:
+        return [_check('site_log_modes', 'warn', 'not created yet: %s (the installer and the '
+                       'upgrade create them 0640 %s:%s)' % (', '.join(missing), web_user,
+                                                          SITE_LOG_GROUP))]
+    return [_check('site_log_modes', 'pass', 'both site logs are 0640 or tighter, %s/root and '
+                   '%s/root' % (web_user, SITE_LOG_GROUP))]
+
+
+def check_modules(ctx, dump):
+    """NGNX-APP-000370/-000850: the product needs no dynamic module. Every
+    loaded one is listed for the ISSM to approve."""
+    loaded = sorted(set(re.findall(r'^\s*load_module\s+([^;\s]+)\s*;', dump or '', re.M)))
+    try:
+        enabled = sorted(n for n in os.listdir(ctx.p(MODULES_ENABLED)))
+    except OSError:
+        enabled = []
+    if dump is None:
+        return [_check('nginx_modules', 'unknown', 'nginx -T did not run; modules-enabled holds: %s'
+                       % (', '.join(enabled) or 'nothing'))]
+    if loaded:
+        return [_check('nginx_modules', 'warn', 'dynamic module(s) loaded: %s. Topic Manager needs '
+                       'none; each must be approved by the ISSM.' % ', '.join(loaded[:10]))]
+    return [_check('nginx_modules', 'pass', 'no dynamic module is loaded')]
+
+
+#: The files whose ssl_protocols the product sets (the site) or manages (the
+#: http-level line of nginx.conf), as `nginx -T` names them.
+_MANAGED_TLS_FILES = ('/etc/nginx/nginx.conf', NGINX_SITE, '/etc/nginx/sites-enabled/topic-manager')
+
+
+def _dump_files(dump):
+    """[(path, text)] for each file an `nginx -T` dump holds."""
+    marks = list(re.finditer(r'^\s*configuration file (\S+):\s*$', dump or '', re.M))
+    return [(m.group(1), dump[m.end():marks[i + 1].start() if i + 1 < len(marks) else len(dump)])
+            for i, m in enumerate(marks)]
+
+
+def _site_part(dump):
+    """The text of the Topic Manager site file inside an `nginx -T` dump."""
+    m = re.search(r'^\s*configuration file %s:\s*$' % re.escape(NGINX_SITE), dump or '', re.M)
+    if not m:
+        # nginx -T names the file it read, i.e. the sites-enabled link.
+        m = re.search(r'^\s*configuration file /etc/nginx/sites-enabled/topic-manager:\s*$',
+                      dump or '', re.M)
+    if not m:
+        return None
+    rest = dump[m.end():]
+    nxt = re.search(r'^\s*configuration file \S+:\s*$', rest, re.M)
+    return rest[:nxt.start()] if nxt else rest
+
+
+def check_nginx_effective(ctx, dump):
+    """NGNX-APP-000040/-000240/-001070/-001400 and worker_connections, from
+    the configuration nginx itself reports."""
+    if dump is None:
+        return [_check(k, 'unknown', 'nginx -T did not run (nginx missing, or its configuration '
+                       'does not test)') for k in ('tls_protocols', 'nginx_log_format',
+                                                  'server_tokens', 'error_pages',
+                                                  'worker_connections', 'nginx_http_logs')]
+    out = []
+    # The product's own: the site, and the http-level line of nginx.conf that
+    # install.sh and the upgrade manage. A weak protocol there FAILS; in a file
+    # of another site it is reported (WARN), not the product's to change.
+    mine, theirs, n = [], [], 0
+    for path, text in _dump_files(dump):
+        for line in re.findall(r'^\s*ssl_protocols\s+([^;]*);', text, re.M):
+            n += 1
+            weak = [p for p in line.split() if p in ('SSLv3', 'TLSv1', 'TLSv1.1')]
+            if weak:
+                (mine if path in _MANAGED_TLS_FILES else theirs).append('%s in %s' % (
+                    ', '.join(weak), path))
+    if mine:
+        out.append(_check('tls_protocols', 'fail', 'ssl_protocols still allows %s' % '; '.join(mine)))
+    elif theirs:
+        out.append(_check('tls_protocols', 'warn', 'another site allows %s' % '; '.join(theirs[:4])))
+    elif n:
+        out.append(_check('tls_protocols', 'pass', 'every ssl_protocols line is TLS 1.2+ (%d line(s))' % n))
+    else:
+        out.append(_check('tls_protocols', 'warn', 'no ssl_protocols directive was found'))
+    site = _site_part(dump)
+    fmt = re.search(r'^\s*log_format\s+%s\b([^;]*);' % LOG_FORMAT_NAME, dump, re.M)
+    lacking = [f for f in DOD_LOG_FIELDS if not fmt or not re.search(re.escape(f) + r'\b', fmt.group(1))]
+    uses = site is not None and re.search(r'^\s*access_log\s+/var/log/nginx/topic-manager-access\.log\s+%s\s*;'
+                                          % LOG_FORMAT_NAME, site, re.M)
+    if not fmt:
+        out.append(_check('nginx_log_format', 'fail', 'no log_format %s in the effective '
+                          'configuration' % LOG_FORMAT_NAME))
+    elif lacking:
+        out.append(_check('nginx_log_format', 'fail', 'log_format %s lacks %s'
+                          % (LOG_FORMAT_NAME, ', '.join(lacking))))
+    elif not uses:
+        out.append(_check('nginx_log_format', 'fail', 'the Topic Manager site does not log its '
+                          'access log in %s' % LOG_FORMAT_NAME))
+    else:
+        out.append(_check('nginx_log_format', 'pass', 'log_format %s carries every field the STIG '
+                          'names and the site access log uses it' % LOG_FORMAT_NAME))
+    if site is not None and re.search(r'^\s*server_tokens\s+off\s*;', site, re.M):
+        out.append(_check('server_tokens', 'pass', 'server_tokens off in the Topic Manager site'))
+    else:
+        out.append(_check('server_tokens', 'fail', 'the Topic Manager site does not set '
+                          'server_tokens off'))
+    codes = set()
+    for line in re.findall(r'^\s*error_page\s+([^;]*);', site or '', re.M):
+        codes.update(w for w in line.split() if w.isdigit())
+    need = {'403', '404', '500', '502', '503', '504'}
+    if site is not None and need <= codes:
+        out.append(_check('error_pages', 'pass', 'the site serves its own pages for %s'
+                          % ', '.join(sorted(need))))
+    else:
+        out.append(_check('error_pages', 'fail', 'the site has no page of its own for %s'
+                          % ', '.join(sorted(need - codes))))
+    wc = re.findall(r'^\s*worker_connections\s+(\d+)\s*;', dump, re.M)
+    out.append(_check('worker_connections', 'info', 'nginx worker_connections %s (the OS package '
+                      'setting; per-user sessions are capped by the application)'
+                      % (wc[0] if wc else 'not set (nginx default 512)')))
+    main_part = re.search(r'^\s*configuration file /etc/nginx/nginx\.conf:\s*$', dump, re.M)
+    main_text = ''
+    if main_part:
+        rest = dump[main_part.end():]
+        nxt = re.search(r'^\s*configuration file \S+:\s*$', rest, re.M)
+        main_text = rest[:nxt.start()] if nxt else rest
+    plain = [l.strip() for l in re.findall(r'^\s*((?:access|error)_log\s+[^;]*);', main_text, re.M)
+             if 'syslog:' not in l]
+    if plain:
+        out.append(_check('nginx_http_logs', 'info', 'nginx.conf (the OS package) logs other sites '
+                          'to files only: %s. The Topic Manager site sets its own access_log and '
+                          'error_log, which replace these for its traffic.' % '; '.join(plain[:4])))
+    else:
+        out.append(_check('nginx_http_logs', 'pass', 'nginx.conf has no file-only log directive'))
+    return out
+
+
+def check_tls_key(ctx):
+    try:
+        st = os.lstat(ctx.p(TLS_KEY))
+    except FileNotFoundError:
+        return [_check('tls_key_mode', 'fail', '%s does not exist' % TLS_KEY)]
+    if stat.S_ISREG(st.st_mode) and st.st_uid == 0 and not st.st_mode & 0o077:
+        return [_check('tls_key_mode', 'pass', '%s is %o, root-owned' % (TLS_KEY,
+                                                                        stat.S_IMODE(st.st_mode)))]
+    return [_check('tls_key_mode', 'fail', '%s is %o, uid %d (expected 0600 root)'
+                   % (TLS_KEY, stat.S_IMODE(st.st_mode), st.st_uid))]
+
+
+def compliance_checks(ctx):
+    """Every host check, in a fixed order. Never raises for a host fact: a
+    check that cannot be made says 'unknown'."""
+    dump = nginx_effective(ctx)
+    user = nginx_web_user(dump)
+    checks = []
+    for fn in (lambda: check_web_account(ctx, user), lambda: check_nginx_config_modes(ctx),
+               lambda: check_site_logs(ctx, user), lambda: check_modules(ctx, dump),
+               lambda: check_nginx_effective(ctx, dump), lambda: check_tls_key(ctx)):
+        try:
+            checks.extend(fn())
+        except Exception as exc:          # one broken probe must not hide the others
+            checks.append(_check('internal', 'unknown', '%s: %s' % (type(exc).__name__, exc)))
+    return checks
+
+
+def summarise(checks):
+    counts = {}
+    for c in checks:
+        counts[c['status']] = counts.get(c['status'], 0) + 1
+    return ', '.join('%d %s' % (counts[k], k) for k in ('pass', 'warn', 'fail', 'info', 'unknown')
+                     if counts.get(k))
+
+
+def report(ctx):
+    """--report: one line per check, STATUS<TAB>key<TAB>detail. Exit 1 when
+    any check FAILS (the product's own files drifted), else 0."""
+    checks = compliance_checks(ctx)
+    for c in checks:
+        print('%s\t%s\t%s' % (c['status'].upper(), c['key'], ' '.join(c['detail'].split())))
+    return 1 if any(c['status'] == 'fail' for c in checks) else 0
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='tm-apply')
     ap.add_argument('domain', choices=DOMAINS)
+    ap.add_argument('--report', action='store_true',
+                    help='compliance only: print the host checks and exit')
     ap.add_argument('--root', help=argparse.SUPPRESS)
     ap.add_argument('--bin', help=argparse.SUPPRESS)
     ap.add_argument('--lib', help=argparse.SUPPRESS)
@@ -1159,6 +1552,14 @@ def main(argv=None):
     os.umask(0o022)
     ctx = Ctx(args)
     domain = args.domain
+    if args.report:
+        if domain != 'compliance':
+            print('--report is for the compliance domain only', file=sys.stderr)
+            return 2
+        if ctx.euid != 0 and not ctx.test:
+            print('tm-apply compliance --report must run as root', file=sys.stderr)
+            return 2
+        return report(ctx)
     ctx.job = 'unknown'
     doc = {'domain': domain, 'job': None, 'state': 'running', 'started_at': now_iso(),
            'finished_at': None, 'step': 'stage', 'message': 'running', 'details': [],
@@ -1179,6 +1580,9 @@ def main(argv=None):
         doc.update(job=job, requested_by=by)
         write_result(ctx, domain, doc)
         log('apply %s job=%s requested by %s' % (domain, job, by))
+        if domain == 'compliance':
+            checks = compliance_checks(ctx)
+            raise _Measured(checks)
         if domain == 'syslog':
             plan = plan_syslog(ctx, values)
         elif domain == 'time':
@@ -1191,6 +1595,13 @@ def main(argv=None):
         state, step, message, details = execute(ctx, domain, plan)
         if state == 'ok':
             doc['applied'] = plan.applied
+    except _Measured as done:
+        state, step = 'ok', 'done'
+        doc['checks'] = done.checks
+        message = 'compliance measured: %s. Nothing on the host was changed.' % (
+            summarise(done.checks) or 'no checks')
+        details = ['%s %s: %s' % (c['status'].upper(), c['key'], c['detail'])
+                   for c in done.checks if c['status'] in ('warn', 'fail', 'unknown')]
     except ApplyError as exc:
         # Before the install step: nothing on the host was changed.
         state, step = 'failed', exc.step

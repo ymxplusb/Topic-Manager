@@ -1,0 +1,48 @@
+[Unit]
+Description=Jarvis Topic Manager — measure the host for the STIG compliance page (read-only)
+Documentation=file:/usr/libexec/topic-manager/tm-apply
+
+# WHY THIS UNIT EXISTS (v1.3.0)
+#
+# Settings > Support > STIG compliance shows, per rule, what the host measures
+# now. Some of it only root can read: the web server account's password lock
+# (/etc/shadow), the configuration nginx itself reports (`nginx -T` needs
+# /run/nginx.pid and the log files), modes and owners under /etc/nginx and
+# /var/log/nginx. The application account may START this unit through polkit
+# (install/polkit/50-topic-manager.rules) and do nothing else with it, exactly
+# like the four apply units. The unit runs ONE fixed command as root with ONE
+# fixed argument.
+#
+# It CHANGES NOTHING on the host (James 2026-10-02, DQ1/DQ2: host state the
+# product does not own is checked and reported, never altered). The helper
+# reads the request the application staged in /opt/topic-manager/data/apply
+# (a measurement carries no settings and no files), trusts none of it, and
+# writes its verdict, with the checks, to
+# /run/topic-manager-apply/compliance.result, which the service account can
+# read and cannot write.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /usr/libexec/topic-manager/tm-apply compliance
+RemainAfterExit=no
+WorkingDirectory=/
+UMask=0022
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=topic-manager-apply
+# Shared by all five apply units and kept between runs: it holds the results.
+RuntimeDirectory=topic-manager-apply
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# Read-only everywhere else. /run for the result (and nginx -T's pid check),
+# /var/log/nginx because `nginx -T` opens the logs it would write, and the
+# staging it deletes. A leading - means "if present".
+ReadWritePaths=-/opt/topic-manager/data/apply /run /var/log/nginx
+
+# No [Install] section: never enabled, only started on demand.

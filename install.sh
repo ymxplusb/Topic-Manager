@@ -39,6 +39,16 @@
 #                           chrony and systemd-timesyncd conflict: this REMOVES
 #                           systemd-timesyncd (the only removal ever allowed)
 #   --no-http-redirect      no :80 listener at all, and ufw 80/tcp stays closed
+#
+#   v1.3.0 (STIG decisions of 2026-10-02):
+#   --no-remote-syslog      acknowledge that the audit trail and the nginx logs
+#                           stay on this host. An install REFUSES to start
+#                           without either --syslog-host or this flag (unless a
+#                           previous install already saved a collector); OFF is
+#                           shown as an open item on the compliance page
+#   --no-consent-banner     do not show the DoD notice and consent banner at
+#                           sign-in. A fresh install turns it ON; a reinstall
+#                           keeps what is saved unless this flag is given
 #   --packages-only         install the missing runtime packages (online from
 #                           apt, offline from this bundle) and change NOTHING
 #                           else — for an existing deployment, e.g. to add
@@ -117,7 +127,8 @@ APPLY_HELPER_FILES=("755 install/libexec/tm-apply tm-apply"
 # Release files and links at fixed paths elsewhere. t45 parses every install,
 # cp and ln both scripts run and holds them to these lists.
 HOST_FILES=(/etc/nginx/snippets/tm-security-headers.conf
-            /etc/nginx/sites-available/topic-manager /etc/logrotate.d/topic-manager)
+            /etc/nginx/sites-available/topic-manager /etc/logrotate.d/topic-manager
+            /etc/nginx/conf.d/topic-manager-log-format.conf)
 HOST_LINKS=(/etc/nginx/sites-enabled/topic-manager)
 # v1.2.0: the files Settings > "Apply to host" manages (rendered by the root
 # helper /usr/libexec/topic-manager/tm-apply). They are OPERATOR STATE, like
@@ -203,6 +214,64 @@ write_install_manifest() {   # write_install_manifest <source-tree> [pending]
     mv -f -- "$tmp" "$out"
 }
 # <<< the product's host artefacts
+
+# >>> v1.3.0 host STIG checks — byte-identical in install.sh and install/upgrade-full.sh (t51)
+# James 2026-10-02 (DQ1/DQ2): host state this product does not own — the web
+# server account, files under /etc/nginx that are not its own, loaded nginx
+# modules — is CHECKED and REPORTED, never changed. The product's OWN files
+# are created correctly here, and a drift BLOCKS: ensure_site_logs below, and
+# the root helper's checks at the end of the run, where a FAIL stops it.
+#
+# NGNX-APP-000400: nginx creates a log it is told to write when the file is
+# absent, 0644 under its root master's umask (measured on a STIG host:
+# topic-manager-error.log 0644, readable by every local account; the access
+# log holds client addresses). The two logs are created here FIRST, 0640
+# <web account>:adm, which is what Ubuntu's /etc/logrotate.d/nginx recreates
+# them as at every rotation; an existing one is narrowed to that, and a
+# rotated copy loses its "other" bits. Never through a symlink.
+SITE_LOG_NAMES=(topic-manager-access.log topic-manager-error.log)
+ensure_site_logs() {   # ensure_site_logs <log-dir> <web-user>; 1 + the problems on stdout
+    local dir="$1" web="$2" grp=adm f p got m bad=""
+    getent group "$grp" >/dev/null 2>&1 || grp=root
+    id "$web" >/dev/null 2>&1 || web=root
+    if [[ -L "$dir" ]]; then echo "${dir} is a symlink; refusing to create logs through it"; return 1; fi
+    [[ -d "$dir" ]] || install -d -m 755 -o root -g "$grp" "$dir"
+    for f in "${SITE_LOG_NAMES[@]}"; do
+        p="${dir}/${f}"
+        if [[ -L "$p" ]]; then bad="${bad} ${p} (a symlink)"; continue; fi
+        if [[ -e "$p" ]]; then
+            chown "${web}:${grp}" "$p" && chmod u-x,g-wx,o-rwx "$p"
+        else
+            install -m 640 -o "$web" -g "$grp" /dev/null "$p"
+        fi
+        got="$(stat -c '%a %U %G' "$p" 2>/dev/null || echo 'missing - -')"
+        m="${got%% *}"
+        if [[ ! "$m" =~ ^[0-7]+$ ]] || (( (8#$m & 8#137) != 0 )) \
+                || [[ ! " ${got#* } " =~ ^\ (${web}|root)\ (${grp}|root)\ $ ]]; then
+            bad="${bad} ${p} (${got})"
+        fi
+    done
+    for p in "${dir}"/topic-manager-*.log.*; do
+        [[ -f "$p" && ! -L "$p" ]] || continue
+        chmod o-rwx "$p" || bad="${bad} ${p} (could not narrow)"
+    done
+    if [[ -n "$bad" ]]; then echo "not 0640 ${web}:${grp}:${bad}"; return 1; fi
+    return 0
+}
+
+# host_stig_report <helper> — the release's own root helper measures the host,
+# read-only (tm-apply compliance --report): one "STATUS<TAB>check<TAB>detail"
+# line per check; exit 1 when a check FAILS (this product's own files or
+# configuration drifted), 0 otherwise. A helper that is not there is SAID,
+# never skipped silently.
+host_stig_report() {   # host_stig_report <helper>
+    if [[ ! -f "$1" ]]; then
+        printf 'UNKNOWN\thost_checks\t%s is missing, so the host STIG checks were not run\n' "$1"
+        return 0
+    fi
+    python3 -I "$1" compliance --report
+}
+# <<< v1.3.0 host STIG checks
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()    { echo -e "${CYAN}[INFO]${NC} $*"; }
@@ -838,6 +907,7 @@ OPT_LDAP_BIND_DN=""; OPT_LDAP_CA_CERT=""; NON_INTERACTIVE=false
 OPT_SYSLOG_HOST=""; OPT_SYSLOG_PORT=""; OPT_SYSLOG_PROTOCOL=""; OPT_SYSLOG_APP_ID=""
 OPT_SYSLOG_CA=""; OPT_NTP_SERVERS=""; OPT_INSTALL_CHRONY=false; OPT_HTTP_REDIRECT=""
 PACKAGES_ONLY=false
+OPT_NO_REMOTE_SYSLOG=false; OPT_CONSENT=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --tls-cert)        shift; OPT_TLS_CERT="${1:-}" ;;
@@ -858,8 +928,10 @@ while [[ $# -gt 0 ]]; do
         --ntp-server)      shift; OPT_NTP_SERVERS="${1:-}" ;;
         --install-chrony)  OPT_INSTALL_CHRONY=true ;;
         --no-http-redirect) OPT_HTTP_REDIRECT=false ;;
+        --no-remote-syslog) OPT_NO_REMOTE_SYSLOG=true ;;
+        --no-consent-banner) OPT_CONSENT=false ;;
         --packages-only)   PACKAGES_ONLY=true ;;
-        -h|--help)         sed -n '2,56p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help)         sed -n '2,66p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *)                 die "Unknown option: $1 (try --help)" ;;
     esac
     shift
@@ -882,6 +954,13 @@ SEED_PAIRS=()
 [[ -z "$OPT_SYSLOG_APP_ID" ]]   || SEED_PAIRS+=("syslog_app_id=${OPT_SYSLOG_APP_ID}")
 [[ -z "$OPT_NTP_SERVERS" ]]     || SEED_PAIRS+=("ntp_servers=${OPT_NTP_SERVERS}")
 [[ -z "$OPT_HTTP_REDIRECT" ]]   || SEED_PAIRS+=("http_redirect_enabled=${OPT_HTTP_REDIRECT}")
+# v1.3.0 (NGNX-APP-000180, DQ9): the consent notice is ON on a fresh install
+# (no tm.db yet); a reinstall keeps the saved choice unless the flag is given.
+if [[ "$OPT_CONSENT" == false ]]; then
+    SEED_PAIRS+=("dow_enabled=false")
+elif [[ ! -e "${DATA_DIR}/tm.db" ]]; then
+    SEED_PAIRS+=("dow_enabled=true")
+fi   # the consent seed (t50)
 if [[ ${#SEED_PAIRS[@]} -gt 0 ]]; then
     SEED_ERR="$(python3 - "$SCRIPT_DIR" "${SEED_PAIRS[@]}" <<'PYSEED' 2>&1
 import sys
@@ -891,10 +970,11 @@ vals = {}
 for pair in sys.argv[2:]:
     k, _, v = pair.partition('=')
     try:
-        vals[k] = s.normalise(k, v)
+        vals[k] = s.normalise_seed(k, v)
     except s.InvalidSetting as exc:
         flag = {'ntp_servers': 'ntp-server', 'http_redirect_enabled': 'no-http-redirect',
-                'syslog_enabled': 'syslog-host'}.get(k, k.replace('_', '-'))
+                'syslog_enabled': 'syslog-host', 'dow_enabled': 'no-consent-banner'}.get(
+                    k, k.replace('_', '-'))
         print('--%s: %s' % (flag, exc.reason)); sys.exit(1)
 if vals.get('syslog_enabled') == 'true':
     full = dict(s.ADMIN_DEFAULTS); full.update(vals)
@@ -936,6 +1016,34 @@ if [[ $PACKAGES_ONLY == true ]]; then
     success "--packages-only: runtime packages present; nothing else was changed."
     exit 0
 fi
+
+# ─── v1.3.0: where the audit trail goes (SRG-APP-000515, DQ10) ──────────────
+# James 2026-10-02: an install does not finish with the audit trail and the
+# nginx logs silently kept on the host. Either a collector is named, or the
+# operator says, explicitly, that there is none (the compliance page then
+# shows it as an open item). A reinstall over a host that already forwards is
+# not asked again. Refused HERE, before anything is changed.
+saved_remote_syslog() {   # "true" when tm.db already holds syslog_enabled=true
+    [[ -f "${DATA_DIR}/tm.db" ]] || return 0
+    python3 - "${DATA_DIR}/tm.db" <<'PYSAVED' 2>/dev/null || true
+import sqlite3, sys
+con = sqlite3.connect('file:%s?mode=ro' % sys.argv[1], uri=True)
+row = con.execute("SELECT value FROM app_settings WHERE key = 'syslog_enabled'").fetchone()
+print(row[0] if row else '')
+PYSAVED
+}
+if [[ -n "$OPT_SYSLOG_HOST" && $OPT_NO_REMOTE_SYSLOG == true ]]; then
+    die "--syslog-host and --no-remote-syslog contradict each other. Nothing has been changed."
+fi
+if [[ -z "$OPT_SYSLOG_HOST" && $OPT_NO_REMOTE_SYSLOG != true && "$(saved_remote_syslog)" != true ]]; then
+    die "No remote syslog collector was named. The audit trail and the nginx logs must be
+     off-loaded (SRG-APP-000515, NGNX-APP-001400): re-run with --syslog-host <collector>
+     [--syslog-port P --syslog-protocol udp|tcp|tls], or with --no-remote-syslog to
+     acknowledge that they stay on this host (the compliance page then shows it as an
+     open item). Nothing has been changed."
+fi
+[[ $OPT_NO_REMOTE_SYSLOG != true ]] \
+    || warn "--no-remote-syslog: the audit trail and the nginx logs stay on this host (an open item on the compliance page)."
 
 # ─── directory settings (fresh host only) ────────────────────────────────────
 # Asked for BEFORE anything is installed, so a missing answer stops the run on
@@ -1355,15 +1463,17 @@ install -m 644 -o root -g root \
     /etc/systemd/system/topic-manager-nginx-test.service
 # v1.2.0: the four one-shot apply units (root, started on demand through
 # polkit, never enabled) and the daily audit prune (the service account).
+# v1.3.0: the fifth, the read-only compliance measurement.
 for u in topic-manager-apply-syslog.service topic-manager-apply-time.service \
          topic-manager-apply-nginx.service topic-manager-apply-tls.service \
+         topic-manager-apply-compliance.service \
          topic-manager-audit-prune.service topic-manager-audit-prune.timer \
          topic-manager-apply-audit.service topic-manager-apply-audit.path; do
     install -m 644 -o root -g root "${SCRIPT_DIR}/systemd/${u}" "/etc/systemd/system/${u}"
 done
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}.socket" "${SERVICE_NAME}" --quiet
-success "Service installed: ${SERVICE_NAME} on /run/topic-manager/gunicorn.sock (+ 4 apply units, apply-result audit, audit prune timer)"
+success "Service installed: ${SERVICE_NAME} on /run/topic-manager/gunicorn.sock (+ 5 apply units, apply-result audit, audit prune timer)"
 
 # ─── the root apply helper (v1.2.0) ─────────────────────────────────────────
 # root:root, and nothing under it writable by anyone else: the helper runs as
@@ -1408,6 +1518,12 @@ sed -i "s|server_name YOUR-HOSTNAME.YOUR-DOMAIN.com _;|server_name ${SERVER_NAME
     /etc/nginx/sites-available/topic-manager
 ln -sf /etc/nginx/sites-available/topic-manager /etc/nginx/sites-enabled/topic-manager
 rm -f /etc/nginx/sites-enabled/default
+# v1.3.0 (NGNX-APP-000240): the DoD log format both sites log in, at http level.
+install -m 644 -o root -g root "${SCRIPT_DIR}/nginx/tm-log-format.conf" /etc/nginx/conf.d/topic-manager-log-format.conf
+# v1.3.0 (NGNX-APP-000400): the site's own logs, 0640 before nginx opens them.
+SITE_LOG_PROBLEM="$(ensure_site_logs /var/log/nginx www-data)" \
+    || die "The Topic Manager nginx logs could not be made private: ${SITE_LOG_PROBLEM}"
+success "Site logs private: /var/log/nginx/topic-manager-{access,error}.log 0640"
 
 # v1.2.0: what Settings manages lives in files the root helper renders. The
 # release's defaults are laid down only where a file is ABSENT, so a reinstall
@@ -1643,6 +1759,25 @@ systemctl enable --now topic-manager-audit-prune.timer --quiet \
     || warn "The audit prune timer could not be enabled: systemctl enable --now topic-manager-audit-prune.timer"
 success "Audit retention: topic-manager-audit-prune.timer (daily)"
 
+# ─── v1.3.0: the host STIG checks (DQ1/DQ2) ─────────────────────────────────
+# Measured by the release's root helper, read-only. Host state this product
+# does not own is reported (WARN) and left alone; a FAIL is this product's
+# own file or configuration, created moments ago, and stops the install.
+info "Host STIG checks (read-only; see docs/STIG-COMPLIANCE.md):"
+STIG_RC=0
+STIG_OUT="$(host_stig_report "${SCRIPT_DIR}/install/libexec/tm-apply")" || STIG_RC=$?
+while IFS=$'\t' read -r _st _key _detail; do
+    [[ -n "${_st:-}" ]] || continue
+    case "$_st" in
+        PASS|INFO) success "  ${_key}: ${_detail}" ;;
+        FAIL)      warn "  FAIL ${_key}: ${_detail}" ;;
+        *)         warn "  ${_key}: ${_detail}" ;;
+    esac
+done <<<"$STIG_OUT"
+[[ $STIG_RC -eq 0 ]] || die "A host STIG check FAILED on Topic Manager's own files or configuration (above).
+     The service is installed and running; fix the file named and re-run, or see
+     TROUBLESHOOTING.md -> Host STIG checks."
+
 # ─── the install manifest (gatekeeper round 6, B1) ──────────────────────────
 # The positive record of every host artefact this install laid down: the only
 # thing a later rollback may retire or put back (see host_artefacts above).
@@ -1668,6 +1803,12 @@ if [[ -z "$OPT_TLS_CERT" && -n "$TLS_NAMES" ]] \
 echo "  2. The TLS certificate is SELF-SIGNED. Replace ${TLS_CRT} and"
 echo "     ${TLS_KEY} with a CA-issued pair, then: sudo systemctl reload nginx"
 fi
+echo ""
+if [[ $OPT_NO_REMOTE_SYSLOG == true ]]; then
+echo "  -. Remote syslog is OFF (--no-remote-syslog): the audit trail stays on"
+echo "     this host. Name a collector in Settings > Logging > Remote syslog."
+fi
+echo "  Compliance: Settings > Support > STIG compliance (docs/STIG-COMPLIANCE.md)"
 echo ""
 echo "  Logs:  journalctl -u ${SERVICE_NAME} -f"
 echo "         tail -f ${LOG_DIR}/error.log"

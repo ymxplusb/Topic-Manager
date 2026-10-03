@@ -17,8 +17,9 @@
  * "Interactive authentication required", which is polkit refusing, not the
  * sandbox. This file is that rule.
  *
- * SCOPE. Seven units, eight unit/verb pairs: an explicit verb for each,
- * two for nginx (v1.2.0 added the four one-shot apply units, START only). addRule is evaluated for
+ * SCOPE. Eight units, nine unit/verb pairs: an explicit verb for each,
+ * two for nginx (v1.2.0 added the four one-shot apply units, v1.3.0 the
+ * read-only compliance measurement, START only). addRule is evaluated for
  * EVERY manage-units action on the system, so anything not matched here falls
  * through to the default policy untouched — this file only ever returns YES,
  * never NO, and never widens anything for any other subject.
@@ -66,7 +67,8 @@ polkit.addRule(function (action, subject) {
         (unit === "topic-manager-apply-syslog.service" ||
          unit === "topic-manager-apply-time.service" ||
          unit === "topic-manager-apply-nginx.service" ||
-         unit === "topic-manager-apply-tls.service")) {
+         unit === "topic-manager-apply-tls.service" ||
+         unit === "topic-manager-apply-compliance.service")) {
         return polkit.Result.YES;
     }
 
