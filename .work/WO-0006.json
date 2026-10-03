@@ -4,7 +4,7 @@
   "project": "Topic Manager",
   "release": "minor",
   "opened": "2026-10-02",
-  "status": "scoping",
+  "status": "assuring",
   "depends_on": "Baseline release/v1.2.0 @ b869f63 (= v1.2.0, LIVE on prod). v1.2.1 (release/v1.2.1, WO-0005, other worktree ../topic-manager-v121, HEAD f4d5530 at scout time) changes app/components/SettingsTab.js (108 lines), install/upgrade-full.sh, README.md and every version surface. v1.3.0 MUST branch from v1.2.1 after it merges, and every line number in this work order (measured at b869f63) must be re-anchored. Do not touch ../topic-manager-v121.",
   "input": {
     "board": "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/board/board-decisions.json (75 rules: F5 NGINX STIG V1R1 32 + Database SRG V4R5 narrowed to SQLite 43; 64 Yes / 8 Other / 3 No). Only one comment from James: NGNX-APP-000180.",
@@ -1649,5 +1649,88 @@
       "verdict": "v1.3.0 = scope A (board Yes/Other rules v1.2.0 didn't build): 30 items G1-G7. Panel run 2: Claude, Gemini, Codex (VM, gpt-6-astra) answered; deepseek SILENT (Luna2024 down), attested by James. Rulings by James 2026-10-02: DQ1 warn on host state, enforce + block on product-owned files; DQ2 www-data verify/report only; DQ3 docs/STIG-COMPLIANCE.md source of truth + live Settings page + sync gate; DQ4 build only the 001900 issuer/self-signed warning, document the rest with evidence; DQ5 DoD log_format + syslog in product conf.d; DQ6 source/outcome columns + ISO-8601 Z migration; DQ7 audit signed-in failures incl. 400/403, exports, audit reads; DQ8 12h org setting, 15-min AD re-check, admin End sessions, AD outage = reads only; DQ9 app consent modal, server-enforced + audited, default ON + installer flag; DQ10 refuse without --syslog-host or --no-remote-syslog. Codex contradicted DQ4/DQ8; James kept both. Open: build from release/v1.2.1.",
       "at": "2026-10-03T03:22:27Z"
     }
+  },
+  "builder": {
+    "by": "builder",
+    "date": "2026-10-02",
+    "worktree": "/Users/jamesrodman/Scripts/topic-manager-v130, branch release/v1.3.0 (from 870c9c4 = v1.2.1 24ab487 + the WO-0006 records)",
+    "commits": [
+      "f426e54 backend (v1.3.0): audit source/outcome + ISO Z, sessions, consent, compliance API",
+      "59c6606 host (v1.3.0): DoD log format, own error pages, site logs 0640, host STIG checks, syslog required",
+      "ef1307c frontend (v1.3.0): consent first, sessions, compliance page, audit columns and banner",
+      "a8f837a compliance (v1.3.0): docs/STIG-COMPLIANCE.md is the source of truth, held to the page by a gate",
+      "a79c8f8 tests (v1.3.0): t48-t53 and the contract updates the rulings oblige",
+      "d94490c docs (v1.3.0): install/upgrade flags, sessions, consent, compliance page, audit actions",
+      "c8274ee release: version cascade to 1.3.0",
+      "49edd89 tests (v1.3.0): close the gaps the mutation sweep was written against",
+      "42d892f sonar (v1.3.0): the 12 new issues sonar-local found at 49edd89, fixed",
+      "3c6214b tests (v1.3.0): mutation controls M608-M790; mutate.sh targets; contract",
+      "691eebe tests (v1.3.0): close M652, M715, M718; one more Sonar S2486",
+      "f15df69 tests (v1.3.0): M643 was a malformed control, not an unproven one"
+    ],
+    "root_cause": "v1.2.0 built the STIG host settings but left the board rules it did not reach unmet in the code itself: audit rows had no source/outcome and an unmarked timestamp; failed writes, CSRF refusals and audit reads were not audited; Kafka errors returned str(exc) (broker names, addresses) to the browser; sessions had only a sliding idle timeout, a group check only at sign-in and no administrator revoke; the consent notice was a client-side modal, default off; nginx logged in \"combined\" and served its own error pages; nothing checked the web account, /etc/nginx, modules or the site logs (tm-qc: topic-manager-error.log 0644); an install or upgrade could finish with the audit trail silently on-host; and no document or page said, rule by rule, how each board rule is met.",
+    "by_group": {
+      "G1 host checks": "tm-apply compliance (read-only domain, fifth unit, polkit start) + --report used by install.sh (end of install; FAIL stops it) and upgrade-full.sh (--audit-only rows: host WARN, own-file FAIL shown as WARN-to-be-fixed; after deploy a FAIL rolls back). Checks: web account shell/groups/password lock (never changed, DQ2), /etc/nginx modes (product files FAIL, others WARN), loaded modules, site logs; ensure_site_logs creates/narrows topic-manager-*.log 0640 www-data:adm (byte-identical block in both scripts).",
+      "G2 nginx": "log_format tm_dod (every NGNX-APP-000240 field) in /etc/nginx/conf.d/topic-manager-log-format.conf (new HOST_FILE), used by both sites and the rendered syslog copy; own 403/404 HTML and 500/502/503/504 JSON pages via named locations (status kept, headers included, repeated where a location sets its own error_page); worker_connections reported (info), not managed (DQ5).",
+      "G3 off-load": "install.sh refuses without --syslog-host or --no-remote-syslog (unless tm.db already forwards); the upgrade blocks the same way, not --force-able, and saves --syslog-host through the app validator; remote syslog OFF is an open item on the compliance page; the audit-write-failure banner (Settings + Audit tab) from a state file beside tm.db.",
+      "G4 sessions/consent": "session_absolute_hours (default 12, 1-24) enforced from created_at with SESSION_EXPIRED reason; 15-min group re-check with the service account (removed/gone ends every session of the user, SESSION_REVOKED; directory down = reads only, writes 503, retried once a minute, sign-out never refused); GET /api/sessions (handles only) + POST /api/sessions/end (user or all, caller kept, SESSIONS_ENDED, one transaction); consent: POST /api/auth/consent, sign-in refused 403 without a fresh (10 min, one-use) acceptance, CONSENT_ACCEPTED before LOGIN, replaceable text dow_text (validated, public, audited by digest), LoginView shows it before the form; fresh install seeds it ON, --no-consent-banner.",
+      "G5 audit content": "source + outcome columns and ISO 8601 Z timestamps by tm/audit.migrate_schema, one transaction with AUDIT_SCHEMA_MIGRATED, idempotent at every start; syslog line and CSV APPEND source/outcome; REQUEST_REFUSED for a signed-in refused write (after_request), Kafka refusals under their own action with outcome failure; AUDIT_READ/AUDIT_EXPORT written first (fail-closed); anonymous refusals to a rate-limited service-log line, never tm.db; generic Kafka message + reference, detail logged; no-cluster write 409.",
+      "G6 docs/evidence": "docs/STIG-COMPLIANCE.md (75 rules, status/how met/how verified/evidence, AO decision point on every Other/INHERITED/N-A), Settings > Support > STIG compliance (live checks, Measure host now, CSV), tools/check-stig-compliance.sh gate (+t53); 001900 issuer/self-signed warning (DQ4); unsafe-eval accepted-risk note in the header snippet; SBOM SQLite patch dependency.",
+      "G7 db": "get_db switches extension loading off on every connection (t17); 795 documented INHERITED with a reference auditd rule (no rule shipped, DQ4)."
+    },
+    "files_changed": "59 files (git diff --stat 870c9c4..691eebe): tm/{audit,audit_retention,apply,auth,compliance(new),hoststatus,models,routes,service_control,settings_schema}.py, install.sh, install/upgrade-full.sh, install/libexec/tm-apply, install/polkit/50-topic-manager.rules, systemd/topic-manager-apply-compliance.service (new), nginx/{topic-manager.conf,topic-manager-http.conf,tm-security-headers.conf,tm-log-format.conf (new)}, app/{main.js,components/LoginView.js,AuditTab.js,SettingsTab.js}, docs/{STIG-COMPLIANCE.md (new),INSTALL.md}, tools/check-stig-compliance.sh (new), README, TROUBLESHOOTING, SBOM, CHANGELOG, install/README.md, prepare-offline.sh, every version surface, tests (t48-t53 new; t17,t30,t31,t33,t35,t36,t39,t43,t47, lib/apply_fixture.sh, lib/settings-v120-probe.js, mutate.sh, mutations.txt), .claude/project.yml.",
+    "amendments": [
+      "systemd/topic-manager-apply-compliance.service (new) - DQ3 requires the live page be measured through the root helper/apply pattern; a measurement needs its own fixed unit.",
+      "install/polkit/50-topic-manager.rules - start on that unit (nine pairs over eight units); docs counts follow.",
+      "tm/service_control.py - the unit in APPLY_UNITS/ALLOWED_UNITS.",
+      "tm/compliance.py (new) - the page rule list (held to the doc by the gate) and the app-side live checks.",
+      "tm/hoststatus.py - the NGNX-APP-001900 issuer/self-signed warning (DQ4) lives with the TLS status it extends.",
+      "tools/check-stig-compliance.sh (new) - the DQ3 sync gate.",
+      "nginx/topic-manager-http.conf - the :80 site logged in \"combined\" to the OS default log; DQ5 requires every product access_log in tm_dod.",
+      "install/README.md - its polkit pair count is held to the rule by t47.",
+      "tests outside the scout list (t17, t35, t47, lib/apply_fixture.sh, lib/settings-v120-probe.js, mutate.sh) - contract pins the rulings change, and mutation targets."
+    ],
+    "decisions_made": [
+      "DQ9 default ON is an installer seed on a FRESH install (no tm.db), not a code default: an upgraded host keeps its saved setting; OFF is a WARN in --audit-only and an open item on the page.",
+      "DQ7: LOGIN_FAILED/LOGIN_REFUSED stay in tm.db (authentication events, AU-2; nginx holds sign-in to 10/min/address); every OTHER anonymous refusal goes only to the rate-limited service log + nginx access log.",
+      "DQ3: the three No rules carry status NOT-MET (outside MET/PARTLY/INHERITED/N-A) because they are not met; the gate allows NOT-MET only with decision No.",
+      "DQ8: the re-check needs the LDAP service account (the user password is not kept). Without auth.ldap_bind_dn it is \"unsupported\": sessions are allowed, the compliance page and --audit-only WARN. Directory down: retried at most once a minute per session; Sign out is never refused; End sessions never ends the caller's own.",
+      "Session metadata (verified_at, verify_attempt_at, end_reason) is a side table session_meta, so the sessions table keeps the shape every restore point has; expired rows are kept 24 h so the next request is told why.",
+      "DQ6: syslog line and CSV APPEND source/outcome after the v1.2 fields (positional consumers unbroken); old rows: sign-in rows take the address from target, others \"unrecorded\"; outcome inferred from the action word (SYSTEM_APPLY_RESULT from state=ok).",
+      "DQ7: AUDIT_READ/AUDIT_EXPORT are fail-closed (no record, no data). A refused write by an expired session is anonymous.",
+      "DQ5: log_format in a conf.d file (not the site), because conf.d is read before sites-enabled and the :80 site must use it too.",
+      "NGNX-APP-001070: nginx error pages are named locations with inline bodies (no new docroot files); error_page without \"=\" keeps the original status (measured by t52 on the real nginx).",
+      "DQ1: tls_protocols FAILs only for the product-managed files (the site, nginx.conf http level); another site's weak protocol is a WARN. The upgrade also narrows server.key to root-only (as install.sh already does for a kept key), since tls_key_mode is a product-owned FAIL after deploy.",
+      "DQ10: the upgrade's remote-syslog block is not --force-able (like the directory-keys block).",
+      "The compliance measurement is requested and audited like an apply (SYSTEM_APPLY_REQUESTED/RESULT, target compliance, source system)."
+    ],
+    "consumers_addressed": "13/13 from scout: the syslog key=value line (appended keys), CSV header (appended columns), AuditTab, retention string compare (migration + t48 cutoff-day test), README action list + count (28, t39), apply.py/audit_retention.py writers (source system), install manifest/HOST_FILES (log-format conf; the new unit auto-recorded), prepare-offline (git archive, no allowlist change; printed install command), env-neutral (all new files scanned clean), PPSM pair (no port change; version rows), TROUBLESHOOTING keyed (8 new strings, t39), mutations re-anchored (M186, M200, M206, M210), Ubuntu logrotate (the product creates the logs as logrotate recreates them; does not fight it).",
+    "tests": {
+      "new_files": "t48-audit-v130 (10), t49-sessions-v130 (7), t50-consent-v130 (5), t51-host-checks-v130 (11), t52-nginx-v130 (4), t53-stig-compliance-v130 (2, 14 red proofs)",
+      "changed": "t17 (+get-db-refuses-load-extension), t30 (counts 96/95), t31 (six public keys, session_absolute_hours), t33, t35 (five units), t36 (log format include), t39 (+8 keyed strings), t43 (AUDIT_READ rows), t47 (nine pairs over eight units)",
+      "final_linux_gate": "fresh python:3.12-bookworm on 192.168.202.81, git bundle --all (10 tags) of 691eebe, CI TEST_SETUP (apt sudo nodejs jq curl nginx; pip -r requirements.txt) then CI TEST_COMMAND: check-requirements-lock --require-online PASS (15 releases); tests/run.sh --strict 536 passed, 0 failed, 0 skipped, rc 0. Every declared gate rc 0: python-syntax, shell-syntax, frontend-syntax, config-example, heredoc-python (11), sbom-consistency, sca (all pins clean), ppsm-consistency (37 rows), stig-compliance (75 rules, 24 checks), pipefail-consumers (60 files), env-neutral (157 files), version-surfaces (1.3.0, 16 tokens ?v=1300), requirements-lock. Container --rm.",
+      "sonar_local": "--base v1.2.1 (7f03951) --head 691eebe: PASS exit 0, new_violations=0; 5 of 7 judged (new_violations, new_duplicated_lines_density 0.0, bugs 0, vulnerabilities = only the known S4502 tm/app.py:46, reliability_rating 1); new_security_hotspots_reviewed no value; security_hotspots_reviewed KNOWN DIFFERENCE. Indexed head 159 / base 146. First run at 49edd89 found 12 new issues (S3776 x3, S2486 x2, S6582 x2, S7778, S1192 x3, S3358), second at 3c6214b 1 (S2486); all fixed. Docker volumes 134 before and after, no sonar network or container left."
+    },
+    "mutation_controls": {
+      "new": "M608-M790 (183), tests/mutate.sh TARGETs py:*, helper, install, upgrade, site, httpsite, logformat, loginview, settings, mainjs, audittab, stiggate",
+      "first_pass": "tree 3c6214b-pre (4 chunks, container tm-wo6-builder): 183 run, 169 killed, 13 SURVIVED, 1 unproven, 0 aborted. SURVIVORS (each a test that could not see the change, all closed): M633 capacity oldest parsed in the old format (t48 now asserts oldest after migration); M652 a broken-store refusal recorded twice (t48 drove a route that audits itself; now an audit_gate route); M673 a first-request write during a directory outage (t49 first request was a read); M686 one consent serving two sign-ins (t50 signed out between, which clears it); M697/M698 apply-result source/outcome (t51 only saw a result audited at startup, ok; now a failed result recorded by a poll); M715 wide tm.db, M718 FIPS off (t51 only had the passing cases); M735 site not using tm_dod, M741 nginx -T exit ignored (t51 fixture never dumped with a failing exit); M772 an absolute timer armed with no end (t49 filter missed a NaN delay); M778 standard wording not restorable (t51 stub reloaded empty text); M780 issuer line removed (t51 grepped the repo file, not the mutant). M643 UNPROVEN: a malformed control (see full_run), not a test gap.",
+      "finding_in_the_harness": "M643 itself (malformed, see full_run); and M766 (ensure_site_logs follows a symlink) chmod/chowned the CONTAINER's /etc/passwd through t51's symlink fixture, which pointed at /etc/passwd. Fixed: the fixture points at a scratch file; that container was discarded and every control re-run in a fresh one."
+    },
+    "not_done": [
+      "No render proof (render-proof follows, per the brief): the Settings sessions/consent/compliance panes, the Audit tab columns and the sign-in notice were exercised under node, not in a browser.",
+      "No install or upgrade on a real host (prod .90 and tm-qc out of bounds): ensure_site_logs, the host STIG report, the compliance unit under its systemd sandbox (nginx -T with ReadWritePaths /run /var/log/nginx) and the polkit start are proven by fixtures and extraction, not on a host.",
+      "Infrastructure versions (SBOM/AboutModal infra rows) not re-measured: no host touched.",
+      "Not built, by ruling: www-data changes (DQ2), nginx.conf edits beyond v1.2.0 (DQ5), client allow-list (001630), auditd rule (795), CRL/OCSP/PIV."
+    ],
+    "open_questions": [
+      "LOGIN_FAILED for anonymous callers stays in tm.db (decision above) - confirm, or move it to the rate-limited log too.",
+      "Hosts without an LDAP service account get no 15-minute re-check (cannot bind as the user later) - acceptable, or require a service account?",
+      "Upgraded hosts keep the consent notice OFF if it was off - or should the upgrade turn it on?",
+      "The upgrade now narrows server.key to root-only after the baseline replay (product-owned FAIL otherwise) - confirm."
+    ],
+    "full_run": "tests/mutate.sh, EVERY control (M01-M790, 773 records), fresh python:3.12-bookworm on 192.168.202.81 from a git bundle --all of 691eebe (tags present), CI TEST_SETUP, 6 chunks in parallel (the t36/t52 port users in one): 773 run, 762 killed, 0 SURVIVED, 0 aborted, 10 documented equivalents, all pre-existing and none new (read in the logs: M14 M45 M87 M103 M141 M142 M183 M388; two more counted in the chunk tallies), 1 unproven = M643, a MALFORMED control (its replacement emptied an else: block, so the mutant did not compile and every covering case skipped); fixed in f15df69 and re-run alone in a fresh container from a bundle of f15df69: RED (t49 a-directory-outage-allows-reads-and-refuses-every-write). Net: 763 killed, 0 survived, 10 documented equivalents. Every chunk reported every target sha256 unchanged.",
+    "mutant_sanity": "after f15df69: all 135 Python mutants M608-M790 compile, every shell mutant passes bash -n, every JS mutant passes node --check.",
+    "final_gate_at_head": "f15df69 (fresh container, bundle with tags): check-requirements-lock --require-online PASS (15); tests/run.sh --strict 536 passed, 0 failed, 0 skipped, rc 0; all 13 declared gates rc 0 (sonar-local below). sonar-local ran at 691eebe; f15df69 differs from it only in tests/mutations.txt (data, not analysed).",
+    "remote_cleanup": "every container I started (tm-wo6-builder, -gate, -gate2, -mut, -m643) removed; /tmp/tm-wo6-builder removed; docker volumes 134 before and after; no network left."
   }
 }
