@@ -6719,3 +6719,346 @@ ANCHOR|st = {s: sum(r['status'] == s for r in doc_rules) for s in consts['STATUS
 REPLACE|    sys.exit(0)
 REPLACE|st = {s: sum(r['status'] == s for r in doc_rules) for s in consts['STATUSES']}
 
+
+# ─── WO-0006 /assure fix round 1 (assure-fix-1) ──────────────────────────────
+# F1: a failed restart step is audited as a failure; pre-v1.3.0 rows whose
+# record does not state an outcome are 'unknown', never a claimed success.
+--- M791
+DESC|v1.3.0 af1 F1 a FAILED nginx step is reported as a success
+TESTS|t48-audit-v130.sh
+TARGET|py:service_control
+EQUIV|no
+ANCHOR|        on_result('nginx %s FAILED (exit %d): %s' % (verb, rc, out or 'no output'),
+ANCHOR|                  'failure')
+REPLACE|        on_result('nginx %s FAILED (exit %d): %s' % (verb, rc, out or 'no output'),
+REPLACE|                  'success')
+
+--- M792
+DESC|v1.3.0 af1 F1 a FAILED topic-manager restart step is reported as a success
+TESTS|t48-audit-v130.sh
+TARGET|py:service_control
+EQUIV|no
+ANCHOR|                  % (rc, out or 'no output'), 'failure')
+REPLACE|                  % (rc, out or 'no output'), 'success')
+
+--- M793
+DESC|v1.3.0 af1 F1 the restart callback drops the step's outcome (the audit default, success)
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|                         best_effort=True, source=source, outcome=outcome)
+REPLACE|                         best_effort=True, source=source)
+
+--- M794
+DESC|v1.3.0 af1 F1 the migration calls every unrecorded old outcome a success again
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|                                    (OUTCOME_UNRECORDED,)).rowcount
+REPLACE|                                    ('success',)).rowcount
+
+--- M795
+DESC|v1.3.0 af1 F1 the migration forgets that an old FAILED restart step failed
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|                       "AND action = 'SERVICE_RESTART_STEP' AND detail LIKE '% FAILED %'")
+REPLACE|                       "AND action = 'NO_SUCH_ACTION'")
+
+--- M796
+DESC|v1.3.0 af1 F1 a new row may claim the migration-only outcome unknown
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|OUTCOMES = ('success', 'failure')
+REPLACE|OUTCOMES = ('success', 'failure', 'unknown')
+
+# F2: a search the directory did not complete is an outage, never a removal.
+--- M797
+DESC|v1.3.0 af1 F2 the search result code is not read (a failed search reads as not_found)
+TESTS|t49-sessions-v130.sh t20-directory-config.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|        if result.get('result') != _LDAP_SUCCESS:
+REPLACE|        if False:
+
+--- M798
+DESC|v1.3.0 af1 F2 a failed search leaves the service connection bound
+TESTS|t49-sessions-v130.sh t20-directory-config.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|    finally:
+ANCHOR|        conn.unbind()
+ANCHOR|    if entry is None:
+REPLACE|    finally:
+REPLACE|        pass
+REPLACE|    if entry is None:
+
+--- M799
+DESC|v1.3.0 af1 F2 the success code is wrong (every completed search is a failure)
+TESTS|t49-sessions-v130.sh t20-directory-config.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|_LDAP_SUCCESS = 0
+REPLACE|_LDAP_SUCCESS = 1
+
+--- M804
+DESC|v1.3.0 af1 F2 a sign-in whose search failed raises instead of refusing
+TESTS|t49-sessions-v130.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|    except DirectorySearchFailed as exc:
+REPLACE|    except ZeroDivisionError as exc:
+
+# F3: a long syslog line is shortened in its detail, never in ts/source/outcome.
+--- M800
+DESC|v1.3.0 af1 F3 format_record never shortens (the datagram cut drops the tail keys)
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    for f in _SHRINK_ORDER:
+REPLACE|    for f in ():
+
+--- M801
+DESC|v1.3.0 af1 F3 the fit allows twice the room
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|        if len(json.dumps(clean[:mid] + TRUNCATED_MARK)) <= room:
+REPLACE|        if len(json.dumps(clean[:mid] + TRUNCATED_MARK)) <= room * 2:
+
+--- M802
+DESC|v1.3.0 af1 F3 the AUDIT_WRITE_FAILED line ignores the room its head takes
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    msg = head + format_record(record, _MAX_MESSAGE - len(head))
+REPLACE|    msg = head + format_record(record)
+
+--- M803
+DESC|v1.3.0 af1 F3 a shortened detail is not marked
+TESTS|t32-audit-syslog.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|TRUNCATED_MARK = ' [truncated]'
+REPLACE|TRUNCATED_MARK = ''
+
+# F4: a cross-site refusal is anonymous, never the cookie's user.
+--- M805
+DESC|v1.3.0 af1 F4 the cross-site refusal is not marked
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    g.tm_cross_site = True
+REPLACE|    pass
+
+--- M806
+DESC|v1.3.0 af1 F4 the refusal recorder ignores the cross-site mark
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        if not getattr(g, 'tm_cross_site', False) \
+REPLACE|        if True \
+
+# F5: one acceptance, one sign-in, held by the server; bound to the notice shown.
+--- M807
+DESC|v1.3.0 af1 F5 the sign-in does not use the acceptance up
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if consent and not consume_consent_token(db, consent['token'], CONSENT_VALID_S, time.time()):
+REPLACE|    if False:
+
+--- M808
+DESC|v1.3.0 af1 F5 the cookie's own word is the acceptance again (no server lookup)
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    row = find_consent_token(db, c.get('token'), CONSENT_VALID_S, time.time())
+REPLACE|    row = (c.get('at'), 'standard DoD notice') if c.get('at') else None
+
+--- M809
+DESC|v1.3.0 af1 F5 consuming a token always succeeds
+TESTS|t50-consent-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|                      (_token_hash(token), now - max_age_s)).rowcount == 1
+REPLACE|                      (_token_hash(token), now - max_age_s)).rowcount >= 0
+
+--- M810
+DESC|v1.3.0 af1 F5 LOW an acceptance of other text than the notice is taken
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        if data.get('notice') != text:
+REPLACE|        if False:
+
+--- M811
+DESC|v1.3.0 af1 F5 the server holds no age limit on an acceptance
+TESTS|t50-consent-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|                      (_token_hash(token), now - max_age_s, now)).fetchone()
+REPLACE|                      (_token_hash(token), 0, now)).fetchone()
+
+--- M812
+DESC|v1.3.0 af1 F5 LOW the sign-in page does not say which notice it showed
+TESTS|t50-consent-v130.sh
+TARGET|loginview
+EQUIV|no
+ANCHOR|                    body: JSON.stringify({ accepted: true, notice: this.consentText }),
+REPLACE|                    body: JSON.stringify({ accepted: true }),
+
+--- M813
+DESC|v1.3.0 af1 F5 LOW the sign-in page ignores a changed notice
+TESTS|t50-consent-v130.sh
+TARGET|loginview
+EQUIV|no
+ANCHOR|                if (r.status === 409) {
+REPLACE|                if (false) {
+
+# D1/D2: every upgrade command prepare-offline prints says where the trail goes.
+--- M814
+DESC|v1.3.0 af1 D1 the printed offline upgrade command loses its syslog flag
+TESTS|t39-docs-v120.sh
+TARGET|prepare
+EQUIV|no
+ANCHOR|echo "    sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline --syslog-host <collector>"
+REPLACE|echo "    sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline"
+
+# D4: --dry-run says what a prune would do and writes nothing.
+--- M815
+DESC|v1.3.0 af1 D4 the preview counts the row limit off by one
+TESTS|t33-audit-retention.sh
+TARGET|py:audit_retention
+EQUIV|no
+ANCHOR|        by_rows = max(0, (total - by_age) - (s['audit_max_rows'] - 1))
+REPLACE|        by_rows = max(0, (total - by_age) - s['audit_max_rows'])
+
+--- M816
+DESC|v1.3.0 af1 D4 --dry-run prunes for real
+TESTS|t33-audit-retention.sh
+TARGET|py:audit_retention
+EQUIV|no
+ANCHOR|    if args.dry_run:
+REPLACE|    if False:
+
+# D6: live and rotated site logs are www-data:adm 0640, in a root-only directory.
+--- M817
+DESC|v1.3.0 af1 D6 the site-log check accepts any owner again
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o137 or st.st_uid != want_uid \
+ANCHOR|                or st.st_gid != want_gid:
+REPLACE|        if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o137:
+
+--- M818
+DESC|v1.3.0 af1 D6 the OS logrotate stanza is not checked
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    if create is None or tuple(create) != tuple(want.split()):
+REPLACE|    if False:
+
+--- M819
+DESC|v1.3.0 af1 D6 a rotated copy keeps its root owner
+TESTS|t51-host-checks-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        [[ -f "$p" && ! -L "$p" ]] || continue
+ANCHOR|        chown -h "${web}:${grp}" "$p" && chmod u-x,g-wx,o-rwx "$p"
+REPLACE|        [[ -f "$p" && ! -L "$p" ]] || continue
+REPLACE|        chmod u-x,g-wx,o-rwx "$p"
+
+--- M820
+DESC|v1.3.0 af1 LOW the log directory's ownership is not checked
+TESTS|t51-host-checks-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if [[ "${got%% *}" != 0 || ! "${got#* }" =~ ^[0-7]+$ ]] || (( (8#${got#* } & 8#022) != 0 )); then
+REPLACE|    if false; then
+
+--- M821
+DESC|v1.3.0 af1 D6 the installer's verify accepts any owner
+TESTS|t51-host-checks-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if [[ ! "$m" =~ ^[0-7]+$ ]] || (( (8#$m & 8#137) != 0 )) || [[ "${got#* }" != "$2 $3" ]]; then
+REPLACE|    if [[ ! "$m" =~ ^[0-7]+$ ]] || (( (8#$m & 8#137) != 0 )); then
+
+# UI: a 401 from a signed-in view returns to the sign-in page and says why.
+--- M822
+DESC|v1.3.0 af1 UI a 401 is not noticed
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|    if (r && r.status === 401 && tmSessionEnded && !input.startsWith('/api/auth/')) {
+REPLACE|    if (false) {
+
+--- M823
+DESC|v1.3.0 af1 UI a sign-in route's own 401 ends the session
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|    if (r && r.status === 401 && tmSessionEnded && !input.startsWith('/api/auth/')) {
+REPLACE|    if (r && r.status === 401 && tmSessionEnded) {
+
+--- M824
+DESC|v1.3.0 af1 UI a GET's 401 is not noticed
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|            return send(input, init).then(r => tmWatchSession(input, r));
+REPLACE|            return send(input, init);
+
+--- M825
+DESC|v1.3.0 af1 UI a revoked session does not say why
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|                || (reason === 'revoked' && error) || ENDED_NOTICE;
+REPLACE|                || ENDED_NOTICE;
+
+# LOWs
+--- M826
+DESC|v1.3.0 af1 LOW a parser's text is returned to the browser again
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if exc.__cause__ is None and exc.__context__ is None:
+REPLACE|    if True:
+
+--- M827
+DESC|v1.3.0 af1 LOW a broken probe's text goes into the result
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|            checks.append(_check('internal', 'unknown', 'a check failed with %s; the detail is '
+ANCHOR|                                 'in journalctl -u topic-manager-apply-compliance'
+ANCHOR|                                 % type(exc).__name__))
+REPLACE|            checks.append(_check('internal', 'unknown', '%s: %s' % (type(exc).__name__, exc)))
+
+--- M828
+DESC|v1.3.0 af1 LOW the Audit tab banner claims syslog delivery whatever happened
+TESTS|t48-audit-v130.sh
+TARGET|audittab
+EQUIV|no
+ANCHOR|    ! The audit trail could not be written at {{ writeFailure.failed_at }} ({{ writeFailure.reason }}), and no record has been written since. Actions are refused until it recovers; <template v-if="writeFailure.syslog_delivered === true">the record went to the host syslog as AUDIT_WRITE_FAILED.</template><template v-else-if="writeFailure.syslog_delivered === false">the host syslog did NOT accept the record either: its only copy is the service log (journalctl -u topic-manager, AUDIT_WRITE_FAILED).</template><template v-else>look for AUDIT_WRITE_FAILED in the host syslog, and in the service log (journalctl -u topic-manager) if it is not there.</template>
+REPLACE|    ! The audit trail could not be written at {{ writeFailure.failed_at }} ({{ writeFailure.reason }}), and no record has been written since. Actions are refused until it recovers; the record went to the host syslog as AUDIT_WRITE_FAILED.
+
+--- M829
+DESC|v1.3.0 af1 LOW the failure state records delivery whatever the syslog said
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|        _note_write_failure(cfg, record, exc, delivered)
+REPLACE|        _note_write_failure(cfg, record, exc, True)
+
+--- M830
+DESC|v1.3.0 af1 LOW the failure state always says delivered
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    out['syslog_delivered'] = sent if isinstance(sent, bool) else None
+REPLACE|    out['syslog_delivered'] = True
