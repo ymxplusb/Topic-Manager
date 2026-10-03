@@ -360,6 +360,50 @@
       "where": "install.sh:918; docs/INSTALL.md §5b; install/README.md",
       "repro": "tm-qc stig-fips (has internet): install.sh from the staged bundle logs 'Install mode: ONLINE' and pulls debs/wheels from the internet",
       "closes_when": "install.sh --offline forces bundle-only (fails if anything is missing), docs say so, and a fresh install on a host with egress blocked passes"
+    },
+    {
+      "id": "REG-0035",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-1 (builder, 2026-10-03)",
+      "finding": "A disabled cluster profile's NoClusterError sentence names the server's certificate directory (tm/clusters.py:193 'TLS material path is outside <root>', returned by tm/routes.py _kafka_error_response/_write_cluster). The other NoClusterError sentences are the product's own and pass through by design (t48 nocluster_text).",
+      "where": "tm/clusters.py:193; tm/routes.py _cluster() / _kafka_error_response / _write_cluster",
+      "why": "Not fixed in assure-fix-1: the text lives in tm/clusters.py (outside this round's files) and only an authenticated administrator sees it; the parser-text LOW (ClusterError with a library cause) WAS fixed.",
+      "closes_when": "the disabled reason names no filesystem path to the browser (path kept in the service log), with a test"
+    },
+    {
+      "id": "REG-0036",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-1 (builder, 2026-10-03)",
+      "finding": "systemd/topic-manager-apply-compliance.service ReadWritePaths narrowed from all of /run to /run/topic-manager-apply -/run/nginx.pid (+ staging, /var/log/nginx). Held by a static test (t51) only: no systemd host was available to this round, so 'nginx -T' under ProtectSystem=strict with the rest of /run read-only is not yet measured.",
+      "where": "systemd/topic-manager-apply-compliance.service:46",
+      "why": "tm-qc and prod are out of bounds for the builder; the clean-room stage owns host proof.",
+      "closes_when": "a clean-room install/upgrade presses Measure host now and the compliance result is state ok with nginx_log_format/error_pages PASS (not UNKNOWN)"
+    },
+    {
+      "id": "REG-0037",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-1 (builder, 2026-10-03)",
+      "finding": "F5's one-use consent token is a row in tm.db written by the ANONYMOUS POST /api/auth/consent. Growth is bounded only by nginx's /api/ rate limit and the 10-minute expiry (expired rows are deleted on each issue); there is no row cap.",
+      "where": "tm/models.py issue_consent_token; tm/routes.py accept_consent",
+      "why": "A hard cap would let an anonymous flood deny consent (and so sign-in) to everyone; left to the rate limit pending a decision.",
+      "closes_when": "a decided bound (cap + behaviour at the cap) is built and tested, or the rate-limit bound is accepted in the contract"
+    },
+    {
+      "id": "REG-0038",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-1 (builder, 2026-10-03)",
+      "finding": "audit.log_action still defaults outcome='success'. F1 was a caller that passed none; every one of the 30 call sites was audited by AST in this round (each failure path now passes outcome='failure'), but nothing structural stops the next caller from omitting it.",
+      "where": "tm/audit.py log_action",
+      "why": "Making outcome keyword-required touches every call site and ~12 mutation anchors; out of proportion to a fix round.",
+      "closes_when": "outcome is a required keyword (or an AST test fails any log_action call without it)"
     }
   ]
 }

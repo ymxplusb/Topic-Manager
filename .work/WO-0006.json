@@ -1791,5 +1791,77 @@
     "gaps": [
       "a session ended by End sessions keeps the app shell and shows 'Authentication required' in the tab instead of returning to the login view (server refuses correctly; display gap)"
     ]
-  }
+  },
+  "builder_rounds": [
+    {
+      "round": "assure-fix-1",
+      "by": "builder (assure fix round 1: James's ruling - fix all MEDIUM+ and the docs; LOWs if trivial, else register)",
+      "date": "2026-10-03",
+      "worktree": "/Users/jamesrodman/Scripts/topic-manager-v130, branch release/v1.3.0 (from 667e1b0)",
+      "commits": [
+        "096d0aa fix (v1.3.0 assure-fix-1): false-success audit, LDAP search failure, syslog truncation, cross-site attribution, consent replay",
+        "3eada9d docs (v1.3.0 assure-fix-1): syslog flag on every upgrade command, compliance API, v1.3.0 verify, prune, site logs",
+        "9270a52 tests (v1.3.0 assure-fix-1): mutation controls M791-M830 for the fix round",
+        "31f051f sonar (v1.3.0 assure-fix-1): the 5 new issues sonar-local found at 9270a52",
+        "fc37138 sonar (v1.3.0 assure-fix-1): login() back to 15 - CONSENT_ACCEPTED recording is _record_consent()",
+        "b3c3b29 tests (v1.3.0 assure-fix-1): full mutation pass at 9270a52 - 9 anchors moved, 2 survivors closed",
+        "ae1969a tests (v1.3.0 assure-fix-1): M658's re-anchor matched twice; anchor on its own ref line"
+      ],
+      "root_cause": {
+        "F1": "service_control._restart_sequence reported each step to on_result(message) with no outcome, and the route's callback let log_action default to 'success': 'nginx reload FAILED' was a success row. The migration then wrote 'success' into every old row whose record never said.",
+        "F2": "ldap3 (raise_exceptions=False) reports a failed search as a result code with an EMPTY entries list - the same shape as 'no such user'; _ldap_search_user read only conn.entries, so busy/unavailable/size-limit/no-such-base became 'not_found' and _recheck_group ended all the user's sessions.",
+        "F3": "_field limits CHARACTERS and json.dumps escapes non-ASCII as \\\\uXXXX (6-12 bytes each); syslog_send cut the ENCODED datagram at 4096, which drops the last keys (ts, source, outcome) and still returns True.",
+        "F4": "_record_refusals attributed any refused write carrying a valid session cookie to that user, including _refuse_cross_site's 403 - a request made by another site's page with the victim's cookie.",
+        "F5": "the acceptance was only a timestamp inside the client-held signed cookie; login popped it from the cookie, but nothing server-side remembered it was used, so a copy of the cookie replayed within 600 s signed in again.",
+        "D1-D6": "the v1.3.0 doc pass added the syslog requirement as prose beside commands that did not carry it; the compliance API and v1.3.0 host state had no operator text; STIG-COMPLIANCE claimed every prune writes AUDIT_PRUNE; rotated logs inherited a pre-v1.3.0 root:root owner because ensure_site_logs only stripped other-bits from them and the check accepted root.",
+        "UI": "a 401 was handled by each tab as an error string; nothing at app level noticed the session had ended."
+      },
+      "per_item": {
+        "F1": "FIXED - on_result(message, outcome); the route passes it. Migration: failure where the old record says so (failure action words, SYSTEM_APPLY_RESULT state, SERVICE_RESTART_STEP 'FAILED'), success only for state=ok, else 'unknown' (OUTCOME_UNRECORDED; log_action refuses it for new rows). All 30 log_action sites re-audited by AST: no other failure path defaulted. t48 a-failed-restart-step..., migration case. M791-M796.",
+        "F2": "FIXED - DirectorySearchFailed on any result code != 0 -> check_membership 'unavailable'; sign-in refuses as 'LDAP error'; unbind in finally. t49 (51/52/4/32), t20 fake gains result. M797-M799, M804.",
+        "F3": "FIXED - format_record(record, max_bytes) shortens detail (then target, cluster, user, action) by whole characters to fit, marks ' [truncated]'; write_failed budgets its head; syslog_send logs a cut instead of silent. t32 Linux case: 1000 e-acute + 1048 emoji, info and AUDIT_WRITE_FAILED lines. M800-M803.",
+        "F4": "FIXED - _refuse_cross_site sets g.tm_cross_site; _record_refusals sends it to _ANON_REFUSALS. t48: same-site POST /api/topics with a valid session x3 -> 403, 0 rows, 3 ANON lines. M805-M806.",
+        "F5": "FIXED - consent_tokens table (sha256 digest, accepted_at, notice); cookie holds {token, at}; gate looks the row up; login consumes it in the BEGIN IMMEDIATE that creates the session (_use_consent). t50: replayed cookie 403 with the directory not asked, stale row 403, forged cookie 'at' 403, two racing sign-ins 200/403. M807-M811.",
+        "LOW consent-notice binding": "FIXED - POST /api/auth/consent must carry the displayed text ('notice'), else 409 notice_changed; LoginView sends it and reloads on 409. t50 + node. M810, M812, M813.",
+        "D1": "FIXED - README offline (3 steps + detached) and online steps, INSTALL 12, install/README, prepare-offline.sh printed text: --syslog-host <collector> on every gated command, both choices explained. t39 every-documented-upgrade-command... parses all four (prepare's echo lines). M814.",
+        "D2": "FIXED - --backup-only needs neither flag (exit 0, blocker noted); --audit-only exits 2; refused upgrade exits 1 after the backup (fail() exit 1; t39 holds the code to the script).",
+        "D3": "FIXED - README Compliance: GET /api/compliance shape, POST/GET /api/system/apply/compliance (202/429/409, states), tm-apply compliance --report. t39 case holds names to routes.py/apply.py.",
+        "D4": "FIXED (doc made to agree + dry-run) - behaviour kept: a no-op prune writes no AUDIT_PRUNE (t33 already pinned it); STIG-COMPLIANCE/README/TROUBLESHOOTING say so; python -m tm.audit_retention --dry-run (preview(): same counts as the prune that follows, writes nothing). t33 a-dry-run... M815-M816.",
+        "D5": "FIXED - INSTALL 7: log_format tm_dod + access_log, stat of /var/log/nginx and topic-manager-*, tm-apply compliance --report, compliance unit. t39 case.",
+        "D6": "FIXED - ensure_site_logs: rotated copies chown -h web:adm + 0640 and verified exactly like live (owner included); check_site_logs: live and rotated must be web:adm 0640 (root only where the account/group is absent), and reads /etc/logrotate.d/nginx: a create other than 0640 www-data adm is a WARN. Docs agree. t51 (rotated_owner, live_owner, logrotate WARN, chown-that-does-nothing). M817-M821.",
+        "UI": "FIXED - main.js fetch wrapper watches every /api/ answer (not /api/auth/*): a 401 from a signed-in view clears timers, returns to LoginView with 'Your session was ended. Sign in again to continue.' (idle/absolute their own notices; revoked shows the server's reason); no logout posted. t49 node case. M822-M825.",
+        "LOW installer symlink check then chown": "FIXED - ensure_site_logs refuses unless /var/log/nginx is root-owned and not g/o-writable (CVE-2016-1247 shape), and uses chown -h. t51. M820.",
+        "LOW parser/validation/NoClusterError text": "PARTLY - ClusterError raised from a parser exception (clusters.py:330/343) now answers MATERIAL_UNPARSED_MESSAGE + reference (t48, M826). Our own validation sentences unchanged (they name the field). CertInvalid (routes 1533) checked: its sentences never quote the exception - no change. NoClusterError disabled-path sentence -> REG-0035.",
+        "LOW compliance unit ReadWritePaths=/run": "FIXED (static) - /run/topic-manager-apply -/run/nginx.pid; t51 static case. Not measured under systemd -> REG-0036.",
+        "LOW tm-apply internal exception text": "FIXED - type only + 'journalctl -u topic-manager-apply-compliance'; traceback to stderr. t51 (helper imported, probe raises). M827.",
+        "LOW audit-failure banners": "FIXED - write_failed notes syslog_delivered AFTER the send; write_failure_state returns it; both banners say delivered / NOT accepted (service log only) / unknown. t48. M828-M830."
+      },
+      "files_changed": "git diff --stat 667e1b0..b3c3b29: tm/{audit,auth,audit_retention,models,routes,service_control}.py, app/main.js, app/components/{LoginView,AuditTab,SettingsTab}.js, install.sh, install/upgrade-full.sh (byte-identical ensure_site_logs block), install/libexec/tm-apply, systemd/topic-manager-apply-compliance.service, prepare-offline.sh, README.md, docs/INSTALL.md, docs/STIG-COMPLIANCE.md, install/README.md, TROUBLESHOOTING.md, CHANGELOG.md, tests/{t20 (via lib/auth_probe.py),t32,t33,t39,t48,t49,t50,t51}, tests/mutations.txt",
+      "amendments": [],
+      "decisions_made": [
+        "F1 pre-migration rows: 'unknown' (OUTCOME_UNRECORDED) unless the old record states the outcome; log_action keeps OUTCOMES=(success,failure) for new rows and the default 'success' (REG-0038 to make it required).",
+        "D4: behaviour kept (no row for a no-op prune; a daily row per no-op would be noise and the run is in the journal and last_prune), doc corrected, --dry-run added.",
+        "D6: no product logrotate stanza for /var/log/nginx (two stanzas on one log is a logrotate error); the OS stanza is verified instead.",
+        "LOW notice binding: the client sends the displayed TEXT and the server compares it, rather than a digest (no async crypto in the sign-in page)."
+      ],
+      "registered": [
+        "REG-0035",
+        "REG-0036",
+        "REG-0037",
+        "REG-0038"
+      ],
+      "gates_at_head": "b3c3b29, fresh python:3.12-bookworm on 192.168.202.81 from a git bundle --all (10 tags), CI TEST_SETUP: check-requirements-lock --require-online PASS (15); tests/run.sh --strict 545 passed / 0 failed / 0 skipped, rc 0; all 13 declared gates rc 0; sonar-local --base v1.2.1 at b3c3b29: PASS, new_violations 0 (it found 5 at 9270a52 and 1 at 31f051f - fixed in 31f051f/fc37138). ae1969a differs from b3c3b29 only in tests/mutations.txt.",
+      "mutation_controls": {
+        "new": "M791-M830 (40): all RED at 9270a52; consequence cases named per control (M821 was red only on the byte-identical structural case until t51 gained the chown-does-nothing case - closed).",
+        "full_run_9270a52": "tests/mutate.sh EVERY control (813), 7 chunks in parallel, fresh containers from the bundle: 800 killed, 2 SURVIVED (M656, M686), 9 ABORTED (M614 M615 M658 M685 M728 M729 M730 M744 M745 - anchors moved by this round), 10 documented equivalents (M14 M45 M87 M103 M141 M142 M183 M254 M388 M462), 0 unproven.",
+        "findings_closed": "M656 SURVIVED: after F4 no case reached _signed_in_user with an expired session -> t48 ghost_pre_auth case. M686 SURVIVED: now a documented equivalent (server consumes the token). 9 aborted re-anchored.",
+        "rerun_at_b3c3b29": "every control on a target this round changed after 9270a52 (py:routes, py:audit_retention, mainjs) plus the 11 re-anchored/closed: 109 at b3c3b29 - 107 killed, 1 documented equivalent (M686), 1 aborted (M658: the re-anchor matched twice) -> re-anchored in ae1969a and run alone: RED. Net over all 813: 0 survivors outside 11 documented equivalents, 0 aborted, 0 unproven."
+      },
+      "not_done": [
+        "No host proof: the compliance unit's narrowed ReadWritePaths, the logrotate stanza check and the log-directory refusal are proven by fixtures/static tests on Linux only (REG-0036); tm-qc and prod out of bounds.",
+        "No browser render of the UI changes (401 return, notice-changed message, banners): exercised under node."
+      ],
+      "remote_cleanup": "192.168.202.81: every container started (tm-wo6-fix1, -af1-gate, -af1-mut0..6, -af1-final, -af1-reA/B, -af1-m658, the sonar-local runs) removed; /tmp/tm-wo6-fix1 and /tmp/tm-wo6-af1 removed; docker volumes 134 before and after; networks bridge/host/none only."
+    }
+  ]
 }
