@@ -78,6 +78,27 @@ for i, m in enumerate(heads):
 # ── RULES, by the AST ────────────────────────────────────────────────────────
 tree = ast.parse(io.open(rules_path, encoding='utf-8').read())
 consts = {}
+names = {}          # module-level NAME = 'string' (and NAME1, NAME2 = 's1', 's2')
+for node in tree.body:
+    if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+        continue
+    tgt, val = node.targets[0], node.value
+    if isinstance(tgt, ast.Name) and isinstance(val, ast.Constant) and isinstance(val.value, str):
+        names[tgt.id] = val.value
+    elif isinstance(tgt, ast.Tuple) and isinstance(val, ast.Tuple) and len(tgt.elts) == len(val.elts):
+        for t, v in zip(tgt.elts, val.elts):
+            if isinstance(t, ast.Name) and isinstance(v, ast.Constant) and isinstance(v.value, str):
+                names[t.id] = v.value
+
+
+def value(a):
+    if isinstance(a, ast.Name):
+        if a.id not in names:
+            raise ValueError('RULES names %s, which is not a module string constant' % a.id)
+        return names[a.id]
+    return ast.literal_eval(a)
+
+
 rules = None
 for node in tree.body:
     if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
@@ -88,7 +109,7 @@ for node in tree.body:
                 if not (isinstance(call, ast.Call) and getattr(call.func, 'id', '') == 'Rule'):
                     problems.append('RULES holds something that is not a Rule(...) literal')
                     continue
-                rid, sev, dec, st, chk, title = [ast.literal_eval(a) for a in call.args]
+                rid, sev, dec, st, chk, title = [value(a) for a in call.args]
                 rules.append({'id': rid, 'sev': sev, 'decision': dec, 'status': st,
                               'checks': tuple(chk), 'title': title})
         elif name in ('HOST_CHECKS', 'APP_CHECKS', 'STATUSES', 'DECISIONS'):

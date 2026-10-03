@@ -526,15 +526,10 @@ def _fresh_consent():
     return c if 0 <= age <= CONSENT_VALID_S else None
 
 
-@bp.route('/auth/login', methods=['POST'])
-def login():
-    data, err = _parse_json_body()
-    if err:
-        return err
-    username = (data.get('username') or '').strip()
-    password = data.get('password') or ''
-    if not username or not password:
-        return jsonify({'error': 'Username and password required'}), 400
+def _consent_gate():
+    """(consent, refusal) for a sign-in: the acceptance to record (None
+    while the notice is off), or the 403 when the notice is on and this
+    browser holds no fresh acceptance."""
     db = get_db(_cfg())
     try:
         consent_on, _text = _consent_settings(db)
@@ -544,7 +539,22 @@ def login():
     if consent_on and consent is None:
         # Before the directory is asked anything: no credential is tried
         # until the notice has been accepted.
-        return jsonify({'error': CONSENT_REQUIRED_MESSAGE, 'code': 'consent_required'}), 403
+        return None, (jsonify({'error': CONSENT_REQUIRED_MESSAGE, 'code': 'consent_required'}), 403)
+    return (consent if consent_on else None), None
+
+
+@bp.route('/auth/login', methods=['POST'])
+def login():
+    data, err = _parse_json_body()
+    if err:
+        return err
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+    if not username or not password:
+        return jsonify({'error': 'Username and password required'}), 400
+    consent, refused = _consent_gate()
+    if refused:
+        return refused
 
     ok, result = auth.validate_credentials(_cfg(), username, password)
     if not ok:
@@ -597,7 +607,7 @@ def login():
     # request.remote_addr is meaningful as of v1.0.4 (ProxyFix, one hop) —
     # before that every row would have recorded 127.0.0.1.
     try:
-        if consent_on:
+        if consent:
             audit.log_action(cfg, result['username'], 'CONSENT_ACCEPTED', 'consent notice',
                              '%s accepted %s before this sign-in' % (
                                  consent.get('notice', '?'),
@@ -1287,22 +1297,10 @@ def update_settings():
     # v1.2.0: every administrator setting passes its validator BEFORE anything
     # is written, and one bad value refuses the whole request — a half-applied
     # PUT would leave Settings showing a mix the operator never chose.
-    accepted = {}
-    for k, v in data.items():
-        if k in settings_schema.ADMIN_KEYS:
-            try:
-                accepted[k] = settings_schema.normalise(k, v)
-            except settings_schema.InvalidSetting as exc:
-                return jsonify({'error': 'invalid', 'field': exc.field,
-                                'reason': exc.reason}), 400
-        elif k in settings_schema.PUBLIC_VALIDATORS:
-            try:
-                accepted[k] = settings_schema.normalise_public(k, v)
-            except settings_schema.InvalidSetting as exc:
-                return jsonify({'error': 'invalid', 'field': exc.field,
-                                'reason': exc.reason}), 400
-        elif k in _PUBLIC_KEYS:
-            accepted[k] = str(v)
+    try:
+        accepted = _accepted_settings(data)
+    except settings_schema.InvalidSetting as exc:
+        return jsonify({'error': 'invalid', 'field': exc.field, 'reason': exc.reason}), 400
     ignored = sorted(str(k) for k in data if k not in _ALL_KEYS)
     # v1.1.0: this route changes what EVERY user sees (the classification
     # banner, the consent notice) and wrote no audit record at all.
@@ -1337,6 +1335,21 @@ def update_settings():
     audit.emit(record)
     log.info('SETTINGS_UPDATE user=%s %s', _log_safe(user), _log_safe(detail, 200))
     return jsonify({'ok': True, 'changed': changed})
+
+
+def _accepted_settings(data):
+    """The stored form of every known key in `data`; raises InvalidSetting
+    on the first value that fails its validator (v1.3.0: the consent keys
+    have validators too). Unknown keys are left out, and named in the audit."""
+    accepted = {}
+    for k, v in data.items():
+        if k in settings_schema.ADMIN_KEYS:
+            accepted[k] = settings_schema.normalise(k, v)
+        elif k in settings_schema.PUBLIC_VALIDATORS:
+            accepted[k] = settings_schema.normalise_public(k, v)
+        elif k in _PUBLIC_KEYS:
+            accepted[k] = str(v)
+    return accepted
 
 
 #: Settings whose VALUES the audit record may show, old -> new. Display and

@@ -54,7 +54,8 @@ const LoginView = {
                     body: JSON.stringify({ accepted: true }),
                 });
                 if (!r.ok) { this.consentError = 'The acceptance could not be recorded (HTTP ' + r.status + '). Try again.'; return; }
-            } catch (_) {
+            } catch {
+                // Unreachable server: nothing was recorded, so say so and stay on the notice.
                 this.consentError = 'Network error: the acceptance could not be recorded. Try again.';
                 return;
             }

@@ -369,7 +369,7 @@ def get_audit_log(cfg, page=1, per_page=50):
         'FROM audit_log ORDER BY id DESC LIMIT ? OFFSET ?',
         (per_page, offset)
     ).fetchall()
-    total = db.execute('SELECT COUNT(*) FROM audit_log').fetchone()[0]
+    total = db.execute(_COUNT_SQL).fetchone()[0]
     db.close()
     return {
         'entries': [
@@ -385,6 +385,8 @@ def get_audit_log(cfg, page=1, per_page=50):
     }
 
 
+_COUNT_SQL = 'SELECT COUNT(*) FROM audit_log'
+
 #: The export's columns. v1.3.0 APPENDS source and outcome, so a consumer that
 #: reads the v1.2 columns by position still finds them where they were; the
 #: timestamp column is ISO 8601 UTC with "Z" (TS_FORMAT).
@@ -394,7 +396,7 @@ CSV_HEADER = ('timestamp', 'user', 'action', 'target', 'detail', 'cluster_id', '
 def count_rows(cfg):
     db = get_db(cfg)
     try:
-        return db.execute('SELECT COUNT(*) FROM audit_log').fetchone()[0]
+        return db.execute(_COUNT_SQL).fetchone()[0]
     finally:
         db.close()
 
@@ -467,7 +469,7 @@ def migrate_schema(cfg, db):
             db.execute("UPDATE audit_log SET outcome = 'success' WHERE outcome = ''")
         record = None
         if added or rewritten:
-            total = db.execute('SELECT COUNT(*) FROM audit_log').fetchone()[0]
+            total = db.execute(_COUNT_SQL).fetchone()[0]
             detail = ('audit_log v1.3.0: columns added: %s; %d timestamp(s) rewritten to ISO 8601 '
                       'UTC (Z); %d older row(s) have no recorded source (%s); outcome of older '
                       'rows inferred from the action; %d row(s) in the table'

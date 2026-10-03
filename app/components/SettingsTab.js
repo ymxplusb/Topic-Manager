@@ -151,17 +151,17 @@ function settingsCheckGlyph(status) {
     return Object.hasOwn(SETTINGS_CHECK_GLYPHS, status) ? SETTINGS_CHECK_GLYPHS[status] : '?';
 }
 
+const SETTINGS_NO_CHECK = { key: '', where: '', status: '', detail: '' };
+function settingsComplianceRows(rule) {
+    const checks = rule.checks?.length ? rule.checks : [SETTINGS_NO_CHECK];
+    return checks.map(c => [rule.id, rule.sev, rule.decision, rule.status, c.key, c.where, c.status, c.detail, rule.title]);
+}
+
 function settingsComplianceCsv(doc) {
-    const rows = [['Rule', 'Severity', 'Decision', 'Status', 'Live check', 'Where', 'Result', 'Detail', 'Title']];
-    for (const r of doc.rules || []) {
-        const checks = r.checks && r.checks.length ? r.checks : [null];
-        for (const c of checks) {
-            rows.push([r.id, r.sev, r.decision, r.status, c ? c.key : '', c ? c.where : '',
-                c ? c.status : '', c ? c.detail : '', r.title]);
-        }
-    }
-    rows.push(['Host measured', (doc.host && doc.host.measured_at) || 'never', '', '', '', '', '', '', '']);
-    rows.push(['Generated', new Date().toISOString(), '', '', '', '', '', '', '']);
+    const rows = [['Rule', 'Severity', 'Decision', 'Status', 'Live check', 'Where', 'Result', 'Detail', 'Title'],
+        ...(doc.rules || []).flatMap(settingsComplianceRows),
+        ['Host measured', doc.host?.measured_at || 'never', '', '', '', '', '', '', ''],
+        ['Generated', new Date().toISOString(), '', '', '', '', '', '', '']];
     return rows.map(r => r.map(v => '"' + String(v ?? '').replaceAll('"', '""') + '"').join(',')).join('\n');
 }
 
@@ -492,7 +492,7 @@ const SettingsTab = {
                     body: JSON.stringify(target === null ? { all: true } : { user: target }),
                 });
                 let d = {};
-                try { d = await r.json(); } catch (e) { d = {}; }
+                try { d = await r.json(); } catch { /* not JSON (a proxy page): the status alone decides the message */ }
                 this.sessionsMessage = r.ok ? '✓ Ended ' + d.ended + ' session(s).'
                     : '✕ ' + settingsHostErrorText(r, d, 'End sessions failed', 'save');
             } catch (e) {
