@@ -393,7 +393,30 @@ sudo stat -c '%a %U %n' /opt/topic-manager/data /opt/topic-manager/data/tm.db
 sudo cat /run/topic-manager-apply/nginx.result | python3 -m json.tool | grep '"state"'
 #   "state": "ok",
 systemctl list-timers topic-manager-audit-prune.timer --no-pager | tail -n +2 | head -1
+
+# v1.3.0: the DoD access-log format is loaded, and the site logs in it
+sudo nginx -T 2>/dev/null | grep -E '^\s*(log_format tm_dod|access_log /var/log/nginx/topic-manager-access.log)'
+#   log_format tm_dod '$time_local $server_name $server_addr $remote_addr $remote_user '
+#   access_log /var/log/nginx/topic-manager-access.log tm_dod;
+# v1.3.0: the site's own logs, live and rotated: 0640 www-data adm, in a root-owned directory
+sudo stat -c '%a %U %G %n' /var/log/nginx /var/log/nginx/topic-manager-*
+#   755 root adm /var/log/nginx
+#   640 www-data adm /var/log/nginx/topic-manager-access.log
+#   640 www-data adm /var/log/nginx/topic-manager-error.log   (and any .1 / .N.gz alike)
+# v1.3.0: the host STIG checks, as the installer ran them at its end (read-only; exit 0 = no
+# FAIL, 1 = a product file drifted). WARN rows are host state the product does not own.
+sudo python3 -I /usr/libexec/topic-manager/tm-apply compliance --report; echo "exit $?"
+#   PASS<TAB>site_log_modes<TAB>both site logs and N rotated copies are 0640 www-data adm, ...
+#   PASS<TAB>nginx_log_format<TAB>...
+#   exit 0
+# v1.3.0: the compliance unit the Settings page uses is installed and authorised
+systemctl cat topic-manager-apply-compliance.service --no-pager | grep -E '^(ExecStart|ProtectSystem)='
+#   ExecStart=/usr/bin/python3 -I /usr/libexec/topic-manager/tm-apply compliance
 ```
+
+Then **Settings → Support → STIG compliance → Measure host now** runs the same checks through
+that unit and shows every rule with its live result; the same document is served by the
+compliance API (README.md → *Compliance*).
 
 ---
 
@@ -487,22 +510,35 @@ or leave it and block 25/tcp at the host firewall. `PPSM.csv` lists it as found 
 
 ## 12. Upgrading later
 
+**v1.3.0 — say where the audit trail goes.** Unless the host's saved settings already forward
+it, `--audit-only` and the upgrade each need ONE of:
+
+- `--syslog-host <collector>` (with `--syslog-port P --syslog-protocol udp|tcp|tls` as needed):
+  forwarded to your collector, saved through the application's validator and applied with the
+  other host settings;
+- `--no-remote-syslog`: there is no collector; the trail stays on this host and the compliance
+  page shows it as an open item.
+
+Without either, `--audit-only` shows `BLOCK remote syslog` and exits 2, and the upgrade refuses
+at its gate with **exit 1** — after the verified backup, before any change (a detached run's
+last line: `RESULT: exit 1`). `--force` does not override it. `--backup-only` needs neither: it
+changes nothing (exit 0, the blocker noted). The commands show `--syslog-host <collector>`;
+put `--no-remote-syslog` in its place if that is your answer.
+
 ```bash
 # online: from the git URL your site publishes the release at — there is no default —
 # pinned to the release's full commit id, taken out of band (release notes / tag pipeline)
-sudo bash install/upgrade-full.sh --audit-only --repo-url <your-git-url> --repo-branch v<next> --repo-commit <40-hex-sha>
-sudo bash install/upgrade-full.sh --repo-url <your-git-url> --repo-branch v<next> --repo-commit <40-hex-sha>
-# v1.3.0: a host that does not forward its audit trail yet must say where to (--syslog-host
-# <collector> [--syslog-port P --syslog-protocol udp|tcp|tls]) or that it stays
-# (--no-remote-syslog); --audit-only shows it as a BLOCK, and --force does not override it.
+sudo bash install/upgrade-full.sh --audit-only --repo-url <your-git-url> --repo-branch v<next> --repo-commit <40-hex-sha> --syslog-host <collector>
+sudo bash install/upgrade-full.sh --backup-only
+sudo bash install/upgrade-full.sh --repo-url <your-git-url> --repo-branch v<next> --repo-commit <40-hex-sha> --syslog-host <collector>
 
 # offline: from a bundle staged at /var/lib/topic-manager/offline-src (README.md ->
 # *Offline (air-gapped) upgrade* for the checksum and staging steps). Every step takes
 # --offline and is run from the staged tree, by its absolute path:
-sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --audit-only --offline
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --audit-only --offline --syslog-host <collector>
 #   exit 0 clear / 1 warnings only (proceed if each is a change this release makes) / 2 blockers
 sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --backup-only --offline
-sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline --syslog-host <collector>
 # a runtime package the new release needs and the air-gapped host lacks (v1.2.0:
 # rsyslog-openssl, for Remote syslog over TLS) — from the same bundle, nothing else changed:
 sudo bash /var/lib/topic-manager/offline-src/install.sh --packages-only
@@ -513,7 +549,7 @@ cannot kill it mid-phase:
 ```bash
 sudo -v                       # enter the password now: a backgrounded sudo cannot ask for it
 sudo setsid nohup bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline \
-    > ~/tm-upgrade.out 2>&1 < /dev/null &
+    --syslog-host <collector> > ~/tm-upgrade.out 2>&1 < /dev/null &      # or --no-remote-syslog
 tail -f ~/tm-upgrade.out      # Ctrl-C ends only the tail
 ```
 or inside `tmux new -s tm-upgrade`. The script's own log is `/var/log/topic-manager-upgrade-<TIMESTAMP>.log`.

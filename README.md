@@ -113,7 +113,7 @@ The script, in order:
 - Opens 443/tcp in ufw if ufw is active — and 80/tcp only while the HTTP redirect is on (with `--no-http-redirect`, never; turning the redirect off in Settings closes it again)
 - Verifies, as the service account, that the app can write `clusters.d` and cannot write `config.yaml`
 - **Starts the service**, waits for `/api/health`, and measures `tm.db` 0600 / `data/` 0700
-- v1.3.0: creates the site's own logs (`/var/log/nginx/topic-manager-{access,error}.log`) 0640 `www-data:adm` before nginx can create them world-readable, installs the DoD access-log format (`/etc/nginx/conf.d/topic-manager-log-format.conf`), and ends with the **host STIG checks** (the root helper's `tm-apply compliance --report`, read-only): host state the product does not own — the web server account's shell, groups and password lock, other files under `/etc/nginx`, loaded nginx modules — is reported and never changed; a FAIL on the product's own files stops the install
+- v1.3.0: creates the site's own logs (`/var/log/nginx/topic-manager-{access,error}.log`) 0640 `www-data:adm` before nginx can create them world-readable (rotated copies are set to the same; Ubuntu's `/etc/logrotate.d/nginx` keeps them so with `create 0640 www-data adm`, which the compliance check verifies), installs the DoD access-log format (`/etc/nginx/conf.d/topic-manager-log-format.conf`), and ends with the **host STIG checks** (the root helper's `tm-apply compliance --report`, read-only): host state the product does not own — the web server account's shell, groups and password lock, other files under `/etc/nginx`, loaded nginx modules — is reported and never changed; a FAIL on the product's own files stops the install
 
 ### Step 3 — Verify, sign in, add clusters
 
@@ -581,7 +581,12 @@ refuses to import them if they are not root-owned and private). Each unit is a
 [Host settings](#host-settings-v120) for what it trusts and what it refuses.
 
 **`topic-manager-audit-prune.timer`** (v1.2.0) — daily, runs `python -m tm.audit_retention`
-as the `topic-manager` account (`UMask=0077`), no polkit involved.
+as the `topic-manager` account (`UMask=0077`), no polkit involved. A prune that deletes rows
+writes `AUDIT_PRUNE` in the same transaction; one that deletes nothing writes no row (the run
+is in `journalctl -u topic-manager-audit-prune` and in Settings' last-prune time). To see what
+a prune would delete now, without deleting or writing anything (v1.3.0):
+`cd /opt/topic-manager && sudo -u topic-manager ./venv/bin/python3 -m tm.audit_retention --dry-run`
+(from `/opt/topic-manager`, as the unit runs it).
 
 **Why polkit and not sudoers.** `topic-manager.service` sets `NoNewPrivileges=true`, under
 which `sudo` refuses to run at all (`sudo: The "no new privileges" flag is set...`). A
@@ -698,11 +703,13 @@ sudo install -d -m 700 -o root -g root /var/lib/topic-manager/upgrade-src
 sudo git clone --branch v<version> --depth 1 <your-git-url>   /var/lib/topic-manager/upgrade-src
 cd /var/lib/topic-manager/upgrade-src
 sudo git rev-parse HEAD      # must equal the release commit id you got out of band
-sudo bash install/upgrade-full.sh --audit-only --repo-url <your-git-url> --repo-branch v<version> --repo-commit <40-hex-sha>
+sudo bash install/upgrade-full.sh --audit-only --repo-url <your-git-url> --repo-branch v<version> --repo-commit <40-hex-sha> \
+    --syslog-host <collector>       # or --no-remote-syslog: see "where the audit trail goes" below
 ```
 `--audit-only` changes nothing and exits **0** clear, **1** warnings only, **2** blockers present. Resolve every blocker before going further — they are the failures that otherwise appear an hour later as "nobody can log in".
 
-**Step 4 — Take the verified restore point:**
+**Step 4 — Take the verified restore point** (no syslog flag: `--backup-only` changes
+nothing, so it does not ask; it exits 0 and notes any blocker that still stands):
 ```bash
 sudo bash install/upgrade-full.sh --backup-only
 sudo bash install/upgrade-full.sh --list-backups
@@ -710,7 +717,8 @@ sudo bash install/upgrade-full.sh --list-backups
 
 **Step 5 — Run the upgrade:**
 ```bash
-sudo bash install/upgrade-full.sh --repo-url <your-git-url> --repo-branch v<version> --repo-commit <40-hex-sha>
+sudo bash install/upgrade-full.sh --repo-url <your-git-url> --repo-branch v<version> --repo-commit <40-hex-sha> \
+    --syslog-host <collector>       # or --no-remote-syslog
 ```
 The upgrade clones only that commit (TLS verification forced, no local transports, known SSH
 host keys only) and refuses the tree if `HEAD` is anything else — a moved tag cannot substitute
@@ -722,7 +730,9 @@ the audit trail must name a collector (`--syslog-host <collector>`, with `--sysl
 `--syslog-protocol` as needed; it is saved through the application's validator and applied
 with the other host settings) or say that there is none (`--no-remote-syslog`, then an open
 item on the compliance page). Without either, `--audit-only` shows `BLOCK remote syslog` and
-the upgrade refuses; `--force` does not override it. `--audit-only` also reports the consent
+exits 2, and the upgrade refuses at its gate with exit 1 (after the verified backup, before any
+change; a detached run's last line is `RESULT: exit 1`); `--force` does not override it.
+`--backup-only` needs neither flag. `--audit-only` also reports the consent
 notice (an upgraded host keeps its setting), whether the 15-minute group re-check can run, and
 the host STIG checks (warnings only: the product's own files are fixed by the upgrade and
 checked again after it, where a failure rolls it back).
@@ -843,14 +853,32 @@ sudo tar xzf topic-manager-offline-<version>.tar.gz   -C /var/lib/topic-manager/
 
 Then the same three steps as online, each with `--offline` and by the staged script's
 **absolute** path (the upgrade reads the bundle from that one place; a relative
-`install/upgrade-full.sh` only works from inside it):
+`install/upgrade-full.sh` only works from inside it).
+
+**v1.3.0 — the audit trail: one of two flags, on `--audit-only` and on the upgrade itself.**
+Unless the host's saved settings already forward the audit trail, the run must be told where it
+goes, and refuses without it (`--audit-only` shows `BLOCK remote syslog` and exits 2; the
+upgrade stops at its gate with exit 1, after the verified backup and before any change;
+`--force` does not override it):
+
+- `--syslog-host <collector>` (with `--syslog-port P` and `--syslog-protocol udp|tcp|tls` as
+  needed) — the audit trail is forwarded to your collector; the value is saved through the
+  application's validator and applied with the other host settings.
+- `--no-remote-syslog` — there is no collector; the audit trail stays on this host, and the
+  compliance page shows that as an open item (SRG-APP-000515).
+
+The commands below show `--syslog-host <collector>`; put `--no-remote-syslog` in its place if
+that is your answer. `--backup-only` needs neither — it changes nothing, so it does not ask
+(it notes the blocker and exits 0).
+
 ```bash
-sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --audit-only --offline
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --audit-only --offline --syslog-host <collector>
 #   exit 0 = clear; 1 = WARNINGS only (proceed when each is a change this release makes on
 #   purpose); 2 = BLOCKERS: stop
 sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --backup-only --offline
-#   a verified restore point: "Baseline recorded (N paths)"
-sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline
+#   a verified restore point: "Baseline recorded (N paths)" (no syslog flag: it changes nothing)
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline --syslog-host <collector>
+#   or --no-remote-syslog, on this line and the --audit-only line alike
 ```
 
 **Run it detached, with a log.** An upgrade takes minutes — longer offline, and longer again
@@ -860,7 +888,7 @@ mid-phase. Start it so that a disconnect cannot reach it, and read its output fr
 ```bash
 sudo -v                       # enter the password now: a backgrounded sudo cannot ask for it
 sudo setsid nohup bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline \
-    > ~/tm-upgrade.out 2>&1 < /dev/null &
+    --syslog-host <collector> > ~/tm-upgrade.out 2>&1 < /dev/null &      # or --no-remote-syslog
 tail -f ~/tm-upgrade.out      # Ctrl-C ends only the tail; the upgrade carries on
 ```
 or run it inside `tmux new -s tm-upgrade` (after a disconnect: `tmux attach -t tm-upgrade`).
@@ -1086,15 +1114,20 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
 - A failed sign-in gets ONE answer whatever the reason (user unknown, wrong password, not in the group, directory error); the specific reason is in the `LOGIN_FAILED` audit row
 - Security headers on all routes: HSTS, CSP (`frame-ancestors 'none'`, `form-action 'none'`, `base-uri 'self'`), X-Content-Type-Options, Referrer-Policy
 - Server-side session store (SQLite); session tokens never leave the server in a readable form
-- Audit log: every row carries its time (ISO 8601 UTC, `Z`), user, **source** (the client address, or `system`), action, **outcome** (`success`/`failure`), target, detail and cluster (v1.3.0; older rows were migrated — the sign-in rows' addresses kept, the rest `unrecorded`). **28 audited actions** in the database, plus one that exists only in syslog. Derived from EVERY module in `tm/*.py` with the AST (never grep — the action is the third positional argument, usually on the next line), with:
+- Audit log: every row carries its time (ISO 8601 UTC, `Z`), user, **source** (the client address, or `system`), action, **outcome** (`success`/`failure`), target, detail and cluster (v1.3.0; older rows were migrated — the sign-in rows' addresses kept, the rest `unrecorded`; an older row's outcome is `failure` where its record says so and otherwise `unknown`, never an assumed `success`). **28 audited actions** in the database, plus one that exists only in syslog. Derived from EVERY module in `tm/*.py` with the AST (never grep — the action is the third positional argument, usually on the next line), with:
   `python3 -c "import ast,glob;print(sorted({n.args[2].value for f in glob.glob('tm/*.py') for n in ast.walk(ast.parse(open(f).read())) if isinstance(n,ast.Call) and getattr(n.func,'attr',getattr(n.func,'id',''))=='log_action' and len(n.args)>2 and isinstance(n.args[2],ast.Constant)}))"`
-  — topics (`CREATE`, `DELETE`, `UPDATE_CONFIG`); cluster profiles (`CLUSTER_CREATE`, `CLUSTER_UPDATE`, `CLUSTER_DELETE`, before and after); application settings (`SETTINGS_UPDATE` — display and v1.2.0 host settings show old → new values, any other key is named only); service restarts (`SERVICE_RESTART`, `SERVICE_RESTART_STEP`, `SERVICE_RESTART_REFUSED`, `SERVICE_RESTART_THROTTLED`); authentication (`LOGIN`, `LOGIN_FAILED`, `LOGIN_REFUSED`, `LOGOUT`, `SESSION_EXPIRED`); host settings, v1.2.0 (`SYSTEM_APPLY_REQUESTED`, `SYSTEM_APPLY_RESULT`, `TLS_CERT_REPLACED` — the certificate's key type and expiry, never PEM material); retention, v1.2.0 (`AUDIT_PRUNE`, `AUDIT_CAPACITY_WARNING`); v1.3.0: reading the trail (`AUDIT_READ`, `AUDIT_EXPORT`), the one-time migration of the table (`AUDIT_SCHEMA_MIGRATED`), the consent notice (`CONSENT_ACCEPTED`, just before the user's `LOGIN`), sessions (`SESSION_REVOKED` when the group re-check removes a user, `SESSIONS_ENDED` when an administrator ends them) and a signed-in user's refused write (`REQUEST_REFUSED`; a refused topic write is recorded under its own action word with outcome `failure`); and, syslog-only because the database write is what failed, `AUDIT_WRITE_FAILED` (CRIT, carrying the lost record). A `LOGOUT` row says in its detail whether the person signed out or the idle timeout did it, so the two are distinguishable in the export. SASL passwords are redacted and certificate paths reduced to basenames before anything is logged, because any authenticated user can export the log
+  — topics (`CREATE`, `DELETE`, `UPDATE_CONFIG`); cluster profiles (`CLUSTER_CREATE`, `CLUSTER_UPDATE`, `CLUSTER_DELETE`, before and after); application settings (`SETTINGS_UPDATE` — display and v1.2.0 host settings show old → new values, any other key is named only); service restarts (`SERVICE_RESTART`, `SERVICE_RESTART_STEP`, `SERVICE_RESTART_REFUSED`, `SERVICE_RESTART_THROTTLED`); authentication (`LOGIN`, `LOGIN_FAILED`, `LOGIN_REFUSED`, `LOGOUT`, `SESSION_EXPIRED`); host settings, v1.2.0 (`SYSTEM_APPLY_REQUESTED`, `SYSTEM_APPLY_RESULT`, `TLS_CERT_REPLACED` — the certificate's key type and expiry, never PEM material); retention, v1.2.0 (`AUDIT_PRUNE`, `AUDIT_CAPACITY_WARNING`); v1.3.0: reading the trail (`AUDIT_READ`, `AUDIT_EXPORT`), the one-time migration of the table (`AUDIT_SCHEMA_MIGRATED`), the consent notice (`CONSENT_ACCEPTED`, just before the user's `LOGIN`), sessions (`SESSION_REVOKED` when the group re-check removes a user, `SESSIONS_ENDED` when an administrator ends them) and a signed-in user's refused write (`REQUEST_REFUSED`; a refused topic write is recorded under its own action word with outcome `failure`; a cross-site write refused with 403 is logged as an anonymous refusal, never under the session's user); and, syslog-only because the database write is what failed, `AUDIT_WRITE_FAILED` (CRIT, carrying the lost record). A `LOGOUT` row says in its detail whether the person signed out or the idle timeout did it, so the two are distinguishable in the export. SASL passwords are redacted and certificate paths reduced to basenames before anything is logged, because any authenticated user can export the log
 - Destructive actions require name-match confirmation
 - Idle session timeout: 15 minutes (configurable as `session.timeout_minutes`); background refreshes do not count as activity
 - v1.3.0: an **absolute session lifetime** (Settings > Security > Sessions, default 12 hours) that no activity extends; **group membership re-checked every 15 minutes** with the LDAP service account — a user removed from `required_group` loses every session, and while the directory cannot be reached sessions may read but every change is refused; administrators can **end** a user's sessions or everyone else's (Settings > Security > Sessions)
 - v1.3.0: the **DoD notice and consent banner** is enforced by the server — no sign-in is accepted until it has been accepted, and each acceptance is recorded; its text can be replaced (Settings > General > DoW Consent Banner)
 - v1.3.0: a Kafka failure tells the browser one sentence and a reference; the detail is in the service log under that reference. nginx's own error pages (404, 502, ...) are the product's and name no server software
 - v1.3.0: the **STIG compliance** page (Settings > Support > STIG compliance, downloadable as CSV) lists every rule of the STIG decision board with its status from [docs/STIG-COMPLIANCE.md](docs/STIG-COMPLIANCE.md) — the source of truth — and what the host measures now; `tools/check-stig-compliance.sh` holds the page and the document together
+- v1.3.0: **the compliance API** (any signed-in user, like every other route; a script sends the session cookie, and `X-TM-Request: 1` on the POST):
+  - `GET /api/compliance` — read-only. `{"rules": [{"id", "sev", "decision", "status", "title", "checks": [{"key", "status", "where", "detail"}]}], "counts": {status: n}, "open_items": [check keys that are warn/fail], "host": {"state", "measured_at", "message"}, "document": "docs/STIG-COMPLIANCE.md"}`. The application's own checks are measured on each call; the host's come from the last measurement (`"status": "unknown"` until there is one).
+  - `POST /api/system/apply/compliance` (body `{}`) — queues a new host measurement through the root helper's read-only `compliance` unit (it changes nothing on the host): `202 {"domain": "compliance", "job", "state": "queued"}`; `429` with `Retry-After` within 5 seconds of the last request, `409` while one is queued or running. Audited as `SYSTEM_APPLY_REQUESTED`, its verdict as `SYSTEM_APPLY_RESULT`.
+  - `GET /api/system/apply/compliance` — that measurement's state (`idle`, `queued`, `running`, `ok`, `failed`), `finished_at` and checks; poll it after the POST, then read `GET /api/compliance` again.
+  - The same checks run on the host without the application: `sudo python3 -I /usr/libexec/topic-manager/tm-apply compliance --report` (exit 1 when a product file drifted).
 - Fail-closed: application refuses to start if `secret_key` is absent or still the placeholder
 - The service account holds no general privilege escalation: `NoNewPrivileges=true` (so `sudo` cannot run under the unit at all), and exactly nine systemd unit/verb pairs, over eight units, are authorised through polkit (v1.2.0 added `start` on the four apply units, v1.3.0 on the read-only compliance measurement, whose root helper re-validates everything and runs no code the service account owns) — see [Privileges the install grants](#privileges-the-install-grants)
 - The application cannot write or unlink its own `config.yaml`, and the upgrade asks the kernel to prove it as the real principal rather than reading mode bits

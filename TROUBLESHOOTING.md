@@ -1297,6 +1297,14 @@ One `AUDIT_CAPACITY_WARNING` is written per crossing, not per page view.
 `journalctl -u topic-manager-audit-prune`. The delete and its `AUDIT_PRUNE` row are one
 transaction, so a failure deletes nothing.
 
+### No `AUDIT_PRUNE` row after the daily prune
+
+Expected when nothing was due: a prune writes `AUDIT_PRUNE` only when it deletes. The run itself
+is in `journalctl -u topic-manager-audit-prune` (`audit prune: 0 deleted by age, 0 by row
+limit`). `cd /opt/topic-manager && sudo -u topic-manager ./venv/bin/python3 -m tm.audit_retention --dry-run`
+prints what a prune would delete now and changes nothing. At the row limit every prune deletes
+the oldest row(s) and writes one `AUDIT_PRUNE`, so the table stays at the limit.
+
 ### `config.yaml session.max_concurrent is N but Settings holds M. Settings wins`
 
 Expected after an operator changed the limit in Settings: `config.yaml` only seeds it on the
@@ -1358,8 +1366,17 @@ reported for the host's owner and never changed.
 ### `The Topic Manager nginx logs could not be made private`
 
 `/var/log/nginx/topic-manager-access.log` or `-error.log` is a symlink, or its owner or mode
-could not be set to 0640 `www-data:adm`. Nothing is written through a symlink: remove it and
-re-run.
+could not be set to 0640 `www-data:adm` — the live logs and every rotated copy
+(`topic-manager-*.log.*`) alike. Nothing is written through a symlink: remove it and re-run.
+If it says `/var/log/nginx is not root-owned and closed to group/other writes`, the directory
+can be changed by an account other than root, so a log in it could be swapped for a link
+between the check and the change; nothing was touched. Put it back to the package's
+ownership (`sudo chown root:adm /var/log/nginx && sudo chmod 755 /var/log/nginx`) and re-run.
+
+On the compliance page, `site_log_modes` WARN `/etc/logrotate.d/nginx does not recreate the logs
+it rotates as "create 0640 www-data adm"` means the OS's nginx logrotate stanza was changed:
+the next rotation would give the logs another owner or mode. Restore its `create 0640 www-data
+adm` line (it is the nginx package's file; the product does not change it).
 
 ### `a compliance measurement carries no settings` (Settings > Support > STIG compliance)
 
@@ -1370,7 +1387,10 @@ written by the application itself is accepted; press **Measure host now** again.
 
 The consent notice is on (Settings > General > DoW Consent Banner) and the server did not hold
 a fresh acceptance for this browser: it was declined, it is more than ten minutes old, or it
-was used by a sign-in already. Reload the page and accept the notice.
+was used by a sign-in already (each acceptance allows ONE sign-in, checked by the server, so a
+copy of the browser's cookie does not allow another). Reload the page and accept the notice.
+If the page says **The notice changed while this page was open**, an administrator changed the
+notice text after the page loaded; the page now shows the current text — read it and accept it.
 
 ### `The directory could not be reached to re-check your group membership, so changes are refused`
 

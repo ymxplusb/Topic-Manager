@@ -51,11 +51,19 @@ Use the upgrade script, which reads the bundle from one fixed path:
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/offline-src
 sudo tar xzf topic-manager-offline-<version>.tar.gz   -C /var/lib/topic-manager/offline-src --strip-components=1
 
-sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline
+sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline --syslog-host <collector>
 ```
 
+**v1.3.0:** the upgrade (and `--audit-only`) needs ONE of `--syslog-host <collector>` (the audit
+trail is forwarded there; `--syslog-port`/`--syslog-protocol` as needed) or `--no-remote-syslog`
+(there is no collector: the trail stays on this host, an open item on the compliance page) —
+unless the saved settings already forward it. Without either the upgrade refuses with exit 1
+(after the backup, before any change) and `--force` does not override it; `--backup-only` needs
+neither.
+
 Check the tarball before extracting it (its `.sha256`, and the value recorded out of band),
-and run `--audit-only --offline` and `--backup-only --offline` first — README.md → *Offline
+and run `--audit-only --offline --syslog-host <collector>` (or `--no-remote-syslog`) and
+`--backup-only --offline` first — README.md → *Offline
 (air-gapped) upgrade* has the full sequence. A runtime package the release added and the host
 lacks (v1.2.0: `rsyslog-openssl`) is installed from the bundle with
 `sudo bash /var/lib/topic-manager/offline-src/install.sh --packages-only`, which changes nothing

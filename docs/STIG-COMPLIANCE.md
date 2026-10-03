@@ -109,8 +109,8 @@ or settings have drifted), info, or unknown (could not be measured, never guesse
 - **Decision:** Yes
 - **Status:** MET
 - **Live checks:** `consent_notice`
-- **How met:** The sign-in page shows the Standard Mandatory DoD Notice and Consent Banner, or an operator-supplied replacement text (Settings > General > DoW Consent Banner), BEFORE the sign-in form, and the server refuses POST /api/auth/login without a fresh acceptance (HTTP 403 consent_required). The acceptance is recorded as CONSENT_ACCEPTED immediately before the user's LOGIN row. A fresh install turns it ON (install.sh --no-consent-banner turns it off); an upgraded host keeps its setting and the compliance page shows OFF as an open item.
-- **How verified:** Sign in without accepting: refused 403 and nothing reaches the directory. Accept, then sign in: CONSENT_ACCEPTED then LOGIN in the audit trail. The compliance page reads dow_enabled.
+- **How met:** The sign-in page shows the Standard Mandatory DoD Notice and Consent Banner, or an operator-supplied replacement text (Settings > General > DoW Consent Banner), BEFORE the sign-in form, and the server refuses POST /api/auth/login without a fresh acceptance (HTTP 403 consent_required). An acceptance is a one-use token the server issues (POST /api/auth/consent, which must name the notice text the page displayed, else 409 notice_changed) and holds by digest in tm.db; the sign-in it enables uses it up in the transaction that creates the session, so a copied cookie cannot be replayed for a second sign-in. The acceptance is recorded as CONSENT_ACCEPTED immediately before the user's LOGIN row. A fresh install turns it ON (install.sh --no-consent-banner turns it off); an upgraded host keeps its setting and the compliance page shows OFF as an open item.
+- **How verified:** Sign in without accepting: refused 403 and nothing reaches the directory. Accept, then sign in: CONSENT_ACCEPTED then LOGIN in the audit trail. Replay the consent cookie from that sign-in in another browser: refused 403 consent_required. The compliance page reads dow_enabled.
 - **Evidence:** tm/routes.py accept_consent(), login() (_fresh_consent, CONSENT_ACCEPTED); app/components/LoginView.js; tm/settings_schema.py CONSENT_KEY/CONSENT_TEXT_KEY; install.sh --no-consent-banner; tests/t50-consent-v130.sh.
 
 ### NGNX-APP-000240 - NGINX must provide audit records for DOD-defined auditable events.
@@ -151,8 +151,8 @@ or settings have drifted), info, or unknown (could not be measured, never guesse
 - **Decision:** Yes
 - **Status:** MET
 - **Live checks:** `site_log_modes`
-- **How met:** The product's own logs (/var/log/nginx/topic-manager-access.log and -error.log) are CREATED 0640 www-data:adm by install.sh and the upgrade before nginx can create them world-readable, rotated copies are narrowed, and Ubuntu's logrotate recreates them 0640 www-data:adm. Drift is enforced back by the next install or upgrade and BLOCKS it if it cannot be (DQ1).
-- **How verified:** The compliance check stats both files (0640 or tighter, www-data or root, adm or root) and every rotated copy (not readable by other); drift is a FAIL.
+- **How met:** The product's own logs (/var/log/nginx/topic-manager-access.log and -error.log) are CREATED 0640 www-data:adm by install.sh and the upgrade before nginx can create them world-readable; every rotated copy (topic-manager-*.log.*, compressed or not) is set to the same owner and 0640 or tighter, and Ubuntu's /etc/logrotate.d/nginx recreates the live files with `create 0640 www-data adm` (a rotated copy keeps the live file's owner and mode, so live and rotated logs are 0640 www-data:adm alike; root stands in only where that account or group does not exist). The installer and the upgrade touch the logs only when /var/log/nginx is root-owned and not group- or other-writable, and never through a symlink. Drift is enforced back by the next install or upgrade and BLOCKS it if it cannot be (DQ1).
+- **How verified:** The compliance check stats both live files and every rotated copy: each must be a regular file, 0640 or tighter, owned www-data:adm — drift is a FAIL. It also reads /etc/logrotate.d/nginx (the OS package's file): a `create` other than `0640 www-data adm` for /var/log/nginx/*.log is a WARN.
 - **Evidence:** install.sh and install/upgrade-full.sh ensure_site_logs; install/libexec/tm-apply check_site_logs; tests/t51-host-checks-v130.sh.
 
 ### NGNX-APP-000510 - NGINX must be configured to prohibit or restrict using ports, protocols, and/or services.
@@ -390,7 +390,7 @@ or settings have drifted), info, or unknown (could not be measured, never guesse
 - **Decision:** Yes
 - **Status:** MET
 - **Live checks:** `group_recheck`, `absolute_lifetime`
-- **How met:** Sign-out deletes the server-side session; idle and absolute expiry invalidate it; every 15 minutes the user is looked up again with the service account and every session of a user removed from required_group (or gone from the directory) is ended and SESSION_REVOKED recorded; an administrator can end a user's sessions or everyone's (Settings > Security > Sessions, SESSIONS_ENDED). While the directory cannot be reached, sessions may read and every write is refused (DQ8). Without a service account (auth.ldap_bind_dn) the re-check cannot run, and the compliance page says so.
+- **How met:** Sign-out deletes the server-side session; idle and absolute expiry invalidate it; every 15 minutes the user is looked up again with the service account and every session of a user removed from required_group (or gone from the directory: a search that completed and found no such account) is ended and SESSION_REVOKED recorded — a search the directory did not complete (any result code but success) is an outage, reads only, never a removal; an administrator can end a user's sessions or everyone's (Settings > Security > Sessions, SESSIONS_ENDED). While the directory cannot be reached, sessions may read and every write is refused (DQ8). Without a service account (auth.ldap_bind_dn) the re-check cannot run, and the compliance page says so.
 - **How verified:** Remove a signed-in user from the group: within 15 minutes their next request is 401 and SESSION_REVOKED is recorded. End sessions from Settings: the user's next request is 401 with the reason.
 - **Evidence:** tm/routes.py _recheck_group, end_user_sessions; tm/auth.py check_membership; tm/models.py end_sessions; tests/t49-sessions-v130.sh.
 
@@ -412,8 +412,8 @@ or settings have drifted), info, or unknown (could not be measured, never guesse
 - **Decision:** Yes
 - **Status:** MET
 - **Live checks:** `audit_write_state`
-- **How met:** Every change, every sign-in event, every refused write by a signed-in user (REQUEST_REFUSED, or the action word with outcome failure for a Kafka refusal), and every read and export of the audit trail itself (AUDIT_READ, AUDIT_EXPORT) is recorded. An anonymous caller's refused request goes to the service log through a limiter and to the nginx access log, never to tm.db (DQ7); failed sign-ins are recorded as LOGIN_FAILED as before.
-- **How verified:** Force a Kafka create failure: CREATE with outcome failure. Export the CSV: AUDIT_EXPORT. A cross-site POST from a signed-in browser: REQUEST_REFUSED.
+- **How met:** Every change, every sign-in event, every refused write by a signed-in user (REQUEST_REFUSED, or the action word with outcome failure for a Kafka refusal), and every read and export of the audit trail itself (AUDIT_READ, AUDIT_EXPORT) is recorded. An anonymous caller's refused request goes to the service log through a limiter and to the nginx access log, never to tm.db (DQ7); a cross-site write refused with 403 is handled the same way even when the browser sent a valid session cookie, because it is another site acting with that cookie, not the user; failed sign-ins are recorded as LOGIN_FAILED as before.
+- **How verified:** Force a Kafka create failure: CREATE with outcome failure. Export the CSV: AUDIT_EXPORT. A refused write from the signed-in browser (an invalid topic name): REQUEST_REFUSED. A same-site POST with a valid session: 403, ANON_REQUEST_REFUSED in the service log, no audit row.
 - **Evidence:** tm/routes.py _record_refusals, _kafka_write_failed, get_audit, export_audit; README Compliance (audited actions); tests/t48-audit-v130.sh.
 
 ### SRG-APP-000095-DB-000039 - The DBMS must produce audit records containing sufficient information to establish what type of events occurred.
@@ -462,9 +462,9 @@ or settings have drifted), info, or unknown (could not be measured, never guesse
 - **Decision:** Yes
 - **Status:** MET
 - **Live checks:** none
-- **How met:** Every row has an outcome column, success or failure. Rows written before v1.3.0 were given the outcome their action word implies.
-- **How verified:** Every exported row has outcome success or failure.
-- **Evidence:** tm/audit.py OUTCOMES, migrate_schema; tests/t48-audit-v130.sh.
+- **How met:** Every row has an outcome column. A row written by v1.3.0 or later is success or failure; a failed step of a detached operation (a service restart) is recorded as failure. Rows written before v1.3.0 recorded no outcome: the migration marks failure only where the old record itself states it (LOGIN_FAILED, LOGIN_REFUSED, SERVICE_RESTART_REFUSED, SERVICE_RESTART_THROTTLED, a SYSTEM_APPLY_RESULT whose state is not ok, a SERVICE_RESTART_STEP that says FAILED), success only for an old SYSTEM_APPLY_RESULT with state=ok, and unknown for every other old row rather than claiming a success the record never made.
+- **How verified:** Every exported row has outcome success or failure, or unknown for a row written before v1.3.0; a restart whose nginx reload fails records that SERVICE_RESTART_STEP with outcome failure.
+- **Evidence:** tm/audit.py OUTCOMES, OUTCOME_UNRECORDED, migrate_schema; tm/service_control.py _restart_sequence; tests/t48-audit-v130.sh.
 
 ### SRG-APP-000100-DB-000201 - The DBMS must produce audit records containing sufficient information to establish the identity of any user/subject or process associated with the event.
 
@@ -513,8 +513,8 @@ or settings have drifted), info, or unknown (could not be measured, never guesse
 - **Status:** MET
 - **Live checks:** `db_modes`
 - **How met:** The same modes; rows leave only by retention (days, rows), in the same transaction as the AUDIT_PRUNE row that records it.
-- **How verified:** Settings refuses retention below 30 days; a prune writes AUDIT_PRUNE.
-- **Evidence:** tm/audit_retention.py prune; tests/t33-audit-retention.sh.
+- **How verified:** Settings refuses retention below 30 days; a prune that deletes rows writes AUDIT_PRUNE (deleted counts and reasons) in the same transaction; a prune that deletes nothing writes no row (its run is in the journal of topic-manager-audit-prune and in the capacity document's last_prune). `python -m tm.audit_retention --dry-run` says what a prune would delete now and writes nothing.
+- **Evidence:** tm/audit_retention.py prune, preview; tests/t33-audit-retention.sh.
 
 ### SRG-APP-000121-DB-000202 - The DBMS must protect its audit features from unauthorized access.
 
@@ -744,7 +744,7 @@ or settings have drifted), info, or unknown (could not be measured, never guesse
 - **Decision:** Yes
 - **Status:** MET
 - **Live checks:** `audit_write_state`, `remote_syslog`
-- **How met:** An audit write failure is sent to syslog at CRIT with the whole record (forwarded off the host when Remote syslog is applied), the action is refused, and a banner shows in Settings and the Audit tab until a later write succeeds.
+- **How met:** An audit write failure is sent to syslog at CRIT with the whole record (forwarded off the host when Remote syslog is applied), the action is refused, and a banner shows in Settings and the Audit tab until a later write succeeds, saying whether the syslog accepted the record or the service log holds the only copy.
 - **How verified:** Make tm.db read-only: CRIT line at the collector; the banner appears; it clears after the store recovers.
 - **Evidence:** tm/audit.py write_failed, write_failure_state; app/components/SettingsTab.js and AuditTab.js banner; tests/t48-audit-v130.sh.
 
@@ -785,7 +785,7 @@ or settings have drifted), info, or unknown (could not be measured, never guesse
 - **Decision:** Yes
 - **Status:** MET
 - **Live checks:** `remote_syslog`
-- **How met:** Every committed audit row is sent to the local syslog socket as it is written, and rsyslog forwards it to the collector with a disk-assisted queue once Remote syslog is applied. Install and upgrade refuse to finish without --syslog-host or --no-remote-syslog (DQ10); while it is off the compliance page shows an open item.
+- **How met:** Every committed audit row is sent to the local syslog socket as it is written, as one datagram that always carries ts, source and outcome (an over-long detail is shortened and marked [truncated] in the syslog copy only), and rsyslog forwards it to the collector with a disk-assisted queue once Remote syslog is applied. Install and upgrade refuse to finish without --syslog-host or --no-remote-syslog (DQ10); while it is off the compliance page shows an open item.
 - **How verified:** The collector receives topic-manager-audit lines in near real time.
 - **Evidence:** tm/audit.py emit; install/libexec/tm-apply render_rsyslog; install.sh and install/upgrade-full.sh (--syslog-host, --no-remote-syslog).
 

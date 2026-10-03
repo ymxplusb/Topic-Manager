@@ -32,7 +32,9 @@ reads the CSV, sees two new fields at the END.
   key. Host state the product does not own is **reported, never changed**; a failure of the
   product's own files stops an install and rolls an upgrade back.
 - **Consent notice enforced by the server** (NGNX-APP-000180). Shown before the sign-in form;
-  the server refuses a sign-in without a fresh acceptance and records `CONSENT_ACCEPTED` just
+  the server refuses a sign-in without a fresh acceptance — a one-use token it issues and holds
+  by digest, used up by the sign-in, so a replayed cookie is refused; the acceptance must name
+  the notice text the page showed (409 `notice_changed` otherwise) — and records `CONSENT_ACCEPTED` just
   before the user's `LOGIN`. Its text can be replaced (Settings → General → DoW Consent
   Banner; empty = the standard DoD wording). **ON after a fresh install**
   (`--no-consent-banner` to install without it); an upgraded host keeps its setting.
@@ -40,9 +42,17 @@ reads the CSV, sees two new fields at the END.
   activity extends; `SESSION_EXPIRED` says which limit ended a session.
 - **Group membership re-checked every 15 minutes** with the LDAP service account: a user
   removed from `required_group`, or gone, loses every session (`SESSION_REVOKED`). While the
-  directory cannot be reached, sessions may read and **every change is refused** (503).
+  directory cannot be reached — or answers a search with anything but success (busy, a limit,
+  a base DN it does not hold) — sessions may read and **every change is refused** (503); only a
+  search that completed and found no such account counts as removal.
 - **End sessions**: Settings → Security → Sessions lists active sessions (by a one-way
   handle, never the session id) and ends a user's, or everyone else's (`SESSIONS_ENDED`).
+  A browser whose session the server ended returns to the sign-in page on its next request
+  and says why ("Your session was ended", or the re-check's reason).
+- **`python -m tm.audit_retention --dry-run`**: what a prune would delete now, writing nothing.
+  A prune that deletes nothing writes no `AUDIT_PRUNE` row (as before; now documented).
+- **The compliance API** documented for operators: `GET /api/compliance`,
+  `POST`/`GET /api/system/apply/compliance` (README → *Compliance*).
 - **DoD access-log format** `tm_dod` (`/etc/nginx/conf.d/topic-manager-log-format.conf`),
   used by both sites and the syslog copy; `nginx.conf` is edited no further than before.
 - **The product's own nginx error pages** for 403/404 and a JSON answer for 500/502/503/504,
@@ -50,7 +60,8 @@ reads the CSV, sees two new fields at the END.
 - **TLS issuer check** (NGNX-APP-001900): a self-signed server certificate is a warning on the
   TLS pane and the compliance page; any other issuer is shown for the operator to confirm.
 - **Audit-failure banner** in Settings and the Audit tab while an audit write failure is
-  current (SRG-APP-000360).
+  current (SRG-APP-000360); it says whether the host syslog accepted the `AUDIT_WRITE_FAILED`
+  copy or the service log holds the only one.
 - install.sh `--no-remote-syslog`, `--no-consent-banner`; upgrade-full.sh `--syslog-host`,
   `--syslog-port`, `--syslog-protocol`, `--no-remote-syslog`.
 
@@ -60,19 +71,30 @@ reads the CSV, sees two new fields at the END.
   8601 UTC with `Z`** (SRG-APP-000374). On the first start the table gains the two columns and
   every stored timestamp is rewritten, **in one transaction** with the `AUDIT_SCHEMA_MIGRATED`
   row that records it; sign-in rows take their address from the target they kept it in,
-  other older rows say `unrecorded`, and older outcomes are inferred from the action. The
+  other older rows say `unrecorded`; an older row's outcome is `failure` where its record says so
+  (a failure action word, an apply result's state, a restart step that says FAILED), `success`
+  only for an apply result with state ok, and `unknown` otherwise — never a claimed success. The
   syslog line and the CSV **append** `source` and `outcome` after the v1.2 fields; the Audit
-  tab shows them.
+  tab shows them. A syslog line longer than one datagram has its `detail` shortened (marked
+  ` [truncated]`, never mid-character) so `ts`, `source` and `outcome` always arrive; the
+  database row keeps the whole detail. A service-restart step that fails is recorded with
+  outcome `failure`.
 - **Unsuccessful events are audited** (SRG-APP-000089, DQ7): a signed-in user's refused change
   (`REQUEST_REFUSED`; a refused topic write under its own action word with outcome
   `failure`), and every read and export of the audit trail (`AUDIT_READ`, `AUDIT_EXPORT`),
   written before the data is served. An anonymous caller's refusals are logged by the
-  service (rate-limited) and by nginx, never written to the audit database.
+  service (rate-limited) and by nginx, never written to the audit database; so is a
+  cross-site write refused with 403 even when it carried a valid session cookie (it is another
+  site acting with the cookie, and recording it under the user let that site write and prune
+  their audit rows).
 - **Kafka errors are generic** (SRG-APP-000266): one sentence and a reference; the detail is
   in the service log under that reference. A write with no usable cluster profile is a 409.
 - **Install and upgrade require a decision about remote syslog** (DQ10).
 - The site's logs are created 0640 `www-data:adm` before nginx can create them
-  world-readable; the upgrade narrows existing ones and the TLS key.
+  world-readable; the upgrade narrows existing ones — rotated copies included, owner too —
+  and the TLS key. It touches them only in a root-owned `/var/log/nginx` closed to group and
+  other writes, and never through a symlink. The compliance check holds live and rotated logs
+  to `www-data:adm` 0640 and warns when `/etc/logrotate.d/nginx` would recreate them otherwise.
 - The polkit rule authorises nine unit/verb pairs over eight units (adds `start` on the
   read-only compliance unit).
 - Every database connection switches SQLite extension loading off explicitly
