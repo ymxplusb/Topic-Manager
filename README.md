@@ -844,6 +844,10 @@ the bundle that was built:
 sha256sum -c topic-manager-offline-<version>.tar.gz.sha256
 sha256sum topic-manager-offline-<version>.tar.gz      # must equal the out-of-band value
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/offline-src
+# A NEWER bundle goes into an EMPTY directory: tar does not remove files the new
+# bundle no longer ships, so a leftover from the last one would be read as part
+# of this one. Empty it first (the directory itself stays):
+sudo find /var/lib/topic-manager/offline-src -mindepth 1 -delete
 # Straight into the root-owned destination. --strip-components=1 drops the
 # topic-manager-<version>/ directory the tarball wraps everything in, so nothing is ever
 # staged in /tmp, where the directory root reads from would be created by
@@ -1128,6 +1132,14 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
   - `POST /api/system/apply/compliance` (body `{}`) — queues a new host measurement through the root helper's read-only `compliance` unit (it changes nothing on the host): `202 {"domain": "compliance", "job", "state": "queued"}`; `429` with `Retry-After` within 5 seconds of the last request, `409` while one is queued or running. Audited as `SYSTEM_APPLY_REQUESTED`, its verdict as `SYSTEM_APPLY_RESULT`.
   - `GET /api/system/apply/compliance` — that measurement's state (`idle`, `queued`, `running`, `ok`, `failed`), `finished_at` and checks; poll it after the POST, then read `GET /api/compliance` again.
   - The same checks run on the host without the application: `sudo python3 -I /usr/libexec/topic-manager/tm-apply compliance --report` (exit 1 when a product file drifted).
+  - **Signing a script in.** The API takes the same session cookie the browser does; there is no token. Keep the cookie in a jar (`curl -c`/`-b`) and send `X-TM-Request: 1` on every POST. While the consent notice is on, accept it first: `POST /api/auth/consent` with `{"accepted": true, "notice": "<dow_text>"}`, where `<dow_text>` is exactly what `GET /api/settings/public` returns (`""` for the standard wording) — each acceptance serves one sign-in, within 10 minutes. Then `POST /api/auth/login` with JSON `{"username", "password"}` (from a 0600 file, not the command line). The sign-in is audited (`CONSENT_ACCEPTED`, `LOGIN`) like a person's, and the session ends like one; sign out when done:
+    ```bash
+    J=$(mktemp); H='X-TM-Request: 1'; T='Content-Type: application/json'; U=https://<host>
+    curl -sS -c "$J" -b "$J" -H "$H" -H "$T" -d '{"accepted": true, "notice": ""}' "$U/api/auth/consent"   # notice on only
+    curl -sS -c "$J" -b "$J" -H "$H" -H "$T" -d @/root/tm-login.json "$U/api/auth/login"   # {"username": ..., "password": ...}
+    curl -sS -b "$J" "$U/api/compliance"
+    curl -sS -b "$J" -H "$H" -H "$T" -d '{}' "$U/api/auth/logout"; rm -f "$J"
+    ```
 - Fail-closed: application refuses to start if `secret_key` is absent or still the placeholder
 - The service account holds no general privilege escalation: `NoNewPrivileges=true` (so `sudo` cannot run under the unit at all), and exactly nine systemd unit/verb pairs, over eight units, are authorised through polkit (v1.2.0 added `start` on the four apply units, v1.3.0 on the read-only compliance measurement, whose root helper re-validates everything and runs no code the service account owns) — see [Privileges the install grants](#privileges-the-install-grants)
 - The application cannot write or unlink its own `config.yaml`, and the upgrade asks the kernel to prove it as the real principal rather than reading mode bits

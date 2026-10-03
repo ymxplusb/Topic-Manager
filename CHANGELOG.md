@@ -34,7 +34,9 @@ reads the CSV, sees two new fields at the END.
 - **Consent notice enforced by the server** (NGNX-APP-000180). Shown before the sign-in form;
   the server refuses a sign-in without a fresh acceptance — a one-use token it issues and holds
   by digest, used up by the sign-in, so a replayed cookie is refused; the acceptance must name
-  the notice text the page showed (409 `notice_changed` otherwise) — and records `CONSENT_ACCEPTED` just
+  the notice text the page showed (409 `notice_changed` otherwise), and is used up only if that
+  notice is still the one in force when the sign-in completes (a notice replaced in the
+  meantime must be accepted again); none is issued while the notice is off — and records `CONSENT_ACCEPTED` just
   before the user's `LOGIN`. Its text can be replaced (Settings → General → DoW Consent
   Banner; empty = the standard DoD wording). **ON after a fresh install**
   (`--no-consent-banner` to install without it); an upgraded host keeps its setting.
@@ -82,7 +84,8 @@ reads the CSV, sees two new fields at the END.
 - **Unsuccessful events are audited** (SRG-APP-000089, DQ7): a signed-in user's refused change
   (`REQUEST_REFUSED`; a refused topic write under its own action word with outcome
   `failure`), and every read and export of the audit trail (`AUDIT_READ`, `AUDIT_EXPORT`),
-  written before the data is served. An anonymous caller's refusals are logged by the
+  written after the read and before the data is served (a read that fails is recorded with
+  outcome `failure`; one whose record cannot be written is not served). An anonymous caller's refusals are logged by the
   service (rate-limited) and by nginx, never written to the audit database; so is a
   cross-site write refused with 403 even when it carried a valid session cookie (it is another
   site acting with the cookie, and recording it under the user let that site write and prune
@@ -134,6 +137,14 @@ verdict line. No dependency, schema, configuration or host-file change; upgrade 
   read with `tail -n 1`; the last line was the `Rollback:` hint. Every exit path now ends with
   `RESULT: exit <N>`; a failure after the upgrade has completed still does not roll it back.
   `--audit-only`, `--backup-only`, `--restore` and failed runs were already correct.
+- **A sign-in no longer waits on a silent directory.** The interactive LDAPS connection has a
+  5-second connect bound and a 10-second bound on each answer (the TLS handshake included); a
+  directory that accepted the connection and then said nothing held the sign-in, and its
+  worker, until the operating system gave up on the socket.
+- **A late 401 from a previous session no longer signs out the next one** in the browser, and a
+  401 answering *Stay signed in* now returns to the sign-in page instead of being ignored.
+- The CI test lane installs `requirements.lock` hash-checked, wheels only, as the installers do
+  (it installed `requirements.txt` unhashed).
 
 ---
 

@@ -49,6 +49,9 @@ Use the upgrade script, which reads the bundle from one fixed path:
 
 ```bash
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/offline-src
+# A newer bundle goes into an EMPTY directory: tar does not remove what the last
+# bundle left, and a leftover would be read as part of this one.
+sudo find /var/lib/topic-manager/offline-src -mindepth 1 -delete
 sudo tar xzf topic-manager-offline-<version>.tar.gz   -C /var/lib/topic-manager/offline-src --strip-components=1
 
 sudo bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline --syslog-host <collector>
