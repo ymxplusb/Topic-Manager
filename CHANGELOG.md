@@ -5,6 +5,87 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
+## [1.3.0] — 2026-10-02
+
+The STIG decision board's remaining rules (WO-0006; James's rulings of 2026-10-02). Every
+rule of the board now has its answer in **[docs/STIG-COMPLIANCE.md](docs/STIG-COMPLIANCE.md)**
+— the source of truth — and on a live **Settings → Support → STIG compliance** page.
+
+**Before you upgrade:** a host whose saved settings do not already forward the audit trail
+must say where it goes (`--syslog-host <collector>`) or that it stays (`--no-remote-syslog`);
+the upgrade refuses otherwise and `--force` does not override it. The audit table is migrated
+on the first start (see *Changed*); a collector that parses the syslog line, or a script that
+reads the CSV, sees two new fields at the END.
+
+### Added
+
+- **STIG compliance page and document.** Every board rule (75) with its decision, status,
+  how it is met, how it is verified, evidence and, where the decision is the Authorizing
+  Official's, the AO decision point. The page shows what the host and the application measure
+  now (**Measure host now** runs the root helper read-only, through a fifth one-shot unit,
+  `topic-manager-apply-compliance.service`) and downloads as CSV.
+  `tools/check-stig-compliance.sh` holds the page's rule list and the document together.
+- **Host STIG checks** at the end of `install.sh`, in `upgrade-full.sh --audit-only`, after an
+  upgrade deploys, and on the page: the web server account's shell, groups and password lock,
+  files under `/etc/nginx`, loaded nginx modules, the effective TLS protocols, the access-log
+  format, `server_tokens`, the error pages, `worker_connections`, the site logs and the TLS
+  key. Host state the product does not own is **reported, never changed**; a failure of the
+  product's own files stops an install and rolls an upgrade back.
+- **Consent notice enforced by the server** (NGNX-APP-000180). Shown before the sign-in form;
+  the server refuses a sign-in without a fresh acceptance and records `CONSENT_ACCEPTED` just
+  before the user's `LOGIN`. Its text can be replaced (Settings → General → DoW Consent
+  Banner; empty = the standard DoD wording). **ON after a fresh install**
+  (`--no-consent-banner` to install without it); an upgraded host keeps its setting.
+- **Absolute session lifetime** (Settings → Security → Sessions, default 12 hours) that no
+  activity extends; `SESSION_EXPIRED` says which limit ended a session.
+- **Group membership re-checked every 15 minutes** with the LDAP service account: a user
+  removed from `required_group`, or gone, loses every session (`SESSION_REVOKED`). While the
+  directory cannot be reached, sessions may read and **every change is refused** (503).
+- **End sessions**: Settings → Security → Sessions lists active sessions (by a one-way
+  handle, never the session id) and ends a user's, or everyone else's (`SESSIONS_ENDED`).
+- **DoD access-log format** `tm_dod` (`/etc/nginx/conf.d/topic-manager-log-format.conf`),
+  used by both sites and the syslog copy; `nginx.conf` is edited no further than before.
+- **The product's own nginx error pages** for 403/404 and a JSON answer for 500/502/503/504,
+  with the security headers, naming no server software.
+- **TLS issuer check** (NGNX-APP-001900): a self-signed server certificate is a warning on the
+  TLS pane and the compliance page; any other issuer is shown for the operator to confirm.
+- **Audit-failure banner** in Settings and the Audit tab while an audit write failure is
+  current (SRG-APP-000360).
+- install.sh `--no-remote-syslog`, `--no-consent-banner`; upgrade-full.sh `--syslog-host`,
+  `--syslog-port`, `--syslog-protocol`, `--no-remote-syslog`.
+
+### Changed
+
+- **Audit rows carry `source` and `outcome`** (SRG-APP-000098/099), and **timestamps are ISO
+  8601 UTC with `Z`** (SRG-APP-000374). On the first start the table gains the two columns and
+  every stored timestamp is rewritten, **in one transaction** with the `AUDIT_SCHEMA_MIGRATED`
+  row that records it; sign-in rows take their address from the target they kept it in,
+  other older rows say `unrecorded`, and older outcomes are inferred from the action. The
+  syslog line and the CSV **append** `source` and `outcome` after the v1.2 fields; the Audit
+  tab shows them.
+- **Unsuccessful events are audited** (SRG-APP-000089, DQ7): a signed-in user's refused change
+  (`REQUEST_REFUSED`; a refused topic write under its own action word with outcome
+  `failure`), and every read and export of the audit trail (`AUDIT_READ`, `AUDIT_EXPORT`),
+  written before the data is served. An anonymous caller's refusals are logged by the
+  service (rate-limited) and by nginx, never written to the audit database.
+- **Kafka errors are generic** (SRG-APP-000266): one sentence and a reference; the detail is
+  in the service log under that reference. A write with no usable cluster profile is a 409.
+- **Install and upgrade require a decision about remote syslog** (DQ10).
+- The site's logs are created 0640 `www-data:adm` before nginx can create them
+  world-readable; the upgrade narrows existing ones and the TLS key.
+- The polkit rule authorises nine unit/verb pairs over eight units (adds `start` on the
+  read-only compliance unit).
+- Every database connection switches SQLite extension loading off explicitly
+  (SRG-APP-000141).
+
+### Not built (decided)
+
+- No change to `www-data` (DQ2), no auditd rule, no client allow-list, no further edit of
+  `/etc/nginx/nginx.conf` (`worker_connections` and its http-level logs are reported). CRL,
+  OCSP and PIV remain deferred. See docs/STIG-COMPLIANCE.md for each rule's AO decision point.
+
+---
+
 ## [1.2.1] — 2026-10-02
 
 A patch release: quieter Settings panes, and a successful full upgrade now ends with its
