@@ -93,5 +93,24 @@
     ],
     "status": "ready for assure"
   },
-  "stages": {}
+  "stages": {
+    "decide": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "PATCH on James's direct instruction 2026-10-02 (screenshot: 'the green text on every tab. We don't need that context.') + REG-0031 from the register; one defensible approach, no panel (process scaled to the change, feedback-app-before-middleware). James confirmed no extra UI changes ('that was me just recheck').",
+      "at": "2026-10-03T03:43:20Z"
+    },
+    "build": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Builder: quiet apply results (a2e2fbb, 48fefec), REG-0031 RESULT line on every exit path (07264b0), cascade 1.2.1 (f4d5530). No amendments. Linux strict 496/0/0, mutation 95/95.",
+      "at": "2026-10-03T03:43:20Z"
+    },
+    "assure": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Gatekeeper SHIP YES on the no-HIGH bar @ 24ab487: 14 gates pass, each falsified; strict 496/0/0; sonar-local 0 new vs v1.2.0 (no volumes left); UI behaviour falsified 6 ways; REG-0031 falsified; Daybreak Blue lane COMPLETE. Register: 3 Medium + 1 Low test-coverage items (REG-0035..0038). Render proof deferred to prod check (UI change is a removal of text).",
+      "at": "2026-10-03T03:43:20Z"
+    }
+  }
 }

@@ -360,6 +360,38 @@
       "where": "install.sh:918; docs/INSTALL.md §5b; install/README.md",
       "repro": "tm-qc stig-fips (has internet): install.sh from the staged bundle logs 'Install mode: ONLINE' and pulls debs/wheels from the internet",
       "closes_when": "install.sh --offline forces bundle-only (fails if anything is missing), docs say so, and a fresh install on a host with egress blocked passes"
+    },
+    {
+      "id": "REG-0035",
+      "severity": "Medium",
+      "status": "open",
+      "source": "gatekeeper v1.2.1 @ 24ab487, 2026-10-02",
+      "finding": "t30 checks the user-apply success only on nginx and failures only on syslog; hiding TLS's Applied line or TLS's failure details stays green (shipped blocks verified correct by reading)",
+      "where": "tests/t30"
+    },
+    {
+      "id": "REG-0036",
+      "severity": "Medium",
+      "status": "open",
+      "source": "gatekeeper v1.2.1 @ 24ab487, 2026-10-02",
+      "finding": "t47 only checks the end of upgrade-full.sh; `trap - EXIT` added before the --backup-only exit stays green",
+      "where": "tests/t47"
+    },
+    {
+      "id": "REG-0037",
+      "severity": "Medium",
+      "status": "open",
+      "source": "gatekeeper v1.2.1 @ 24ab487, 2026-10-02",
+      "finding": "a rollback trap re-armed just before the final exit 0 stays green",
+      "where": "tests/t47"
+    },
+    {
+      "id": "REG-0038",
+      "severity": "Low",
+      "status": "open",
+      "source": "gatekeeper v1.2.1 @ 24ab487, 2026-10-02",
+      "finding": "t30's renderer is not Vue (ignores :class etc.); the .host-status:empty collapse has never been seen in a browser",
+      "where": "tests/t30"
     }
   ]
 }
