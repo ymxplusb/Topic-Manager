@@ -42,3 +42,11 @@
 # The CI definition names the site's CI namespace; it runs from the clone,
 # never from an archive, so it does not ship either (round 2).
 .gitlab-ci.yml export-ignore
+# Release evidence (v1.3.0): docs/releases/<version>/ holds scanner and
+# clean-room output (dast*.json, install-findings.json) for the release
+# pipeline's `guides` job, which reads it from the CLONE, not the tarball. It
+# names the throwaway hosts it was taken on, so it never lands on a customer
+# host: not in the offline bundle, not in the CI release tarball.
+# tools/check-env-neutral.sh --bundle refuses a bundle carrying it anyway.
+docs/releases      export-ignore
+docs/releases/**   export-ignore

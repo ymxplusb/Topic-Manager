@@ -7282,3 +7282,142 @@ TESTS|t39-docs-v120.sh
 TARGET|readme
 EQUIV|no
 ANCHOR|    curl -sS -c "$J" -b "$J" -H "$H" -H "$T" -d @/root/tm-login.json "$U/api/auth/login"   # {"username": ..., "password": ...}
+
+# ── v1.3.0 assure-fix-3: the release-evidence exemption in check-env-neutral.sh
+# and the docs/releases export-ignore. One control per new node, mechanically:
+# each anchor of the path pattern, each widening of its parts, the label set,
+# the mode, the silence, the bundle refusal and the export-ignore.
+
+--- M858
+DESC|v1.3.0 af3 evidence pattern loses its ^ anchor (any depth matches)
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
+REPLACE|RELEASE_EVIDENCE = re.compile(r"docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
+
+--- M859
+DESC|v1.3.0 af3 evidence pattern loses its $ anchor (dast.json.bak matches)
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
+REPLACE|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json")
+
+--- M860
+DESC|v1.3.0 af3 evidence pattern takes any version directory, not X.Y.Z
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
+REPLACE|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[^/]+/dast[a-z0-9.-]*\.json$")
+
+--- M861
+DESC|v1.3.0 af3 evidence pattern takes ANY json under a version directory
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
+REPLACE|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/[a-z0-9.-]*\.json$")
+
+--- M862
+DESC|v1.3.0 af3 evidence pattern crosses a directory after dast
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
+REPLACE|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/[a-z0-9./-]*dast[a-z0-9.-]*\.json$")
+
+--- M863
+DESC|v1.3.0 af3 evidence pattern made case-insensitive (DAST.json matches)
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
+REPLACE|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$", re.I)
+
+--- M864
+DESC|v1.3.0 af3 every label is exempt in evidence, not only addresses (made consistent: guard removed too)
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|ADDRESS_LABELS = frozenset(label for label, _ in PATTERNS if "address" in label)
+ANCHOR|assert len(ADDRESS_LABELS) == 5, ADDRESS_LABELS
+REPLACE|ADDRESS_LABELS = frozenset(label for label, _ in PATTERNS)
+
+--- M865
+DESC|v1.3.0 af3 only the 192.168 label is exempt (a 10/8, 172.16/12 or IPv6 scan target fails; guard made consistent)
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|ADDRESS_LABELS = frozenset(label for label, _ in PATTERNS if "address" in label)
+ANCHOR|assert len(ADDRESS_LABELS) == 5, ADDRESS_LABELS
+REPLACE|ADDRESS_LABELS = frozenset(["private address"])
+
+--- M866
+DESC|v1.3.0 af3 the exemption is never applied (the real tree's evidence fails)
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|                if label in exempt:
+REPLACE|                if False:
+
+--- M867
+DESC|v1.3.0 af3 the exemption covers every file in repo mode, not only evidence
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|                 ADDRESS_LABELS if RELEASE_EVIDENCE.match(rel) else frozenset())
+REPLACE|                 ADDRESS_LABELS)
+
+--- M868
+DESC|v1.3.0 af3 the exemption also applies in --dir mode
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|                scan(rel, open(path, "rb").read())
+REPLACE|                scan(rel, open(path, "rb").read(),
+REPLACE|                     ADDRESS_LABELS if RELEASE_EVIDENCE.match(rel) else frozenset())
+
+--- M869
+DESC|v1.3.0 af3 the exemption is silent (nothing printed)
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|if exempted:
+REPLACE|if False:
+
+--- M870
+DESC|v1.3.0 af3 the exempted files are counted but not named
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|        print("  " + f)
+ANCHOR|if scanned == 0 and not findings:
+REPLACE|        pass
+REPLACE|if scanned == 0 and not findings:
+
+--- M871
+DESC|v1.3.0 af3 an exempted match is not recorded (the report has nothing to say)
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|                    exempted.append(rel)
+REPLACE|                    pass
+
+--- M872
+DESC|v1.3.0 af3 --bundle no longer refuses docs/releases/
+TESTS|t21-env-neutral.sh
+TARGET|envneutral
+EQUIV|no
+ANCHOR|    r"|(^|/)docs/releases(/|$)")
+REPLACE|    r"")
+
+--- M873
+DESC|v1.3.0 af3 docs/releases is no longer export-ignored (evidence would ship)
+TESTS|t21-env-neutral.sh
+TARGET|gitattrs
+EQUIV|no
+ANCHOR|docs/releases      export-ignore
+ANCHOR|docs/releases/**   export-ignore
+REPLACE|# (removed)

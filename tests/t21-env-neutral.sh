@@ -17,7 +17,9 @@ set -uo pipefail
 
 tm_header "environment-neutral tree and a leak-free offline bundle"
 
-GATE="${TM_REPO_ROOT}/tools/check-env-neutral.sh"
+# tests/mutate.sh points these at mutated copies (TARGET envneutral, gitattrs).
+GATE="${TM_ENV_NEUTRAL:-${TM_REPO_ROOT}/tools/check-env-neutral.sh}"
+GITATTRS="${TM_GITATTRIBUTES:-${TM_REPO_ROOT}/.gitattributes}"
 PREP="${TM_REPO_ROOT}/prepare-offline.sh"
 [ -f "$GATE" ] || tm_die "tools/check-env-neutral.sh is missing"
 
@@ -25,7 +27,19 @@ PREP="${TM_REPO_ROOT}/prepare-offline.sh"
 TIE="dc1.int.crypt""iclight.com"
 
 n_repo_is_neutral() {
-    bash "$GATE" > "${TM_TMP}/out" 2>&1 \
+    local g="$GATE" rt="${TM_TMP}/rt"
+    # Repo mode finds the repository from the gate's own path, so a gate that
+    # is not the tracked one (a mutant) is run inside a scratch repository
+    # holding the tracked tree as it stands, release evidence included.
+    if [ "$GATE" != "${TM_REPO_ROOT}/tools/check-env-neutral.sh" ]; then
+        mkdir -p "$rt"
+        git -C "$TM_REPO_ROOT" ls-files -z | ( cd "$TM_REPO_ROOT" && tar --null -T - -cf - ) | tar -xf - -C "$rt" \
+            || tm_die "could not copy the tracked tree"
+        cp "$GATE" "$rt/tools/check-env-neutral.sh"
+        git -C "$rt" init -q && git -C "$rt" add -A || tm_die "could not index the tree copy"
+        g="$rt/tools/check-env-neutral.sh"
+    fi
+    bash "$g" > "${TM_TMP}/out" 2>&1 \
         || _tm_afail "the tracked tree carries an environment tie:
         $(head -15 "${TM_TMP}/out")"
     tm_assert_grep "no environment ties" "${TM_TMP}/out" "the gate did not say what it scanned"
@@ -86,12 +100,79 @@ tm_case "bundle-mode-refuses-internal-files-and-ties" none n_bundle_mode
 n_export_ignore() {
     command -v git >/dev/null 2>&1 || tm_die "git is required"
     local a
-    for a in .claude/project.yml .work/WO-0001.json; do
+    for a in .claude/project.yml .work/WO-0001.json docs/releases/1.3.0/dast.json docs/releases/9.9.9/install-findings.json; do
         grep -q ': set$' <<<"$(git -C "$TM_REPO_ROOT" check-attr export-ignore "$a")" \
             || _tm_afail "${a} is not export-ignored — git archive (the bundle, the CI release tarball) would ship it"
     done
 }
 tm_case "internal-records-are-export-ignored" none n_export_ignore
+
+# ─── v1.3.0: the ONE exemption — release DAST evidence, addresses only ──────
+# docs/releases/<X.Y.Z>/dast*.json is scanner output committed verbatim for the
+# release pipeline's guides job. In REPO mode, and only there, its private
+# addresses are not counted. Each probe below is a fresh scratch repository
+# holding the real gate and exactly one probe file, so a verdict belongs to
+# that file alone.
+EV_ADDR='"url": "https://192.168''.77.5/api/auth/whoami"'
+_ev_repo() {   # _ev_repo <relpath> <content> -> RC, ${TM_TMP}/out
+    local r="${TM_TMP}/ev"
+    rm -rf "$r"; mkdir -p "$r/tools" "$r/$(dirname "$1")"
+    cp "$GATE" "$r/tools/check-env-neutral.sh"
+    printf 'nothing to see\n' > "$r/README.md"
+    printf '%s\n' "$2" > "$r/$1"
+    git -C "$r" init -q && git -C "$r" add -A || tm_die "could not build the evidence probe repository"
+    RC=0; bash "$r/tools/check-env-neutral.sh" > "${TM_TMP}/out" 2>&1 || RC=$?
+}
+n_release_evidence_exemption() {
+    command -v git >/dev/null 2>&1 || tm_die "git is required"
+    local f t
+    # Exempt: the evidence shapes the /assure and /deploy skills write.
+    for f in docs/releases/1.3.0/dast.json docs/releases/1.3.0/dast.coverage.json \
+             docs/releases/10.20.300/dast-canary.json; do
+        _ev_repo "$f" "$EV_ADDR"
+        tm_assert_rc 0 "$RC" "release evidence ${f} was refused for a scanned address: $(cat "${TM_TMP}/out")"
+        tm_assert_grep "not counted" "${TM_TMP}/out" "the exemption was applied silently for ${f}"
+        tm_assert_grep "  ${f}" "${TM_TMP}/out" "the exempted file ${f} was not named"
+    done
+    # Every private-address class is exempt there (the scanned host may sit
+    # in any of them), and nothing else is.
+    for t in '10.''20.30.40' '172.''16.5.1' 'fd12:3456'':789a::1'; do
+        _ev_repo docs/releases/1.3.0/dast.json "target ${t} scanned"
+        tm_assert_rc 0 "$RC" "a ${t} address in DAST evidence was refused: $(cat "${TM_TMP}/out")"
+    done
+    for t in "host ${TIE}" 'login claude''_admin' 'path cre''ds/apps/kafka' 'see james''.rodman/topic-manager'; do
+        _ev_repo docs/releases/1.3.0/dast.json "$t"
+        tm_assert_rc 1 "$RC" "DAST evidence carrying a NON-address tie passed (${t}) — only addresses are exempt"
+    done
+    # Not exempt: an address anywhere but exactly that path shape.
+    for f in docs/guide.md docs/releases/1.3.0/install-findings.json docs/releases/1.3.0/notes.md \
+             docs/releases/1.3.0/dast.json.bak docs/releases/1.3.0/sub/dast.json \
+             docs/releases/dast.json docs/releases/latest/dast.json docs/releases/1.3/dast.json \
+             docs/releases/1.3.0/DAST.json docs/releases/1.3.0/xdast.json \
+             vendor/docs/releases/1.3.0/dast.json tm/dast.json; do
+        _ev_repo "$f" "$EV_ADDR"
+        tm_assert_rc 1 "$RC" "a private address in ${f} passed — the exemption is wider than docs/releases/<version>/dast*.json"
+        tm_assert_grep "${f}:1: private address" "${TM_TMP}/out" "the address in ${f} was not named"
+    done
+    # Repo mode only: --dir and --bundle still count the same file.
+    mkdir -p "${TM_TMP}/evd/docs/releases/1.3.0"
+    printf '%s\n' "$EV_ADDR" > "${TM_TMP}/evd/docs/releases/1.3.0/dast.json"
+    RC=0; bash "$GATE" --dir "${TM_TMP}/evd" > "${TM_TMP}/out" 2>&1 || RC=$?
+    tm_assert_rc 1 "$RC" "--dir mode applied the repo-only evidence exemption"
+    return 0
+}
+tm_case "release-dast-evidence-exempts-addresses-in-exactly-that-path" none n_release_evidence_exemption
+
+n_bundle_refuses_release_evidence() {
+    mkdir -p "${TM_TMP}/rb/topic-manager-9.9.9/docs/releases/9.9.9" "${TM_TMP}/rb/topic-manager-9.9.9/tm"
+    printf 'print(1)\n' > "${TM_TMP}/rb/topic-manager-9.9.9/tm/x.py"
+    printf '{"note": "harmless text"}\n' > "${TM_TMP}/rb/topic-manager-9.9.9/docs/releases/9.9.9/dast.json"
+    _tarball "${TM_TMP}/rel.tgz" "${TM_TMP}/rb" topic-manager-9.9.9
+    RC=0; bash "$GATE" --bundle "${TM_TMP}/rel.tgz" > "${TM_TMP}/out" 2>&1 || RC=$?
+    tm_assert_rc 1 "$RC" "a bundle carrying docs/releases/ passed — release evidence must never ship, whatever it says"
+    tm_assert_grep "docs/releases/9.9.9/dast.json: internal or process file" "${TM_TMP}/out" "the evidence file was not named"
+}
+tm_case "bundle-mode-refuses-release-evidence" none n_bundle_refuses_release_evidence
 
 # ─── the REAL bundle block, against a scratch repository ─────────────────────
 _prep_block() {
@@ -114,10 +195,12 @@ _scratch_repo() {   # a repo shaped like this one, in ${TM_TMP}/p/src
     rm -rf "${TM_TMP}/p"; mkdir -p "$r/tm" "$r/tools" "$r/.work" "$r/.claude" "$r/lib" \
         "$r/install/packages/python" "$r/install/packages/apt"
     cp "$GATE" "$r/tools/check-env-neutral.sh"
-    cp "${TM_REPO_ROOT}/.gitattributes" "$r/.gitattributes"
+    cp "$GITATTRS" "$r/.gitattributes"
     printf 'print(1)\n' > "$r/tm/app.py"
     printf '{"prod": "%s"}\n' "$TIE" > "$r/.work/WO-0001.json"
     printf 'contract naming %s\n' "$TIE" > "$r/.claude/project.yml"
+    mkdir -p "$r/docs/releases/9.9.9"
+    printf '{"url": "https://192.168''.77.5/"}\n' > "$r/docs/releases/9.9.9/dast.json"
     printf 'vue\n' > "$r/lib/vue.global.prod.js"
     printf 'wheel\n' > "$r/install/packages/python/pkg-1.0-py3-none-any.whl"
     printf 'deb\n' > "$r/install/packages/apt/pkg_1.0_amd64.deb"
@@ -142,6 +225,7 @@ p_bundle_is_the_committed_tree() {
     grep -E '/\.work/|/\.claude/' "${TM_TMP}/list" > /dev/null \
         && _tm_afail "the bundle carries .work/ or .claude/: $(grep -E '/\.work/|/\.claude/' "${TM_TMP}/list")"
     grep -q 'UNTRACKED-NOTES' "${TM_TMP}/list" && _tm_afail "an UNTRACKED file got into the bundle"
+    grep -q '/docs/releases' "${TM_TMP}/list" && _tm_afail "release evidence (docs/releases/) got into the bundle"
     return 0
 }
 tm_case "the-bundle-is-the-committed-tree-without-internal-files" none p_bundle_is_the_committed_tree

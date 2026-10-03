@@ -357,6 +357,25 @@ gates:
       are export-ignored and never ship). In --bundle mode also refuses
       .claude/, .work/, .git/, .github/ or scan reports inside the tarball;
       prepare-offline.sh deletes a bundle that fails it. Red-proofed in t21.
+      ONE EXEMPTION (v1.3.0 assure-fix-3): in REPO mode only, the five
+      private-ADDRESS labels are not counted in a path matching exactly
+      ^docs/releases/<X.Y.Z>/dast[a-z0-9.-]*\.json$ — the authenticated ZAP
+      output (dast.json, dast.coverage.json; /deploy's dast-canary.json). Why:
+      it is scanner evidence the release pipeline's `guides` job (ci-templates
+      tools/release-guides.py) reads VERBATIM from the CI clone, and /assure
+      forbids hand-editing it, so its URLs keep the QC host's address (885
+      ties at 7303495). Every other label still fails inside it; an address in
+      any other docs/ file, a non-dast file under docs/releases/, --dir mode or
+      a bundle still fails. The exempted count and files are PRINTED. It does
+      not ship: .gitattributes export-ignores docs/releases (offline bundle and
+      CI release tarball are both `git archive`), and --bundle refuses
+      docs/releases/ outright. It IS in the GitLab repository (the estate's
+      own instance, authoritative per repo:); the public GitHub copy is stale and no longer mirrored (repo:
+      note above; .github/workflows/main.yml deleted in v1.1.0, WO-0003), so
+      nothing pushes the evidence there. If that mirror is ever revived, this
+      exemption must be revisited. The online upgrade clones the tag into a
+      transient root-owned dir and removes it; no installer copies docs/
+      onto the host. t21 holds the exact shape; M858-M873 the pattern.
   - name: version-surfaces
     cmd: "bash tools/check-version-surfaces.sh"
     verified: 2026-09-26

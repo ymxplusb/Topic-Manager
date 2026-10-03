@@ -19,6 +19,18 @@
 #                                                   content rules, AND no .claude/,
 #                                                   .work/, .git/, .github/ or
 #                                                   scan report may be inside it
+#                                                   (docs/releases/ included)
+#
+# ONE EXEMPTION, repo mode only (v1.3.0): docs/releases/<X.Y.Z>/dast*.json is
+# the DAST scanner's own output, committed for the release pipeline's `guides`
+# job, which reads it verbatim from the clone (never from the tarball). Its
+# URLs name the throwaway QC host it scanned, and the /assure skill forbids
+# hand-editing it, so PRIVATE-ADDRESS ties (the five address labels below) are
+# not counted in exactly those files. Every other label still fails there, and
+# an address anywhere else - another docs/ file, a non-dast file under
+# docs/releases/, a path at any other depth - still fails. It ships nowhere:
+# .gitattributes export-ignores docs/releases/ (no bundle, no CI tarball), and
+# --bundle refuses it outright. The exempted count is printed, never silent.
 #
 # Exit: 0 neutral · 1 a tie was found · 3 could not run. It says what it
 # scanned, so "found nothing" cannot be confused with "read nothing".
@@ -102,7 +114,19 @@ MEDIA_MAGIC = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"BM
 # export-ignored and never shipped. In a BUNDLE they are forbidden outright.
 INTERNAL = (".claude/", ".work/", ".gitlab-ci.yml")
 FORBIDDEN_IN_BUNDLE = re.compile(
-    r"(^|/)(\.claude|\.work|\.git|\.github)(/|$)|(^|/)docs/SonarQube-Report-[^/]*$|(^|/)\.gitlab-ci\.yml$")
+    r"(^|/)(\.claude|\.work|\.git|\.github)(/|$)|(^|/)docs/SonarQube-Report-[^/]*$|(^|/)\.gitlab-ci\.yml$"
+    r"|(^|/)docs/releases(/|$)")
+
+# Release evidence (v1.3.0): the DAST scanner's JSON, committed verbatim for
+# the pipeline's `guides` job and never hand-edited, names the host it scanned.
+# In REPO mode only, and only in a path of exactly this shape (anchored at the
+# repository root, one version directory, a dast*.json file), the ADDRESS
+# labels are not counted. Every other label still is. It never ships:
+# docs/releases/ is export-ignored and forbidden in a bundle (above).
+RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
+ADDRESS_LABELS = frozenset(label for label, _ in PATTERNS if "address" in label)
+assert len(ADDRESS_LABELS) == 5, ADDRESS_LABELS
+exempted = []
 
 # Third-party archives (wheels, .debs, compressed indexes): not ours to scan,
 # and their compressed bytes are noise when read as text.
@@ -110,7 +134,7 @@ ARCHIVES = (".whl", ".deb", ".tar.gz", ".tgz", ".zip", ".gz")
 findings = []
 scanned = 0
 
-def scan(rel, data):
+def scan(rel, data, exempt=frozenset()):
     global scanned
     # Round 8 (gatekeeper): a file that is not valid UTF-8 used to be SKIPPED,
     # so one stray byte hid every tie in it. It is now read byte-for-byte
@@ -139,6 +163,9 @@ def scan(rel, data):
     for n, line in enumerate(text.splitlines(), 1):
         for label, rx in RX:
             if rx.search(line):
+                if label in exempt:
+                    exempted.append(rel)
+                    continue
                 findings.append("%s:%d: %s: %s" % (rel, n, label, line.strip()[:100]))
 
 if mode == "repo":
@@ -148,7 +175,8 @@ if mode == "repo":
             continue
         path = os.path.join(target, rel)
         if os.path.isfile(path) and not rel.endswith(ARCHIVES):
-            scan(rel, open(path, "rb").read())
+            scan(rel, open(path, "rb").read(),
+                 ADDRESS_LABELS if RELEASE_EVIDENCE.match(rel) else frozenset())
 elif mode == "dir":
     for dirpath, dirnames, filenames in os.walk(target):
         dirnames[:] = [d for d in dirnames if d not in (".git", "__pycache__")]
@@ -178,6 +206,12 @@ else:
                     continue        # third-party archives: not ours to scan
                 scan(name, data)
 
+if exempted:
+    print("check-env-neutral: %d private-address match(es) in %d release-evidence file(s) not counted "
+          "(docs/releases/<version>/dast*.json, scanner output; export-ignored, never shipped):"
+          % (len(exempted), len(set(exempted))))
+    for f in sorted(set(exempted)):
+        print("  " + f)
 if scanned == 0 and not findings:
     print("check-env-neutral: FAIL — scanned no text files in %s mode; it checked nothing." % mode)
     sys.exit(1)

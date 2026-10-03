@@ -56,6 +56,8 @@ declare -A TARGET_PATH=(
   [shellparse]="${TM_REPO_ROOT}/tools/check-shell-parse.sh"
   [readme]="${TM_REPO_ROOT}/README.md"
   [installreadme]="${TM_REPO_ROOT}/install/README.md"
+  [envneutral]="${TM_REPO_ROOT}/tools/check-env-neutral.sh"
+  [gitattrs]="${TM_REPO_ROOT}/.gitattributes"
 )
 declare -A TARGET_ENV=(
   [upgrade]="TM_UPGRADE_SH"
@@ -76,6 +78,8 @@ declare -A TARGET_ENV=(
   [shellparse]="TM_SHELL_PARSE"
   [readme]="TM_README"
   [installreadme]="TM_INSTALL_README"
+  [envneutral]="TM_ENV_NEUTRAL"
+  [gitattrs]="TM_GITATTRIBUTES"
 )
 # v1.2.0: a Python module is named TARGET|py:<module> (tm/<module>.py). The
 # harness copies the whole tm/ package into the scratch directory, mutates the
