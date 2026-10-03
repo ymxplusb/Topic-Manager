@@ -360,11 +360,12 @@ d = db(); d.execute(\"CREATE TRIGGER t_broken BEFORE INSERT ON audit_log BEGIN S
 r = c.get('/api/audit/export')
 print('broken=%d %s %s' % (r.status_code, r.get_json().get('error'), 'timestamp' in r.get_data(as_text=True)))
 print('broken_read=%d' % c.get('/api/audit').status_code)
-# A write refused because the audit store is broken is NOT recorded again by
+# A change refused because the audit store is broken (the pre-check of an
+# audit_gate route, which writes no row of its own) is NOT recorded again by
 # the refusal recorder: one AUDIT_WRITE_FAILED per refused change, not two.
 crit = []
 audit.syslog_send = lambda msg, sev=6: crit.append(msg) or True
-r = c.put('/api/settings', data=json.dumps({'banner_text': 'z'}), headers=H)
+r = c.delete('/api/topics/orders', headers=H)
 print('refused_broken=%d %s crit=%d' % (r.status_code, r.get_json().get('error'), sum('AUDIT_WRITE_FAILED' in m for m in crit)))
 ")"
     tm_assert_eq "read=200 AUDIT_READ" "$(_line read "$out")" "an audit read is not recorded before it is served"

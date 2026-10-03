@@ -297,6 +297,15 @@ os.unlink(os.path.join(os.environ['TM_APPLY_RESULT_DIR'], 'compliance.result'))
 os.makedirs(os.path.join(os.path.dirname(os.environ['TM_CONFIG']), 'data', 'apply'), exist_ok=True)
 open(os.path.join(os.path.dirname(os.environ['TM_CONFIG']), 'data', 'apply', 'compliance.last'), 'w').write(json.dumps({'job': '00000000000000d1', 'requested_at': '2026-10-02T09:59:00+00:00'}))
 print('after_reboot=%s' % [c['key'] for c in A.status(cfg, 'compliance').get('checks', [])])
+# The failing cases: a database wider than 0600/0700, and FIPS off.
+dbp = os.environ['TM_CONFIG'].replace('config.yaml', 'data/tm.db')
+os.chmod(dbp, 0o644)
+open(os.environ['TM_FIPS_FLAG'], 'w').write('0\n')
+doc = c.get('/api/compliance').get_json()
+by = {r['id']: r for r in doc['rules']}
+print('wide_db=%s' % chk('SRG-APP-000118-DB-000059', 'db_modes')['status'])
+print('fips_off=%s' % chk('NGNX-APP-002660', 'fips_mode')['status'])
+os.chmod(dbp, 0o600)
 r = c.post('/api/system/apply/compliance', data='{}', headers={'Content-Type': 'application/json', 'X-TM-Request': '1'})
 print('post=%d' % r.status_code)
 staged = json.load(open(os.path.join(os.path.dirname(os.environ['TM_CONFIG']), 'data', 'apply', 'compliance.json')))
@@ -330,6 +339,8 @@ PYEOF
         "the measurement's SYSTEM_APPLY_RESULT is not the system's, with the helper's outcome"
     tm_assert_eq "after_reboot=['site_log_modes', 'web_account_shell']" "$(grep '^after_reboot=' <<<"$out")" \
         "the measured checks are lost when /run is (a reboot)"
+    tm_assert_eq "wide_db=fail" "$(grep '^wide_db=' <<<"$out")" "a database wider than 0600 is not a failure"
+    tm_assert_eq "fips_off=warn" "$(grep '^fips_off=' <<<"$out")" "FIPS mode off is not a warning"
     tm_assert_eq "post=202" "$(grep '^post=' <<<"$out")" "Measure host now is refused: ${out} $(cat "${TM_TMP}/err")"
     tm_assert_eq "staged=() {}" "$(grep '^staged=' <<<"$out" | sed 's/{} {}/() {}/')" "the measurement request carries settings or files: ${out}"
 }

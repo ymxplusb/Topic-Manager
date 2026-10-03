@@ -495,7 +495,8 @@ const SettingsTab = {
                 try { d = await r.json(); } catch { /* not JSON (a proxy page): the status alone decides the message */ }
                 this.sessionsMessage = r.ok ? '✓ Ended ' + d.ended + ' session(s).'
                     : '✕ ' + settingsHostErrorText(r, d, 'End sessions failed', 'save');
-            } catch (e) {
+            } catch {
+                // No answer at all: nothing reached the server, so nothing was ended.
                 this.sessionsMessage = '✕ The server could not be reached; nothing was ended.';
             } finally {
                 this.sessionsBusy = false;
