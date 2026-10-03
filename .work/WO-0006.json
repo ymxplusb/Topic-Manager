@@ -1640,6 +1640,34 @@
       "date": "2026-10-02",
       "id": "codex-contradictions-reviewed",
       "ruling": "After seeing Codex's run-2 answers: KEEP DQ8 (12h org setting, 15-min AD re-check, admin End sessions, AD outage = reads allowed, writes refused) and KEEP DQ4 (build only the 001900 issuer/self-signed warning; document the other Other rules as inherited, citing evidence)."
+    },
+    {
+      "by": "James",
+      "date": "2026-10-03",
+      "id": "build-open-q1",
+      "question": "LOGIN_FAILED (anonymous failed sign-in) destination",
+      "ruling": "Keep in the audit DB (core STIG auditable event; nginx login rate limit caps volume)"
+    },
+    {
+      "by": "James",
+      "date": "2026-10-03",
+      "id": "build-open-q2",
+      "question": "Group re-check on direct-bind hosts",
+      "ruling": "Accept: warn only on hosts without the LDAP service account; compliance page shows it open; 12h lifetime caps exposure"
+    },
+    {
+      "by": "James",
+      "date": "2026-10-03",
+      "id": "build-open-q3",
+      "question": "Consent banner on upgrade when previously off",
+      "ruling": "Keep the operator's choice; compliance page flags NGINX-APP-000180 open while off"
+    },
+    {
+      "by": "James",
+      "date": "2026-10-03",
+      "id": "build-open-q4",
+      "question": "server.key tightened to 0600 on upgrade",
+      "ruling": "Yes, same as install"
     }
   ],
   "stages": {
