@@ -5673,18 +5673,15 @@ DESC|v1.3.0 an audit read is served when its record cannot be written
 TESTS|t48-audit-v130.sh
 TARGET|py:routes
 EQUIV|no
-ANCHOR|        audit.log_action(cfg, session['user']['username'], 'AUDIT_READ', 'audit_log',
-ANCHOR|                         'page=%d per_page=%d' % (page, per_page), '')
-REPLACE|        audit.log_action(cfg, session['user']['username'], 'AUDIT_READ', 'audit_log',
-REPLACE|                         'page=%d per_page=%d' % (page, per_page), '', best_effort=True)
+ANCHOR|        audit.log_action(cfg, session['user']['username'], 'AUDIT_READ', 'audit_log', detail, '')
+REPLACE|        audit.log_action(cfg, session['user']['username'], 'AUDIT_READ', 'audit_log', detail, '', best_effort=True)
 
 --- M666
 DESC|v1.3.0 an export is not recorded
 TESTS|t48-audit-v130.sh
 TARGET|py:routes
 EQUIV|no
-ANCHOR|        audit.log_action(cfg, session['user']['username'], 'AUDIT_EXPORT', 'audit_log',
-ANCHOR|                         'CSV export of %d row(s)' % audit.count_rows(cfg), '')
+ANCHOR|        audit.log_action(cfg, session['user']['username'], 'AUDIT_EXPORT', 'audit_log', detail, '')
 REPLACE|        pass
 
 --- M667
@@ -6862,8 +6859,8 @@ DESC|v1.3.0 af1 F5 the sign-in does not use the acceptance up
 TESTS|t50-consent-v130.sh
 TARGET|py:routes
 EQUIV|no
-ANCHOR|    if not consent or consume_consent_token(db, consent['token'], CONSENT_VALID_S, time.time()):
-REPLACE|    if True:
+ANCHOR|    if consent and consume_consent_token(db, consent['token'], CONSENT_VALID_S, time.time(),
+REPLACE|    if consent or consume_consent_token(db, consent['token'], CONSENT_VALID_S, time.time(),
 
 --- M808
 DESC|v1.3.0 af1 F5 the cookie's own word is the acceptance again (no server lookup)
@@ -6878,8 +6875,8 @@ DESC|v1.3.0 af1 F5 consuming a token always succeeds
 TESTS|t50-consent-v130.sh
 TARGET|py:models
 EQUIV|no
-ANCHOR|                      (_token_hash(token), now - max_age_s)).rowcount == 1
-REPLACE|                      (_token_hash(token), now - max_age_s)).rowcount >= 0
+ANCHOR|    return db.execute(sql, args).rowcount == 1
+REPLACE|    return db.execute(sql, args).rowcount >= 0
 
 --- M810
 DESC|v1.3.0 af1 F5 LOW an acceptance of other text than the notice is taken
@@ -6989,7 +6986,7 @@ DESC|v1.3.0 af1 UI a 401 is not noticed
 TESTS|t49-sessions-v130.sh
 TARGET|mainjs
 EQUIV|no
-ANCHOR|    if (r?.status === 401 && tmSessionEnded && !input.startsWith('/api/auth/')) {
+ANCHOR|    if (r?.status === 401 && tmSessionEnded && watched && generation === tmSessionGeneration) {
 REPLACE|    if (false) {
 
 --- M823
@@ -6997,15 +6994,15 @@ DESC|v1.3.0 af1 UI a sign-in route's own 401 ends the session
 TESTS|t49-sessions-v130.sh
 TARGET|mainjs
 EQUIV|no
-ANCHOR|    if (r?.status === 401 && tmSessionEnded && !input.startsWith('/api/auth/')) {
-REPLACE|    if (r?.status === 401 && tmSessionEnded) {
+ANCHOR|    const watched = !input.startsWith('/api/auth/') || input.startsWith('/api/auth/whoami');
+REPLACE|    const watched = true;
 
 --- M824
 DESC|v1.3.0 af1 UI a GET's 401 is not noticed
 TESTS|t49-sessions-v130.sh
 TARGET|mainjs
 EQUIV|no
-ANCHOR|            return send(input, init).then(r => tmWatchSession(input, r));
+ANCHOR|            return send(input, init).then(r => tmWatchSession(input, r, generation));
 REPLACE|            return send(input, init);
 
 --- M825
