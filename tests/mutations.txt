@@ -5486,6 +5486,7 @@ TARGET|py:models
 EQUIV|no
 ANCHOR|        db.execute('UPDATE session_meta SET verify_attempt_at=? WHERE id=?', (now, sid))
 ANCHOR|    db.commit()
+REPLACE|        pass
 REPLACE|    db.commit()
 
 --- M644
