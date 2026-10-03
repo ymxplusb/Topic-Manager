@@ -1922,6 +1922,72 @@
         "REG-0039..0041 registered by ruling, not fixed; REG-0041 needs James."
       ],
       "remote_cleanup": "192.168.202.81: every container started (tm-wo6-af2, -af2-ngx x2 (--rm), -af2-final, -af2-mut-a..h, -af2-mut2-c/d/r/c2/c3/d2/d3) removed; /tmp/tm-wo6-af2 and /tmp/tm-wo6-af2f removed; docker volumes 134 before and after; networks bridge/host/none only; 0 containers. /tmp/tm-ci-repro-2634394 pre-existed and was left."
+    },
+    {
+      "round": "assure-fix-3",
+      "by": "builder (one blocker: DAST evidence vs the env-neutral gate; 5 gatekeeper items registered, not fixed)",
+      "date": "2026-10-03",
+      "worktree": "/Users/jamesrodman/Scripts/topic-manager-v130, branch release/v1.3.0 (from 7303495)",
+      "commits": [
+        "43c46ac fix (v1.3.0 assure-fix-3): env-neutral exempts only release DAST evidence; docs/releases never ships",
+        "43c9bc9 tests+records (v1.3.0 assure-fix-3): M858 documented equivalent, M874 the real unanchored widening; REG-0043..0047"
+      ],
+      "root_cause": "7303495 committed the authenticated ZAP output (docs/releases/1.3.0/dast.json, dast.coverage.json) verbatim, as /assure requires for the release `guides` job; its URLs name the QC host and the scanner host (885 private-address lines). The env-neutral gate had no notion of committed scanner evidence, so it, t21 and t41 failed. Separately, nothing kept docs/releases out of `git archive`, so the evidence would have shipped in the offline bundle and the CI release tarball.",
+      "fix": {
+        "gate": "tools/check-env-neutral.sh: REPO mode only, the five private-ADDRESS labels are not counted in a path matching ^docs/releases/[0-9]+\\.[0-9]+\\.[0-9]+/dast[a-z0-9.-]*\\.json$ (re.match). Every other label (domain, accounts, secret paths, namespace, workstation path) still fails there; --dir and --bundle never exempt. The exempted count and files are printed. --bundle now refuses (^|/)docs/releases(/|$) outright.",
+        "export_ignore": ".gitattributes: docs/releases and docs/releases/** export-ignore. Verified: `git archive HEAD` has 0 docs/releases members (181 members). The guides job reads evidence from the CI CLONE (ci-templates v1.5.3 tools/release-guides.py: EVID = docs/releases/<ver>, load_json opens the workspace path, then main via API) - read from the GitLab host's repository, so export-ignore does not starve it.",
+        "shipping_paths": "offline bundle = git archive HEAD (prepare-offline.sh) -> excluded; CI release tarball = git archive of the tag -> excluded; online upgrade = transient git clone under /var/lib/topic-manager, removed after the run; no installer copies docs/ onto the host.",
+        "contract": ".claude/project.yml gates[env-neutral].note records the exemption, why (verbatim evidence, /assure forbids editing), and that the public GitHub copy is stale and unmirrored (repo: note; .github/workflows/main.yml deleted v1.1.0, WO-0003). NOTE: the register (.work/REGISTER.json) has NO entry on the GitHub mirror - the citation is the contract's repo: note and WO-0003, not the register."
+      },
+      "files_changed": [
+        "tools/check-env-neutral.sh",
+        ".gitattributes",
+        "tests/t21-env-neutral.sh",
+        "tests/mutate.sh",
+        "tests/mutations.txt",
+        ".claude/project.yml",
+        ".work/REGISTER.json",
+        ".work/WO-0006.json"
+      ],
+      "amendments": [
+        {
+          "file": "tools/check-env-neutral.sh",
+          "reason": "the blocker's fix is in this gate (coordinator-directed); not in scout.scope"
+        },
+        {
+          "file": ".gitattributes",
+          "reason": "export-ignore docs/releases so evidence never ships (coordinator-directed)"
+        },
+        {
+          "file": "tests/t21-env-neutral.sh",
+          "reason": "tests for the exemption's exact shape and the bundle exclusion; GATE/GITATTRS overridable for mutation"
+        },
+        {
+          "file": "tests/mutate.sh",
+          "reason": "two mutation TARGET keys (envneutral, gitattrs) for M858-M874"
+        }
+      ],
+      "tests": "t21: +2 cases (release-dast-evidence-exempts-addresses-in-exactly-that-path; bundle-mode-refuses-release-evidence) and 2 strengthened (export-ignore covers docs/releases; the real prepare-offline bundle block leaves a committed docs/releases/9.9.9/dast.json out). Exempt probes: dast.json, dast.coverage.json, dast-canary.json; 10/8, 172.16/12, IPv6 ULA addresses. Must FAIL: a non-address tie in dast.json (4 labels); an address in docs/guide.md, docs/releases/1.3.0/{install-findings.json,notes.md,dast.json.bak,sub/dast.json,DAST.json,xdast.json}, docs/releases/{dast.json,latest/dast.json,1.3/dast.json}, vendor/docs/releases/1.3.0/dast.json, tm/dast.json; the same evidence in --dir mode; docs/releases in a bundle.",
+      "mutation_controls": {
+        "run": "tests/mutate.sh M858-M874 in python:3.12-bookworm on 192.168.202.81 at 43c9bc9 (17 controls)",
+        "result": "16 RED, 0 SURVIVED, 0 aborted, 1 documented equivalent",
+        "finding": "M858 (drop the ^ anchor) SURVIVED at 43c46ac: the pattern is applied with re.match, which anchors by itself - equivalent, now EQUIV|yes with the reason. The real widening is M874 (leading .*), RED via the vendor/docs/releases probe.",
+        "note": "tools/mutate.py named in the builder brief does not exist in this repo; the repo's own mechanical harness (tests/mutate.sh, copy-only, anchor-must-match-once) was used, one control per new node."
+      },
+      "gates_at_head": "43c9bc9, fresh python:3.12-bookworm on 192.168.202.81 from a git bundle --all (10 tags), CI TEST_SETUP and TEST_COMMAND read verbatim from .gitlab-ci.yml: setup rc 0; check-requirements-lock --require-online PASS (15); tests/run.sh --strict 552 passed / 0 failed / 0 skipped, rc 0; all 13 declared container gates rc 0 (env-neutral: 161 files, no ties, 885 evidence matches not counted) + check-shell-parse PASS 73 files; sonar-local --base v1.2.1 at 43c9bc9: VERDICT PASS, new_violations 0 (31 issues overall), files 163 vs 146. The same run at 43c46ac was also 552/0/0 with every gate rc 0.",
+      "registered": [
+        "REG-0043 check-shell-parse.sh:47 misses <<\\EOF (MED)",
+        "REG-0044 check-shell-parse.sh:37-39 file selection by 'bash' in 64 bytes; TM_OLD_BASH not verified as bash 3 (MED)",
+        "REG-0045 check-version-surfaces.sh:80 accepts a CHANGELOG heading dated TBD (LOW)",
+        "REG-0046 LDAP connect timeout per resolved address, can exceed 5 s (tm/auth.py:101-111) (LOW)",
+        "REG-0047 DAST scanned c05fcbe before both fix rounds (MED)"
+      ],
+      "not_done": [
+        "The DAST evidence was not rescanned (REG-0047).",
+        "The evidence remains in the GitLab repository history; only shipping is prevented. If the public GitHub mirror is ever revived, the exemption must be revisited.",
+        "No push, no tag (coordinator instruction)."
+      ],
+      "remote_cleanup": "192.168.202.81: tm-wo6-af3 and tm-wo6-af3b ran with --rm; sonar-local cleaned its own; 0 containers, 134 volumes before and after, networks bridge/host/none only; /tmp/tm-wo6-af3 removed. /tmp/tm-ci-repro-2634394 pre-existed and was left."
     }
   ],
   "dast": [
