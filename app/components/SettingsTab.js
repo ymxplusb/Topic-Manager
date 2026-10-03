@@ -4,14 +4,14 @@
 const SETTINGS_V120_DEFAULTS = {
     syslog_enabled: 'false', syslog_host: '', syslog_port: '6514',
     syslog_protocol: 'tls', syslog_app_id: 'topic-manager', ntp_servers: '',
-    session_max_concurrent: '3', ratelimit_login_per_min: '10',
+    session_max_concurrent: '3', session_absolute_hours: '12', ratelimit_login_per_min: '10',
     ratelimit_login_burst: '5', ratelimit_api_per_min: '300',
     ratelimit_api_burst: '100', ratelimit_conn_per_ip: '20',
     audit_retention_days: '365', audit_max_rows: '5000000', audit_warn_pct: '75',
     http_redirect_enabled: 'true',
 };
 const SETTINGS_V120_SECTIONS = {
-    sessions: ['session_max_concurrent'],
+    sessions: ['session_max_concurrent', 'session_absolute_hours'],
     rate: ['ratelimit_login_per_min', 'ratelimit_login_burst', 'ratelimit_api_per_min', 'ratelimit_api_burst', 'ratelimit_conn_per_ip'],
     redirect: ['http_redirect_enabled'],
     syslog: ['syslog_enabled', 'syslog_host', 'syslog_port', 'syslog_protocol', 'syslog_app_id'],
@@ -19,7 +19,7 @@ const SETTINGS_V120_SECTIONS = {
     time: ['ntp_servers'],
 };
 const SETTINGS_V120_RANGES = {
-    syslog_port: [1, 65535], session_max_concurrent: [0, 50],
+    syslog_port: [1, 65535], session_max_concurrent: [0, 50], session_absolute_hours: [1, 24],
     ratelimit_login_per_min: [1, 600], ratelimit_login_burst: [0, 100],
     ratelimit_api_per_min: [10, 6000], ratelimit_api_burst: [0, 1000],
     ratelimit_conn_per_ip: [1, 500], audit_retention_days: [30, 3650],
@@ -140,6 +140,29 @@ function settingsJobUpdate(domain, data) {
         message: settingsJobText(data.message),
         details: Array.isArray(data.details) ? data.details.map(settingsJobText).filter(Boolean) : [],
     };
+}
+
+// ── STIG compliance (v1.3.0, DQ3) ─────────────────────────────────────────────
+// The page lists every rule GET /api/compliance returns: its documented status
+// (docs/STIG-COMPLIANCE.md is the source of truth) and its live checks. The
+// CSV is built from the same document, so the download and the page agree.
+const SETTINGS_CHECK_GLYPHS = { pass: '✓', warn: '!', fail: '✕', info: 'i', unknown: '?' };
+function settingsCheckGlyph(status) {
+    return Object.hasOwn(SETTINGS_CHECK_GLYPHS, status) ? SETTINGS_CHECK_GLYPHS[status] : '?';
+}
+
+function settingsComplianceCsv(doc) {
+    const rows = [['Rule', 'Severity', 'Decision', 'Status', 'Live check', 'Where', 'Result', 'Detail', 'Title']];
+    for (const r of doc.rules || []) {
+        const checks = r.checks && r.checks.length ? r.checks : [null];
+        for (const c of checks) {
+            rows.push([r.id, r.sev, r.decision, r.status, c ? c.key : '', c ? c.where : '',
+                c ? c.status : '', c ? c.detail : '', r.title]);
+        }
+    }
+    rows.push(['Host measured', (doc.host && doc.host.measured_at) || 'never', '', '', '', '', '', '', '']);
+    rows.push(['Generated', new Date().toISOString(), '', '', '', '', '', '', '']);
+    return rows.map(r => r.map(v => '"' + String(v ?? '').replaceAll('"', '""') + '"').join(',')).join('\n');
 }
 
 // What an apply pane shows (v1.2.1). A settled success is not news: it shows
@@ -268,15 +291,26 @@ const SettingsTab = {
             hostPanels: { time: null, capacity: null, tls: null },
             hostPanelErrors: {},
             hostPanelLoading: {},
-            applyJobs: Object.fromEntries(['syslog', 'time', 'nginx', 'tls'].map(domain =>
+            applyJobs: Object.fromEntries(['syslog', 'time', 'nginx', 'tls', 'compliance'].map(domain =>
                 [domain, { busy: false, uncertain: true, state: 'idle', job: '', applied: null, applied_at: null, message: '', details: [] }])),
             // domain -> true once THIS visit's Apply succeeded; cleared by the
             // next run of that domain and by a change of Settings group.
             applyNotices: {},
             hostRuns: {},
             hostDisposed: false,
-            // DoW Consent
+            // DoW Consent (v1.3.0: enforced by the server; the text replaceable)
             dowEnabled: false,
+            dowText: '',
+            consentMessage: '',
+            // Sessions (v1.3.0): every active session, by handle, and End
+            sessionsList: null,
+            sessionsError: '',
+            sessionsMessage: '',
+            sessionsBusy: false,
+            // STIG compliance (v1.3.0)
+            compliance: null,
+            complianceError: '',
+            complianceLoading: false,
             // Banner — empty until the server has answered
             bannerEnabled: false,
             bannerText: '',
@@ -380,6 +414,7 @@ const SettingsTab = {
                 return;
             }
             this.dowEnabled    = s.dow_enabled    === 'true';
+            this.dowText       = typeof s.dow_text === 'string' ? s.dow_text : '';
             this.bannerEnabled = s.banner_enabled === 'true';
             this.bannerText    = s.banner_text    || 'UNCLASSIFIED';
             this.bannerBg      = s.banner_bg      || 'green';
@@ -426,6 +461,73 @@ const SettingsTab = {
         },
         async saveDow() {
             await this.saveSettings({ dow_enabled: String(this.dowEnabled) });
+        },
+        // Empty text = the standard DoD wording built into the sign-in page.
+        async saveConsentText(useStandard) {
+            this.consentMessage = '';
+            const ok = await this.saveSettings({ dow_text: useStandard ? '' : this.dowText });
+            this.consentMessage = ok ? '✓ Saved.' : '✕ ' + this.settingsSaveError;
+        },
+        // ── Sessions (v1.3.0, NGNX-APP-003330) ──────────────────────
+        async loadSessions() {
+            this.sessionsError = '';
+            try {
+                const r = await fetch('/api/sessions', { cache: 'no-store', headers: { 'X-TM-Background': '1' } });
+                if (!r.ok) throw new Error(await this.hostResponseError(r, 'Sessions unavailable'));
+                this.sessionsList = (await r.json()).sessions || [];
+            } catch (e) {
+                this.sessionsError = e.message || 'Sessions unavailable.';
+            }
+        },
+        // target: a user name, or null for every user. The caller keeps the
+        // session they are using; Sign out ends that one.
+        async endSessions(target) {
+            if (this.sessionsBusy) return;
+            this.sessionsBusy = true;
+            this.sessionsMessage = '';
+            try {
+                const r = await fetch('/api/sessions/end', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(target === null ? { all: true } : { user: target }),
+                });
+                let d = {};
+                try { d = await r.json(); } catch (e) { d = {}; }
+                this.sessionsMessage = r.ok ? '✓ Ended ' + d.ended + ' session(s).'
+                    : '✕ ' + settingsHostErrorText(r, d, 'End sessions failed', 'save');
+            } catch (e) {
+                this.sessionsMessage = '✕ The server could not be reached; nothing was ended.';
+            } finally {
+                this.sessionsBusy = false;
+                await this.loadSessions();
+            }
+        },
+        // ── STIG compliance (v1.3.0) ─────────────────────────────────
+        async loadCompliance() {
+            if (this.hostDisposed || this.complianceLoading) return;
+            this.complianceLoading = true;
+            this.complianceError = '';
+            try {
+                const r = await fetch('/api/compliance', { cache: 'no-store', headers: { 'X-TM-Background': '1' } });
+                if (!r.ok) throw new Error(await this.hostResponseError(r, 'Compliance status unavailable'));
+                const d = await r.json();
+                if (!this.hostDisposed) this.compliance = d;
+            } catch (e) {
+                if (!this.hostDisposed) this.complianceError = e.message || 'Compliance status unavailable.';
+            } finally { this.complianceLoading = false; }
+        },
+        measureCompliance() {
+            return this.runHostApply('compliance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        },
+        checkGlyph(status) {
+            return settingsCheckGlyph(status);
+        },
+        downloadCompliance() {
+            if (!this.compliance) return;
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([settingsComplianceCsv(this.compliance)], { type: 'text/csv' }));
+            a.download = 'topic-manager-stig-compliance.csv';
+            a.click();
         },
         async saveBanner() {
             const ok = await this.saveSettings({
@@ -592,6 +694,7 @@ const SettingsTab = {
         settleHostApply(domain, job) {
             job.uncertain = false;
             if (domain === 'time' || domain === 'tls') void this.loadHostPanel(domain);
+            if (domain === 'compliance') void this.loadCompliance();
         },
         applyToHost(domain) {
             if (!['syslog', 'time', 'nginx'].includes(domain)) return;
@@ -774,7 +877,9 @@ const SettingsTab = {
     mounted() {
         this.loadSettings();
         ['time', 'capacity', 'tls'].forEach(panel => this.loadHostPanel(panel));
-        ['syslog', 'time', 'nginx', 'tls'].forEach(domain => this.runHostApply(domain));
+        ['syslog', 'time', 'nginx', 'tls', 'compliance'].forEach(domain => this.runHostApply(domain));
+        this.loadSessions();
+        this.loadCompliance();
     },
     beforeUnmount() {
         this.hostDisposed = true;
@@ -787,6 +892,9 @@ const SettingsTab = {
     },
     template: `
 <div>
+  <div v-if="hostPanels.capacity?.write_failure?.current" class="host-audit-banner" role="alert">
+    ✕ The audit trail could not be written at {{ hostPanels.capacity.write_failure.failed_at }} ({{ hostPanels.capacity.write_failure.reason }}), and no record has been written since. Changes are refused until it recovers; the record went to the host syslog as AUDIT_WRITE_FAILED.
+  </div>
   <div v-if="hostPanels.capacity?.warning" class="host-audit-banner" role="alert">
     ! Audit capacity warning: {{ hostPanels.capacity.rows }} / {{ hostPanels.capacity.max_rows }} rows ({{ hostPanels.capacity.pct }}%).
     <button type="button" class="btn btn-sm" @click="selectGroup('logging')">Review audit retention</button>
@@ -882,12 +990,24 @@ const SettingsTab = {
     <div class="srow">
       <div class="srow-lbl">
         Enable Consent Banner
-        <span class="hint">Shows a U.S. Government consent-to-monitor notice after Sign In is clicked. User must click I Agree to proceed.</span>
+        <span class="hint">Shows the consent-to-monitor notice before the sign-in form. The server refuses a sign-in until it is accepted, and records each acceptance (CONSENT_ACCEPTED).</span>
       </div>
       <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.72rem">
         <input type="checkbox" v-model="dowEnabled" @change="saveDow" style="accent-color:var(--accent)"> Enabled
       </label>
     </div>
+    <div class="srow" style="align-items:flex-start">
+      <div class="srow-lbl">
+        <label for="dow_text">Notice text</label>
+        <span class="hint">Empty shows the Standard Mandatory DoD Notice and Consent Banner. Replace it only with text your authority has issued; blank lines separate paragraphs.</span>
+      </div>
+      <textarea id="dow_text" class="fc" v-model="dowText" maxlength="4000" rows="6" style="width:320px;font-size:.72rem" placeholder="(standard DoD wording)"></textarea>
+    </div>
+    <div class="host-actions">
+      <button type="button" class="btn btn-sm btn-primary" @click="saveConsentText(false)">Save text</button>
+      <button type="button" class="btn btn-sm" @click="saveConsentText(true)">Use the standard DoD wording</button>
+    </div>
+    <p class="host-status" role="status">{{ consentMessage }}</p>
   </div>
 
   <!-- The custom selection panel. KEPT AS IT IS on the owner's direction, so
@@ -937,10 +1057,30 @@ const SettingsTab = {
     <form @submit.prevent="saveHostSection('sessions')">
     <fieldset :disabled="!settingsLoaded || sectionSaving.sessions">
     <div class="srow"><div class="srow-lbl"><label for="session_max_concurrent">Concurrent sessions</label><span class="hint">0 means unlimited. This setting takes precedence over the configuration file.</span></div><input id="session_max_concurrent" class="fc" type="number" v-model="hostSettings.session_max_concurrent" min="0" max="50" step="1"></div>
+    <div class="srow"><div class="srow-lbl"><label for="session_absolute_hours">Maximum session lifetime (hours)</label><span class="hint">A session ends this long after sign-in however active it is. Group membership is also re-checked every 15 minutes.</span></div><input id="session_absolute_hours" class="fc" type="number" v-model="hostSettings.session_absolute_hours" min="1" max="24" step="1"></div>
     <button class="btn btn-sm btn-primary" type="submit">{{ sectionSaving.sessions ? 'Saving…' : 'Save' }}</button>
     </fieldset>
     </form>
     <p class="host-status" role="status">{{ sectionMessages.sessions }}</p>
+    <div class="host-readout">
+      <div class="host-actions"><strong>Active sessions</strong><button type="button" class="btn btn-sm" @click="loadSessions">Refresh</button><button type="button" class="btn btn-sm" @click="endSessions(null)" :disabled="sessionsBusy">End all other sessions</button></div>
+      <p v-if="sessionsError" class="host-status" data-state="failed" role="alert">✕ {{ sessionsError }}</p>
+      <p class="host-note">Ending a session signs that browser out at its next request, and is recorded in the audit trail. Your own session is kept; use Sign out for it.</p>
+      <table v-if="sessionsList &amp;&amp; sessionsList.length" class="dt">
+        <thead><tr><th>User</th><th>Address</th><th>Signed in (UTC)</th><th>Last activity</th><th></th></tr></thead>
+        <tbody>
+          <tr v-for="ss in sessionsList" :key="ss.handle">
+            <td>{{ ss.user }}<span v-if="ss.current"> (you)</span></td>
+            <td>{{ ss.ip_addr }}</td>
+            <td>{{ ss.created_at }}</td>
+            <td>{{ ss.last_seen }}</td>
+            <td><button type="button" class="btn btn-sm" @click="endSessions(ss.user)" :disabled="sessionsBusy">End this user</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else-if="sessionsList" class="host-note">No active session.</p>
+      <p class="host-status" role="status">{{ sessionsMessage }}</p>
+    </div>
   </div>
   <div class="ssec host-settings">
     <div class="ssec-title">Rate limiting</div>
@@ -1000,6 +1140,7 @@ const SettingsTab = {
         <dt>FIPS mode</dt><dd>{{ hostPanels.tls.fips_mode ? '✓ Enabled' : '! Disabled' }}</dd>
         <dt>Subject</dt><dd>{{ hostPanels.tls.cert?.subject || 'Unavailable' }}</dd>
         <dt>Issuer</dt><dd>{{ hostPanels.tls.cert?.issuer || 'Unavailable' }}</dd>
+        <dt v-if="hostPanels.tls.issuer_warning">Issuer check</dt><dd v-if="hostPanels.tls.issuer_warning" :data-state="hostPanels.tls.self_signed ? 'warning' : 'ok'">{{ hostPanels.tls.self_signed ? '! ' : '' }}{{ hostPanels.tls.issuer_warning }}</dd>
         <dt>Expires</dt><dd>{{ hostPanels.tls.cert?.not_after || 'Unavailable' }}</dd>
         <dt>Key type</dt><dd>{{ hostPanels.tls.cert?.key_type || 'Unavailable' }}</dd>
         <dt>Subject alternative names</dt><dd>{{ hostPanels.tls.cert?.sans?.join(', ') || 'None' }}</dd>
@@ -1161,6 +1302,44 @@ const SettingsTab = {
     <div class="srow">
       <div class="srow-lbl">PPSM Export<span class="hint">Ports, Protocols &amp; Services Management</span></div>
       <button class="btn btn-sm" @click="downloadPpsm" :disabled="!settingsLoaded">⬇ Download PPSM</button>
+    </div>
+  </div>
+
+  <!-- STIG compliance (v1.3.0, DQ3) -->
+  <div class="ssec host-settings">
+    <div class="ssec-title">STIG compliance</div>
+    <div class="srow">
+      <div class="srow-lbl">Compliance export<span class="hint">Every STIG board rule: documented status (docs/STIG-COMPLIANCE.md) and what this host measures</span></div>
+      <button class="btn btn-sm" @click="downloadCompliance" :disabled="!compliance">⬇ Download CSV</button>
+    </div>
+    <div class="host-actions">
+      <button type="button" class="btn btn-sm" @click="measureCompliance" :disabled="!settingsLoaded || applyJobs.compliance.busy || applyJobs.compliance.uncertain">Measure host now</button>
+      <button type="button" class="btn btn-sm" @click="loadCompliance" :disabled="complianceLoading">Refresh</button>
+    </div>
+    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.compliance.state">
+      <strong v-if="applyViews.compliance.title">{{ applyViews.compliance.title }}</strong>
+      <span v-if="applyViews.compliance.message">{{ applyViews.compliance.message }}</span>
+      <span v-if="applyViews.compliance.job">Job: {{ applyViews.compliance.job }}</span>
+      <ul v-if="applyViews.compliance.details.length"><li v-for="(detail, i) in applyViews.compliance.details" :key="i">{{ detail }}</li></ul>
+    </div>
+    <p v-if="complianceError" class="host-status" data-state="failed" role="alert">✕ {{ complianceError }}</p>
+    <p v-if="!compliance" class="host-note">{{ complianceLoading ? 'Loading compliance status…' : 'Compliance status unavailable.' }}</p>
+    <div v-if="compliance">
+      <p class="host-note">Host last measured: {{ compliance.host.measured_at || 'never (press Measure host now)' }}. Open items: {{ compliance.open_items.length ? compliance.open_items.join(', ') : 'none' }}.</p>
+      <table class="dt compliance-table">
+        <thead><tr><th>Rule</th><th>Decision</th><th>Status</th><th>Live checks</th></tr></thead>
+        <tbody>
+          <tr v-for="r in compliance.rules" :key="r.id">
+            <td :title="r.title"><code>{{ r.id }}</code> <span class="hint">{{ r.sev }}</span></td>
+            <td>{{ r.decision }}</td>
+            <td>{{ r.status }}</td>
+            <td>
+              <span v-if="!r.checks.length" class="hint">none (see the document)</span>
+              <div v-for="c in r.checks" :key="c.key" :data-state="c.status === 'pass' ? 'ok' : (c.status === 'fail' ? 'failed' : 'warning')">{{ checkGlyph(c.status) }} {{ c.key }}: {{ c.detail }}</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
 

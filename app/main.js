@@ -4,6 +4,10 @@ const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
 // why they are looking at it. A module-level constant rather than a magic
 // string repeated at both ends.
 const IDLE_NOTICE = 'You were signed out after 15 minutes of inactivity.';
+// v1.3.0 (SRG-APP-000295): the absolute session lifetime. The server owns it
+// (created_at + Settings > Security > Sessions); the browser signs out a few
+// seconds before, so the sign-out is recorded rather than refused.
+const ABSOLUTE_NOTICE = 'You were signed out because the session reached its maximum lifetime. Sign in again to continue.';
 // Seconds of warning before the sign-out. The countdown runs INSIDE the
 // session window - the browser signs out a few seconds EARLY (see
 // LOGOUT_LEAD_MS) so the request that records the event still carries a
@@ -71,7 +75,10 @@ const App = {
         const timeoutMinutes = ref(15);
         const idleWarning    = ref(0);      // seconds left, 0 = not warning
         const loginNotice    = ref('');     // why the login view is showing
-        let idleTimer = null, warnTimer = null;
+        // ISO time the session ends however active (served by login and
+        // whoami); '' = not known.
+        const sessionEndsAt  = ref('');
+        let idleTimer = null, warnTimer = null, absoluteTimer = null;
 
         async function fetchVersion() {
             try {
@@ -111,7 +118,9 @@ const App = {
                     // frontend default here would run a 15-minute clock against
                     // a session configured for something else.
                     if (d.timeout_minutes) timeoutMinutes.value = d.timeout_minutes;
+                    sessionEndsAt.value = d.session_ends_at || '';
                     armIdleTimer();
+                    armAbsoluteTimer();
                 }
             } catch { /* network unavailable — UI stays in previous state */ }
         }
@@ -131,6 +140,18 @@ const App = {
             if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
             if (warnTimer) { clearInterval(warnTimer); warnTimer = null; }
             idleWarning.value = 0;
+        }
+
+        // Activity does NOT move this one. A timer longer than a setTimeout
+        // can hold (about 24.8 days) is never armed: the lifetime is at most
+        // 24 hours, so such a value is not one this server sent.
+        function armAbsoluteTimer() {
+            if (absoluteTimer) { clearTimeout(absoluteTimer); absoluteTimer = null; }
+            const end = Date.parse(sessionEndsAt.value || '');
+            if (!user.value || !Number.isFinite(end)) return;
+            const wait = end - Date.now() - LOGOUT_LEAD_MS;
+            if (wait > 2147483647) return;
+            absoluteTimer = setTimeout(() => logout('absolute'), Math.max(0, wait));
         }
 
         function armIdleTimer() {
@@ -155,7 +176,8 @@ const App = {
 
         async function logout(reason) {
             clearIdleTimers();
-            const why = reason === 'idle' ? 'idle' : 'explicit';
+            if (absoluteTimer) { clearTimeout(absoluteTimer); absoluteTimer = null; }
+            const why = ['idle', 'absolute'].includes(reason) ? reason : 'explicit';
             try {
                 await fetch('/api/auth/logout', {
                     method: 'POST',
@@ -163,8 +185,8 @@ const App = {
                     body: JSON.stringify({ reason: why }),
                 });
             } catch { /* the session still ends locally; the row may be missed */ }
-            user.value = null; currentTab.value = 'topics';
-            loginNotice.value = why === 'idle' ? IDLE_NOTICE : '';
+            user.value = null; currentTab.value = 'topics'; sessionEndsAt.value = '';
+            loginNotice.value = { idle: IDLE_NOTICE, absolute: ABSOLUTE_NOTICE }[why] || '';
         }
 
         // Pressing "Stay signed in" is itself activity: it re-arms the timer
@@ -174,11 +196,13 @@ const App = {
             fetch('/api/auth/whoami').catch(() => {});
         }
 
-        function onLoggedIn(u, timeout) {
+        function onLoggedIn(u, timeout, endsAt) {
             user.value = u;
             if (timeout) timeoutMinutes.value = timeout;
+            sessionEndsAt.value = endsAt || '';
             loginNotice.value = '';
             armIdleTimer();
+            armAbsoluteTimer();
             fetchClusters();
             fetchVersion();
         }
@@ -238,6 +262,7 @@ const App = {
 
         onUnmounted(() => {
             clearIdleTimers();
+            if (absoluteTimer) clearTimeout(absoluteTimer);
             ACTIVITY.forEach(e => document.removeEventListener(e, onActivity));
         });
 

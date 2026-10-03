@@ -11,29 +11,56 @@ const LoginView = {
         return {
             username: '', password: '', loading: false, error: '',
             host: window.location.hostname,
-            showConsent: false,
+            // v1.3.0 (NGNX-APP-000180): the notice is shown BEFORE the sign-in
+            // form, and the server refuses a sign-in without the acceptance.
+            showConsent: false, consentRequired: false, consentAccepted: false,
+            consentText: '', consentError: '',
         };
     },
+    computed: {
+        // The operator replacement text, one paragraph per blank-line block;
+        // empty means the standard DoD wording in the template below.
+        consentParagraphs() {
+            return this.consentText.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+        },
+    },
+    async mounted() { await this.loadConsent(); },
     methods: {
-        async submit() {
-            if (!this.username || !this.password) { this.error = 'Username and password are required.'; return; }
-            this.error = '';
+        async loadConsent() {
             try {
                 const r = await fetch('/api/settings/public');
                 const s = r.ok ? await r.json() : {};
-                if (s.dow_enabled === 'true') {
-                    this.showConsent = true;
-                    return;
-                }
-            } catch (_) {}
+                this.consentRequired = s.dow_enabled === 'true';
+                this.consentText = typeof s.dow_text === 'string' ? s.dow_text : '';
+            } catch (_) { /* the server decides at sign-in either way */ }
+            this.showConsent = this.consentRequired && !this.consentAccepted;
+        },
+        async submit() {
+            if (!this.username || !this.password) { this.error = 'Username and password are required.'; return; }
+            this.error = '';
+            if (this.consentRequired && !this.consentAccepted) { this.showConsent = true; return; }
             this.doLogin();
         },
         cancelConsent() {
             this.showConsent = false;
+            this.error = 'You must accept the notice to sign in.';
         },
-        agreeConsent() {
+        async agreeConsent() {
+            this.consentError = '';
+            try {
+                const r = await fetch('/api/auth/consent', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ accepted: true }),
+                });
+                if (!r.ok) { this.consentError = 'The acceptance could not be recorded (HTTP ' + r.status + '). Try again.'; return; }
+            } catch (_) {
+                this.consentError = 'Network error: the acceptance could not be recorded. Try again.';
+                return;
+            }
+            this.consentAccepted = true;
             this.showConsent = false;
-            this.doLogin();
+            this.error = '';
         },
         async doLogin() {
             this.loading = true; this.error = '';
@@ -49,6 +76,13 @@ const LoginView = {
                 // the catch below and be reported as a network error.
                 let data = {};
                 try { data = await r.json(); } catch (_) { data = {}; }
+                if (r.status === 403 && data.code === 'consent_required') {
+                    // The acceptance expired (or another tab signed in with it).
+                    this.consentAccepted = false;
+                    this.showConsent = true;
+                    this.error = data.error || 'Accept the notice before signing in.';
+                    return;
+                }
                 if (r.status === 429 && data.code === 'rate_limited') {
                     this.error = 'Too many sign-in attempts from this address. Wait a minute and try again.';
                     return;
@@ -69,7 +103,7 @@ const LoginView = {
                 }
                 // The server's own timeout travels with the user, so the idle
                 // clock the browser arms is the one the session dies on.
-                this.$emit('logged-in', data.user, data.timeout_minutes);
+                this.$emit('logged-in', data.user, data.timeout_minutes, data.session_ends_at);
             } catch (e) {
                 this.error = 'Network error — is the server reachable?';
             } finally {
@@ -115,6 +149,10 @@ const LoginView = {
         </div>
       </div>
       <div class="mbody" style="overflow-y:auto;flex:1;font-size:.78rem;color:var(--text-secondary);line-height:1.7">
+        <div v-if="consentParagraphs.length" class="consent-custom">
+          <p v-for="(para, i) in consentParagraphs" :key="i" style="margin-bottom:12px;white-space:pre-wrap">{{ para }}</p>
+        </div>
+        <template v-else>
         <p style="margin-bottom:12px">
           You are accessing a U.S. Government (USG) Information System (IS) that is provided for
           USG-authorized use only.
@@ -146,6 +184,8 @@ const LoginView = {
           you acknowledge that you have read and understand this notice and consent to the
           conditions above.
         </p>
+        </template>
+        <p v-if="consentError" class="login-err show">{{ consentError }}</p>
       </div>
       <div class="mfoot" style="flex-shrink:0;padding-top:16px;border-top:1px solid var(--border-color)">
         <button class="btn btn-secondary" @click="cancelConsent">Cancel</button>

@@ -3,7 +3,9 @@
 const AuditTab = {
     name: 'AuditTab',
     data() {
-        return { entries: [], total: 0, page: 1, pages: 1, loading: false, error: '' };
+        // writeFailure: the last audit write failure (SRG-APP-000360), from
+        // /api/audit/capacity; the banner shows while it is current.
+        return { entries: [], total: 0, page: 1, pages: 1, loading: false, error: '', writeFailure: null };
     },
     methods: {
         async fetch(p) {
@@ -20,24 +22,40 @@ const AuditTab = {
                 this.loading = false;
             }
         },
+        async loadWriteFailure() {
+            try {
+                const r = await fetch('/api/audit/capacity', { headers: { 'X-TM-Background': '1' } });
+                if (r.ok) { const d = await r.json(); this.writeFailure = d.write_failure || null; }
+            } catch (e) { /* the banner is an extra; the list still loads */ }
+        },
         async exportCsv() {
             const r   = await fetch('/api/audit/export');
+            if (!r.ok) {
+                let d = {};
+                try { d = await r.json(); } catch (e) { d = {}; }
+                this.error = d.message || d.error || ('Export failed (HTTP ' + r.status + ')');
+                return;
+            }
             const txt = await r.text();
             const a   = document.createElement('a');
             a.href = URL.createObjectURL(new Blob([txt], { type: 'text/csv' }));
             a.download = 'topic-manager-audit.csv';
             a.click();
         },
-        actionClass(a) {
+        actionClass(a, outcome) {
+            if (outcome === 'failure') return 'aa-delete';
             if (a === 'CREATE')        return 'aa-create';
             if (a === 'DELETE')        return 'aa-delete';
             if (a === 'UPDATE_CONFIG') return 'aa-update';
             return '';
         },
     },
-    mounted() { this.fetch(1); },
+    mounted() { this.fetch(1); this.loadWriteFailure(); },
     template: `
 <div>
+  <div v-if="writeFailure && writeFailure.current" class="host-audit-banner" role="alert">
+    ! The audit trail could not be written at {{ writeFailure.failed_at }} ({{ writeFailure.reason }}), and no record has been written since. Actions are refused until it recovers; the record went to the host syslog as AUDIT_WRITE_FAILED.
+  </div>
   <div class="toolbar">
     <div style="font-size:.72rem;color:var(--text-muted)">{{ total }} total entries</div>
     <div class="tspacer"></div>
@@ -54,12 +72,14 @@ const AuditTab = {
   </div>
   <div v-else class="twrap">
     <table class="dt">
-      <thead><tr><th>Timestamp</th><th>User</th><th>Action</th><th>Target</th><th>Detail</th><th>Cluster</th></tr></thead>
+      <thead><tr><th>Timestamp (UTC)</th><th>User</th><th>Source</th><th>Action</th><th>Outcome</th><th>Target</th><th>Detail</th><th>Cluster</th></tr></thead>
       <tbody>
         <tr v-for="e in entries" :key="e.id">
           <td style="font-family:var(--mono);font-size:.66rem;color:var(--text-muted);white-space:nowrap">{{ e.ts }}</td>
           <td style="font-family:var(--mono);font-size:.68rem">{{ e.user }}</td>
-          <td><span :class="actionClass(e.action)" style="font-weight:600;font-size:.7rem">{{ e.action }}</span></td>
+          <td style="font-family:var(--mono);font-size:.63rem;color:var(--text-muted)">{{ e.source }}</td>
+          <td><span :class="actionClass(e.action, e.outcome)" style="font-weight:600;font-size:.7rem">{{ e.action }}</span></td>
+          <td :class="e.outcome === 'failure' ? 'aa-delete' : ''" style="font-size:.66rem">{{ e.outcome }}</td>
           <td class="nc">{{ e.target }}</td>
           <td style="font-family:var(--mono);font-size:.61rem;color:var(--text-muted);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="e.detail">{{ e.detail }}</td>
           <td style="font-size:.63rem;color:var(--text-muted)">{{ e.cluster_id }}</td>
