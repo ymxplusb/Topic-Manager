@@ -1862,6 +1862,66 @@
         "No browser render of the UI changes (401 return, notice-changed message, banners): exercised under node."
       ],
       "remote_cleanup": "192.168.202.81: every container started (tm-wo6-fix1, -af1-gate, -af1-mut0..6, -af1-final, -af1-reA/B, -af1-m658, the sonar-local runs) removed; /tmp/tm-wo6-fix1 and /tmp/tm-wo6-af1 removed; docker volumes 134 before and after; networks bridge/host/none only."
+    },
+    {
+      "round": "assure-fix-2",
+      "by": "builder (final bounded closeout: the coordinator's 8-item list; 3 items registered, not fixed)",
+      "date": "2026-10-03",
+      "worktree": "/Users/jamesrodman/Scripts/topic-manager-v130, branch release/v1.3.0 (from 197dfd8)",
+      "commits": [
+        "8fae4f1 fix (v1.3.0 assure-fix-2): consent bound to the notice in force, audit reads recorded after, LDAP sign-in bounded, 401 generations, hashed CI deps, bash 3.2 parse",
+        "6c11bdc docs (v1.3.0 assure-fix-2): a script signing in to the compliance API; empty offline-src before a newer bundle; changelog",
+        "8143ef6 fix (v1.3.0 assure-fix-2): a session generation begins only at sign-in; a 401 sent before it ends nothing",
+        "a3987d2 tests (v1.3.0 assure-fix-2): mutation controls M831-M857; t20's sign-in probe reaches a mutated tm/auth.py",
+        "b4d6530 tests (v1.3.0 assure-fix-2): re-anchor M665 M666 M807 M809 M822 M823 M824"
+      ],
+      "root_cause": {
+        "1 consent": "The consent token stored the notice label it was issued for, but nothing compared it with the notice in force at sign-in: _consent_gate only asked 'is there an unused, fresh token', and consume_consent_token deleted by digest and age alone. accept_consent also issued tokens while the notice was off.",
+        "2 audit read": "get_audit/export_audit wrote AUDIT_READ/AUDIT_EXPORT (default outcome success) before calling the read, so a read that then raised left a success row.",
+        "3 bash 3.2": "bash 3.2 scans a heredoc body inside $( ) as shell; one apostrophe in a comment (t51 'BROWSER's', t14 'stranger's') left an unclosed quote and the whole file failed to parse. t49 had the same latent pattern (balanced by luck). Nothing ran bash -n with an old bash.",
+        "4 LDAP": "validate_credentials built Server/Connection with ldap3 defaults (no connect_timeout, no receive_timeout); only the re-check passed bounds.",
+        "5 CI": "TEST_SETUP installed requirements.txt (direct pins, transitives unpinned, no hashes): the test lane tested a different closure from the one the installers install.",
+        "6 401": "tmWatchSession acted on any 401 regardless of which session sent the request, and excluded every /api/auth/* path including whoami.",
+        "7 unit": "Not a defect: MEASURED that nginx -T needs both paths writable (see per_item).",
+        "8 docs": "No operator text for a script's sign-in; nothing said to empty offline-src (tar does not delete leftovers)."
+      },
+      "per_item": {
+        "1": "FIXED - _consent_gate drops an acceptance whose notice != _notice_label(current) (403 consent_required before the directory is asked); _use_consent re-reads the settings INSIDE the BEGIN IMMEDIATE and consume_consent_token(..., notice) deletes only a token issued for the current notice (403 + rollback otherwise); a notice turned ON mid-sign-in also refuses; POST /api/auth/consent while off -> 409 consent_off, no token. t50 a_notice_bound (gate, in-transaction via a directory fake that changes the notice, turned-on, off-issue, current control). M831-M835.",
+        "2": "FIXED - read/export first, log_action after; an exception -> AUDIT_READ/AUDIT_EXPORT outcome=failure (best effort) + 500 audit_read_failed (type only, no DB text); AuditUnavailable after the read -> 503, nothing served. t48 (read no longer contains its own row; failure rows), t43 paging re-derived. M836-M839; M665/M666 re-anchored.",
+        "3": "FIXED - t14/t51 (and latent t49) reworded; tools/check-shell-parse.sh: static scan (heredoc inside a $( opened on any earlier line, per-line quote balance) everywhere + bash -n with a 3.x bash when present (TM_OLD_BASH or /bin/bash); tests/t54 (tree passes; the t51 shape as a fixture is found and named; a heredoc outside $( is not). Calibrated on macOS bash 3.2.57: before the fix it rejected exactly t14+t51 and the static scan flags both; the fixture bad.sh is rejected by real bash 3.2 too. Caught 2 of my own new apostrophes in t49 during the round. M852-M854. Not added to project.yml gates (it runs inside tests/run.sh --strict, i.e. CI).",
+        "4": "FIXED - SIGN_IN_CONNECT_TIMEOUT_S=5 on the Server, SIGN_IN_RECEIVE_TIMEOUT_S=10 on every sign-in bind (service, direct, user-password). No config key exists for them, so constants. t49: a socket that accepts and never answers the TLS handshake -> False within 4 s on all three binds (connect bound set longer than receive, so the receive bound is proven to apply); t20 characterisation records both values. M840-M845 (2 cases each).",
+        "5": "FIXED - TEST_SETUP: pip install --quiet --require-hashes --only-binary :all: -r requirements.lock (installed clean in python:3.12-bookworm; tm.app imports). t25 holds the line, refuses requirements.txt, and ties it to install.sh's flags. M850-M851.",
+        "6": "FIXED - module-level tmSessionGeneration, captured when each request is SENT, bumped at sign-in only (bumps at sign-out are equivalent: with no user a 401 ends nothing - removed); /api/auth/whoami is watched. t49 node: late 401 from the previous session ignored, a 401 under the current session still ends it, a whoami sent while signed out answering after the sign-in ignored, whoami 401 on Stay signed in returns to sign-in. M846-M849; M822-M824 re-anchored.",
+        "7": "NOT NARROWED - ReadWritePaths unchanged (-/opt/topic-manager/data/apply /run/topic-manager-apply -/run/nginx.pid /var/log/nginx). MEASURED in a container (nginx 1.22.1, bookworm; /run and /var/log/nginx bind-mounted read-only as ProtectSystem=strict leaves them): pid file ro -> '[emerg] open() \"/run/nginx.pid\" failed (30: Read-only file system)', test failed (nginx -t opens the pid file, creating it if absent, without truncating/writing: the running nginx pid was unchanged); logs ro -> '[emerg] open() \"/var/log/nginx/error.log\" failed (30)'; both writable -> rc 0. Reason now in the unit's comment. The 'Nothing on the host was changed' message stands (opened for write, nothing written; a missing log file would be created empty). Next host run: nothing removed, so the tm-qc pass still applies; the measurement was nginx 1.22 in a container, not 1.24 under systemd.",
+        "8": "FIXED - README Compliance: 'Signing a script in' (cookie jar, X-TM-Request: 1 on POSTs, consent acceptance first while on with the exact dow_text, POST /api/auth/login JSON from a 0600 file, logout) + curl recipe; README offline staging and install/README: 'sudo find /var/lib/topic-manager/offline-src -mindepth 1 -delete' before the tar. t39 case. M855-M857. CHANGELOG lines for 1, 2, 4, 5, 6."
+      },
+      "files_changed": "git diff --stat 197dfd8..b4d6530: tm/{auth,models,routes}.py, app/main.js, .gitlab-ci.yml, systemd/topic-manager-apply-compliance.service (comment only), tools/check-shell-parse.sh (new), README.md, install/README.md, CHANGELOG.md, tests/{t14,t20,t25,t39,t43,t48,t49,t50,t51,t54 (new)}, tests/lib/auth_probe.{py,expected}, tests/mutate.sh, tests/mutations.txt",
+      "amendments": [
+        "tests/lib/auth_probe.py + .expected - required by item 4: the fake Server/Connection refused the new keyword arguments (t20 red); they now accept and record them, and the transcript pins 5/10",
+        "tests/t20-directory-config.sh - the probe ran with PYTHONPATH=$TM_REPO_ROOT, so no py:auth mutant could reach it (M840-M845 red on t49 only); now $(tm_py_root). Same pattern elsewhere -> REG-0042",
+        "tests/mutate.sh - four harness targets (ciyml, shellparse, readme, installreadme) so items 3, 5 and 8 have controls; ciyml may be absent (export-ignored) and then ABORTS, never passes",
+        "install/README.md, .gitlab-ci.yml, tools/check-shell-parse.sh, tests/t54 - named by items 3, 5, 8 of the brief but outside scout.scope"
+      ],
+      "consumers_addressed": "consume_consent_token: 1 caller (_use_consent). _ldap_bind: 4 callers (service, direct, user-password, re-check) - all bounded. tmWatchSession: both send paths pass the generation. AUDIT_READ/AUDIT_EXPORT: the only two sites.",
+      "registered": [
+        "REG-0039 cluster certificate replacement not transactional",
+        "REG-0040 rollback leaves site logs at 0640",
+        "REG-0041 saved syslog_enabled satisfies the gate while a failed re-apply only warns (POLICY QUESTION FOR JAMES)",
+        "REG-0042 tests pinning PYTHONPATH to the repo cannot see py mutants (t06/t07/t12/t13)"
+      ],
+      "gates_at_head": "a3987d2, fresh python:3.12-bookworm on 192.168.202.81 from a git bundle --all (10 tags), CI TEST_SETUP and TEST_COMMAND read verbatim from .gitlab-ci.yml: setup rc 0 (lock, hashed); check-requirements-lock --require-online PASS (15); tests/run.sh --strict 550 passed / 0 failed / 0 skipped, rc 0; all 13 declared gates rc 0 (+ check-shell-parse PASS 73 files); sonar-local --base v1.2.1 at a3987d2: VERDICT PASS, new_violations 0 (31 issues overall), files 161 vs 146, docker volumes 134 before/after. b4d6530 differs from a3987d2 only in tests/mutations.txt.",
+      "mutation_controls": {
+        "new": "M831-M857 (27): all RED (run at the working tree, then again in the full pass).",
+        "full_run": "tests/mutate.sh EVERY control (840) in fresh containers from the bundle: 829 killed, 11 documented equivalents (M14 M45 M87 M103 M141 M142 M183 M254 M388 M462 M686 - unchanged list), 0 SURVIVED, 0 unproven. At a3987d2: 7 ABORTED (M665 M666 M807 M809 M822 M823 M824 - code this round rewrote) -> re-anchored in b4d6530 and run there: 7 RED. Chunks c and d first came up with a red BASELINE (t35 5-s throttle, t44 gunicorn start) under 9 containers + SonarQube on the host - load-timing, both green alone; re-run at b4d6530 with lighter load, all verdicts recorded.",
+        "findings": "M840-M845 were red on t49 only: t20 could not see a py:auth mutant (PYTHONPATH pinned). Fixed for t20 (now 2 cases each); remaining files -> REG-0042."
+      },
+      "not_done": [
+        "Item 7 not narrowed - measured as required; no tm-qc/systemd run (out of bounds this round).",
+        "Item 3: check-shell-parse is a test (t54, so CI runs it) and not added to .claude/project.yml gates.",
+        "No browser render of the 401/whoami change: exercised under node.",
+        "REG-0039..0041 registered by ruling, not fixed; REG-0041 needs James."
+      ],
+      "remote_cleanup": "192.168.202.81: every container started (tm-wo6-af2, -af2-ngx x2 (--rm), -af2-final, -af2-mut-a..h, -af2-mut2-c/d/r/c2/c3/d2/d3) removed; /tmp/tm-wo6-af2 and /tmp/tm-wo6-af2f removed; docker volumes 134 before and after; networks bridge/host/none only; 0 containers. /tmp/tm-ci-repro-2634394 pre-existed and was left."
     }
   ]
 }

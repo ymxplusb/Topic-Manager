@@ -404,6 +404,50 @@
       "where": "tm/audit.py log_action",
       "why": "Making outcome keyword-required touches every call site and ~12 mutation anchors; out of proportion to a fix round.",
       "closes_when": "outcome is a required keyword (or an AST test fails any log_action call without it)"
+    },
+    {
+      "id": "REG-0039",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-2 (builder, 2026-10-03); both review engines",
+      "finding": "Cluster certificate replacement is not transactional: the new files are written and the profile updated in separate steps, so a failure between them can leave a profile pointing at certificate files that were replaced (or removed) with no rollback. Pre-existing (not introduced by v1.3.0).",
+      "where": "tm/clusters.py:400, tm/clusters.py:428",
+      "why": "Registered, not fixed, by the coordinator's ruling for round assure-fix-2: pre-existing, outside the v1.3.0 scope.",
+      "closes_when": "a certificate replacement either completes (files and profile) or leaves the previous files and profile byte-identical, with a test that fails the step between them"
+    },
+    {
+      "id": "REG-0040",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-2 (builder, 2026-10-03)",
+      "finding": "A rollback from v1.3.0 leaves the nginx site logs at the tighter 0640 www-data:adm that v1.3.0 set, rather than restoring the pre-upgrade modes. Fidelity gap only: the tighter mode is harmless to the older release.",
+      "where": "install/upgrade-full.sh:263, install/upgrade-full.sh:1711",
+      "why": "Registered by ruling (assure-fix-2); no harm, and restoring a looser mode is not obviously wanted.",
+      "closes_when": "James decides whether a rollback restores the recorded log modes; if yes, the rollback restores them and t45 holds it"
+    },
+    {
+      "id": "REG-0041",
+      "severity": "Medium",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-2 (builder, 2026-10-03); POLICY QUESTION FOR JAMES",
+      "finding": "A saved syslog_enabled=true satisfies the upgrade's remote-syslog preflight gate (no --syslog-host/--no-remote-syslog needed), but if the post-upgrade re-apply of that saved syslog setting fails, the upgrade only warns and completes: the gate accepted a forwarding that is then not in force.",
+      "where": "install/upgrade-full.sh:2516 (preflight), install/upgrade-full.sh:3439 (re-apply warns)",
+      "why": "Policy question, not a defect to fix in a closeout round: should a failed re-apply of the saved forwarding fail (and roll back) the upgrade, or stay a warning plus an open item on the compliance page?",
+      "closes_when": "James rules; the chosen behaviour is implemented and tested"
+    },
+    {
+      "id": "REG-0042",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-03",
+      "source": "WO-0006 assure-fix-2 (builder, 2026-10-03) (mutation finding)",
+      "finding": "Several test files run their Python probes with PYTHONPATH pinned to $TM_REPO_ROOT instead of $(tm_py_root), so a py:<module> mutation (tests/mutate.sh points TM_PY_ROOT at a mutated copy) never reaches them and they cannot kill it. Found when M840-M845 (tm/auth.py) were red on t49 only: t20's sign-in characterisation, which records the timeouts, could not see the mutant. t20 fixed in a3987d2; the same pattern remains in t06, t07, t12, t13 (and possibly others).",
+      "where": "tests/t06-cluster-store.sh:45, tests/t07-config-reload.sh:36,223,463, tests/t12-restart-throttle.sh:37,46,60,153,228, tests/t13-proxy-headers.sh:86",
+      "why": "Out of this round's scope (tests the round did not touch); each change needs its controls re-run.",
+      "closes_when": "no test sets PYTHONPATH to the repo root for a tm import (a gate or t41 case greps for it), and the py:* controls are re-run"
     }
   ]
 }
