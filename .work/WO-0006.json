@@ -1,0 +1,1653 @@
+{
+  "id": "WO-0006",
+  "intent": "Topic Manager v1.3.0 = scope A only - \"the remaining 'Yes' rules from the STIG decision board that v1.2.0 didn't build\" (James, 2026-10-02, /decide). Release class minor; no new infrastructure.",
+  "project": "Topic Manager",
+  "release": "minor",
+  "opened": "2026-10-02",
+  "status": "scoping",
+  "depends_on": "Baseline release/v1.2.0 @ b869f63 (= v1.2.0, LIVE on prod). v1.2.1 (release/v1.2.1, WO-0005, other worktree ../topic-manager-v121, HEAD f4d5530 at scout time) changes app/components/SettingsTab.js (108 lines), install/upgrade-full.sh, README.md and every version surface. v1.3.0 MUST branch from v1.2.1 after it merges, and every line number in this work order (measured at b869f63) must be re-anchored. Do not touch ../topic-manager-v121.",
+  "input": {
+    "board": "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/board/board-decisions.json (75 rules: F5 NGINX STIG V1R1 32 + Database SRG V4R5 narrowed to SQLite 43; 64 Yes / 8 Other / 3 No). Only one comment from James: NGNX-APP-000180.",
+    "stig_text": "artifact-04b3f04a <script id=\"rules-data\"> (id,title,why,setting,disc,check,fix); extracted copy scratchpad/board/rules-full.json",
+    "out_of_scope_no": [
+      "NGNX-APP-000720 (CRL)",
+      "NGNX-APP-001650 (PIV)",
+      "NGNX-APP-002620 (OCSP) - all PIV/CAC-dependent, deferred by owner 2026-09-26"
+    ]
+  },
+  "security": {
+    "answers_verbatim": {
+      "data": "configuration (host settings: nginx/rsyslog/chrony/ufw config, file permissions)",
+      "reach": "authenticated users (unchanged)",
+      "adds_or_changes_a_route": "likely yes",
+      "introduces_or_moves_a_credential": "no",
+      "new_outbound_call": "possibly (audit off-load rides the existing syslog destination)"
+    },
+    "scout_notes": [
+      "Root-helper surface grows if G1/G2/G3/G7 enforce host state (tm-apply runs as root and must keep re-validating everything it renders).",
+      "Audit-schema change (G5) alters what reaches the off-host collector and the CSV export every authenticated user can download; source IP becomes a field on every row.",
+      "Unsuccessful-event auditing (DQ7) lets an unauthenticated or low-cost caller grow tm.db; the retention/capacity controls must hold.",
+      "Error hygiene (SRG-000266) closes a disclosure: broker host names and library errors are returned to the browser today."
+    ]
+  },
+  "scout": {
+    "method": "Read every relevant file at b869f63 (nginx/*.conf, tm/models.py, tm/audit.py, tm/app.py, tm/routes.py auth/session/audit/topic routes, tm/settings_schema.py, install.sh, install/upgrade-full.sh, install/libexec/tm-apply, install/logrotate.d, README Compliance). AST (python ast) for every sqlite execute() with a non-constant SQL argument, every eval/exec/load_extension, and every log_action call site (22 sites across routes.py, apply.py, audit_retention.py). grep for log_format, worker_connections, www-data/nologin/usermod, load_module, PRAGMA, absolute-lifetime terms. READ-ONLY host measurement on tm-qc 192.168.202.92 (STIG+FIPS, v1.2.0 installed, /api/health 1.2.0): getent/id www-data, nginx.conf directives, modules-enabled, /etc/nginx and /var/log/nginx modes, fips provider. Each rule judged against its STIG CHECK text AND the board's proposed fix that James said Yes to; INHERITED-UNVERIFIED (true on a stock host, product neither sets nor checks it) is scored PARTLY.",
+    "blast_radius": "product",
+    "second_sweep": "NOT RUN - exit 30 (TOOL_FAILURE) on BOTH routes. VM Codex (claude_admin@192.168.202.75, remote-user james, the pipeline subscription): 'Encountered invalidated oauth token ... token_revoked' (401). Local fallback: 'refresh token was revoked. Please log out and sign in again.' Transcripts: scratchpad/codex-wo6/transcript.txt and scratchpad/codex-wo6-local/transcript.txt. Both Codex logins need James to re-authenticate. This is a single-engine enumeration. The local ask_local.py seat was not run.",
+    "counts": {
+      "NGINX_STIG_V1R1": {
+        "Yes (24)": {
+          "MET": 11,
+          "PARTLY": 12,
+          "NOT MET": 1
+        },
+        "Other (5)": {
+          "MET": 1,
+          "PARTLY": 4
+        }
+      },
+      "DB_SRG_V4R5_SQLite": {
+        "Yes (40)": {
+          "MET": 30,
+          "PARTLY": 10,
+          "NOT MET": 0
+        },
+        "Other (3)": {
+          "PARTLY": 3
+        }
+      },
+      "in_scope_items": 30
+    },
+    "rules": [
+      {
+        "id": "NGNX-APP-000010",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Topic Manager already enforces a per-user concurrent session cap in the app (session.max_concurrent), but it defaults to 0 = unlimited. Set an organisation value.",
+        "board_setting": "Security > Sessions: max concurrent sessions per user",
+        "verdict": "PARTLY",
+        "group": "G2-nginx-config",
+        "evidence": "App cap exists: settings_schema.py:36 session_max_concurrent default 3, enforced routes.py:304-307 under BEGIN IMMEDIATE. The STIG CHECK reads nginx worker_connections, which the product never sets: stock /etc/nginx/nginx.conf:8 worker_connections 768 (measured tm-qc 2026-10-02).",
+        "verify": "nginx -qT | grep worker_connections  -> an organisation-defined value written by the product",
+        "gap": "nginx worker_connections not managed/declared; the app cap is the real control and is undocumented as the answer to this rule."
+      },
+      {
+        "id": "NGNX-APP-000040",
+        "sev": "CAT I",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "nginx.conf main still lists TLSv1/1.1. The site block overrides it, but the main block must be TLS 1.2+ too. Fixed in this release.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "nginx/topic-manager.conf:59 ssl_protocols TLSv1.2 TLSv1.3; nginx.conf http-level line rewritten by install.sh:349-418 (manage_nginx_ssl_protocols) and install/upgrade-full.sh:756-826; tm-qc nginx.conf:33 reads \"ssl_protocols TLSv1.2 TLSv1.3; # managed by Topic Manager\".",
+        "verify": "nginx -qT | grep ssl_protocols",
+        "gap": ""
+      },
+      {
+        "id": "NGNX-APP-000140",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "The www-data service account should have /usr/sbin/nologin. Installer check.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G1-installer-host-checks",
+        "evidence": "INHERITED-UNVERIFIED. tm-qc: getent passwd www-data -> /usr/sbin/nologin (stock Ubuntu). Neither install.sh nor upgrade-full.sh checks the shell: upgrade-full.sh:1852 only proves the account exists (row PASS \"web account\").",
+        "verify": "getent passwd $(awk '/^\\s*user/{print $2}' /etc/nginx/nginx.conf | tr -d ';')  -> shell nologin/false",
+        "gap": "No installer/audit-only check."
+      },
+      {
+        "id": "NGNX-APP-000150",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "www-data must not be in sudo/adm. Installer check.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G1-installer-host-checks",
+        "evidence": "INHERITED-UNVERIFIED. tm-qc: id www-data -> groups=33(www-data) only. The product adds www-data to no group (the socket is topic-manager:www-data, systemd/topic-manager.socket) but never verifies membership of sudo/adm/wheel.",
+        "verify": "id www-data  -> no sudo/adm/wheel/admin",
+        "gap": "No installer/audit-only check."
+      },
+      {
+        "id": "NGNX-APP-000180",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "Keep a Custom Selection Panel like now incase DoD needs to come down.",
+        "board_why": "Consent dialog already exists in the app and is configurable (text, on/off).",
+        "board_setting": "Security > Banner and consent (exists)",
+        "verdict": "PARTLY",
+        "group": "G4-session-auth-consent",
+        "evidence": "DoD notice text exists hard-coded in app/components/LoginView.js:108-152 (USG standard wording), shown only when dow_enabled=true; tm/routes.py:847 default dow_enabled false, so a fresh install shows NO notice. Enforcement is client-side only: POST /api/auth/login (routes.py:258-339) does not require or record acceptance; no audit action for consent; no install.sh flag. The STIG check expects an nginx-level consent gate (map $http_cookie / location /consent).",
+        "verify": "Fresh install: open https://<host>/ in a clean browser -> notice before the sign-in form; curl the login API without accepting -> refused; audit shows CONSENT_ACCEPTED.",
+        "gap": "Default off, not server-enforced, acceptance not audited. James: \"Keep a Custom Selection Panel like now incase DoD needs to come down\" = keep the operator on/off toggle (and keep the text replaceable)."
+      },
+      {
+        "id": "NGNX-APP-000240",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "nginx access log exists. Add a log_format with the fields DoD asks for (timestamp, source IP, user, request, status).",
+        "board_setting": null,
+        "verdict": "NOT MET",
+        "group": "G2-nginx-config",
+        "evidence": "No log_format anywhere in the product (grep log_format over nginx/, install.sh, install/upgrade-full.sh, install/libexec/tm-apply: 0 hits). nginx/topic-manager.conf:168-169 and the syslog render tm-apply:829-831 use the default \"combined\" format, which lacks $server_name, $server_addr, $request_id, $http_x_forwarded_for. $remote_user is always empty (auth is in the app, not nginx).",
+        "verify": "nginx -qT | grep -A3 log_format  -> custom format with server_name server_addr remote_addr remote_user time_local status request request_id http_user_agent http_x_forwarded_for; access_log ... <format>",
+        "gap": "Ship a named log_format (http context, conf.d) and use it on every access_log the product writes (file and syslog)."
+      },
+      {
+        "id": "NGNX-APP-000250",
+        "sev": "CAT II",
+        "decision": "Other",
+        "james_comment": "",
+        "board_why": "Who may change the audited events is controlled by file permissions on /etc/nginx (root-only). Mostly inherited from the OS STIG. Document it.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G6-docs-evidence",
+        "evidence": "OTHER. tm-qc: /etc/nginx/nginx.conf -rw-r--r-- root root; install.sh:403 restores the original owner/mode after editing nginx.conf; tm-apply writes nginx snippets 0644 root (tm-apply:1051-1057). Who may change audited events = root via file permissions; nothing documents it.",
+        "verify": "ls -l /etc/nginx/nginx.conf  -> no group/other write",
+        "gap": "Inherited from OS STIG; owed: documentation (and optionally a check row)."
+      },
+      {
+        "id": "NGNX-APP-000370",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Only stock Ubuntu nginx modules are loaded; the installer can verify modules-enabled against an allow-list.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G1-installer-host-checks",
+        "evidence": "INHERITED-UNVERIFIED. tm-qc: /etc/nginx/modules-enabled/ is EMPTY (no dynamic module loaded) and /usr/lib/nginx/modules does not exist. The product has no module allow-list check (board asked for one).",
+        "verify": "grep -r load_module /etc/nginx/ ; ls -l /etc/nginx/modules-enabled/  -> empty or allow-listed; module dir not other-writable",
+        "gap": "No installer allow-list check."
+      },
+      {
+        "id": "NGNX-APP-000400",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "nginx logs in /var/log/nginx are 640 root:adm on Ubuntu. Verify in the installer.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G1-installer-host-checks",
+        "evidence": "tm-qc measured: topic-manager-access.log.1 -rw-r--r-- root:root and topic-manager-error.log -rw-r--r-- www-data:root (WORLD-READABLE, created by nginx before the first rotation); rotated files become 0640 www-data:adm via Ubuntu /etc/logrotate.d/nginx. install/logrotate.d/topic-manager covers only /opt/topic-manager/logs. No installer creates or verifies /var/log/nginx/topic-manager-*.log modes. (Write-only-by-owner, the literal check, passes; read access, the rule intent, does not.)",
+        "verify": "ls -l /var/log/nginx/topic-manager-*.log  -> 0640 (or tighter), owner www-data/root, group adm",
+        "gap": "Pre-create the site logs 0640 and verify; the access log holds client IPs."
+      },
+      {
+        "id": "NGNX-APP-000510",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Only 80 (redirect) and 443. PPSM lists them. Option to turn off :80 entirely.",
+        "board_setting": "Network > HTTP to HTTPS redirect on/off",
+        "verdict": "MET",
+        "group": null,
+        "evidence": "Only 443 (nginx/topic-manager.conf:54) and the optional :80 redirect site nginx/topic-manager-http.conf:17-22, switched by Settings http_redirect_enabled (settings_schema.py:45) via tm-apply nginx, which also opens/closes ufw 80/tcp; PPSM.csv lists them.",
+        "verify": "nginx -qT | grep -A2 listen ; ss -ltnp",
+        "gap": ""
+      },
+      {
+        "id": "NGNX-APP-000590",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "TLS 1.2+ with session cookies bound to TLS gives replay resistance. Mostly met.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "TLS 1.2+ only (above); server-side session store (models.py:142-176), Secure+HttpOnly+SameSite=Lax cookie signed HMAC-SHA-256 (app.py:32-43,71-73); CSRF refusal on every state-changing request (routes.py:181-192). No nginx-level auth (auth_jwt / ssl_verify_client absent), so the STIG check is answered by the app. Owed: one paragraph of evidence in the compliance doc.",
+        "verify": "grep -Ri 'auth_\\|ssl_verify_client' /etc/nginx ; curl -skI the login response -> Set-Cookie Secure; HttpOnly; SameSite=Lax",
+        "gap": ""
+      },
+      {
+        "id": "NGNX-APP-000730",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "The TLS private key must be 0600 root. The installer already places it in /etc/topic-manager/tls. Verify the mode.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "install.sh:1473 chown root:root + chmod 600 server.key, install.sh:1486 placeholder key 600; tm-apply:1118 installs an uploaded key 0o600; tls dir 750 root:topic-manager install.sh:1114.",
+        "verify": "ls -l $(nginx -qT | awk '/ssl_certificate_key/{print $2}' | tr -d ';')  -> -rw------- root root",
+        "gap": ""
+      },
+      {
+        "id": "NGNX-APP-000850",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "CSP identifies allowed code. It currently needs 'unsafe-eval' for Vue runtime templates. Document now, remove in a later release.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G6-docs-evidence",
+        "evidence": "Module half INHERITED (modules-enabled empty on tm-qc). The board item is the CSP: nginx/tm-security-headers.conf:5 still carries script-src 'unsafe-eval' (Vue runtime templates). Documented nowhere as an accepted risk; CHANGELOG.md:589 mentions it only as a ZAP Medium.",
+        "verify": "grep load_module -r /etc/nginx ; curl -skI https://<host>/ | grep -i content-security-policy",
+        "gap": "Owed: written accepted-risk + removal plan (board: document now, remove later)."
+      },
+      {
+        "id": "NGNX-APP-001030",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Add limit_req/limit_conn zones for /api/auth/login and /api/.",
+        "board_setting": "Security > Rate limiting: login and API requests per minute",
+        "verdict": "MET",
+        "group": null,
+        "evidence": "nginx/topic-manager.conf:75-78 client_header_timeout 10s, client_body_timeout 10s, send_timeout 10s, client_max_body_size 1m; limit_req zones nginx/tm-limits.conf:4-6.",
+        "verify": "nginx -qT | grep -E 'client_(header|body)_timeout|send_timeout'",
+        "gap": ""
+      },
+      {
+        "id": "NGNX-APP-001070",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Custom error pages without version info; server_tokens off.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G2-nginx-config",
+        "evidence": "server_tokens off at nginx/topic-manager.conf:67 and topic-manager-http.conf:20 (check PASSES). Board fix also asked for custom error pages: none exist (no error_page for 4xx/5xx other than 429 at :123/:144), so nginx default pages naming \"nginx\" are served.",
+        "verify": "nginx -qT | grep server_tokens ; curl -sk https://<host>/nonexistent.js -> no product/version text",
+        "gap": "Custom 404/50x pages (small)."
+      },
+      {
+        "id": "NGNX-APP-001400",
+        "sev": "CAT I",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "CAT I. The nginx access and error logs must be forwarded to a central log server. The destination is operator-chosen.",
+        "board_setting": "Logging > Remote syslog destination",
+        "verdict": "PARTLY",
+        "group": "G3-audit-offload",
+        "evidence": "Capability built: when Settings syslog_enabled, tm-apply:829-831 renders access_log/error_log syslog:server=unix:/dev/log into snippets/tm-syslog.conf (included at topic-manager.conf:172) and rsyslog forwards tm_nginx_* (tm-apply:813). Default OFF (settings_schema.py:30, nginx/tm-syslog.conf:3) unless install.sh --syslog-host. Even when ON, the http-level access_log/error_log in /etc/nginx/nginx.conf (tm-qc :4 and :40) carry no syslog:server= -> the literal check is a finding. The site file logs to /var/log files as well as syslog.",
+        "verify": "nginx -qT | grep -E '^\\s*(access|error)_log'  -> every one has syslog:server=",
+        "gap": "nginx.conf main log directives; no install-time warning when no collector is configured."
+      },
+      {
+        "id": "NGNX-APP-001590",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "/etc/nginx and the site config should be root-owned, 640/644. Installer check.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G1-installer-host-checks",
+        "evidence": "INHERITED-UNVERIFIED. tm-qc: drwxr-xr-x root root /etc/nginx. Files the product writes there are 0644 root (tm-apply:1051-1057, install.sh:1421 install_if_absent 644). No check that /etc/nginx and its subdirectories are not other-writable.",
+        "verify": "find /etc/nginx -perm -o+w  -> nothing",
+        "gap": "No installer check."
+      },
+      {
+        "id": "NGNX-APP-001630",
+        "sev": "CAT II",
+        "decision": "Other",
+        "james_comment": "",
+        "board_why": "The deny-all, permit-by-exception rule is for executing software. nginx serves static files and proxies to one upstream; there's no CGI. Likely N/A, with a note.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G6-docs-evidence",
+        "evidence": "OTHER. No allow/deny anywhere in nginx/topic-manager.conf; no CGI/FastCGI; nginx serves /var/www/topic-manager static and proxies one upstream socket. Plausibly N/A-with-note, or an optional client allow-list setting.",
+        "verify": "nginx -qT | grep -E 'allow|deny'",
+        "gap": "Decide document-only vs an optional allow-list (see design questions)."
+      },
+      {
+        "id": "NGNX-APP-001640",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "ssl_session_timeout 15m (Ubuntu default 1d via cache settings).",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "nginx/topic-manager.conf:65 ssl_session_timeout 15m; :66 ssl_session_tickets off.",
+        "verify": "nginx -qT | grep ssl_session_timeout",
+        "gap": ""
+      },
+      {
+        "id": "NGNX-APP-001690",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Cached authenticators = the app session, which already has a configurable 15 min idle timeout.",
+        "board_setting": "Security > Sessions: idle timeout (exists)",
+        "verdict": "MET",
+        "group": null,
+        "evidence": "No keyval store (check: not applicable). The cached authenticator is the app session: 15-min idle timeout (config.py DEFAULT_SESSION_TIMEOUT_MINUTES, routes.py:239-240 touch_session, X-TM-Background does not renew).",
+        "verify": "nginx -qT | grep keyval  -> none",
+        "gap": ""
+      },
+      {
+        "id": "NGNX-APP-001840",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "The proxy passes X-Forwarded-For/Proto to gunicorn. Already in the site config; verify.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "nginx/topic-manager.conf:127-131 and :151-158 set Host, X-Real-IP, X-Forwarded-For, X-Forwarded-Proto, X-Forwarded-Host; backend trusts exactly one hop (app.py:29,47-52).",
+        "verify": "nginx -qT | grep proxy_set_header",
+        "gap": ""
+      },
+      {
+        "id": "NGNX-APP-001900",
+        "sev": "CAT II",
+        "decision": "Other",
+        "james_comment": "",
+        "board_why": "DoD-approved CAs for the server certificate. The site's PKI decides which CA issues it. Provide a certificate upload/replace option so operators can install their CA-issued cert.",
+        "board_setting": "TLS > Server certificate and CA chain",
+        "verdict": "PARTLY",
+        "group": "G6-docs-evidence",
+        "evidence": "OTHER. Certificate + chain upload built (routes.py:1074, tm/tls_check.py, tm-apply:1117-1119; v1.2.0 decision: a name mismatch warns). Whether the issuing CA is DoD-approved is the site PKI and not checked (any chain that verifies is accepted); fresh install serves a self-signed P-256 placeholder (install.sh:1454).",
+        "verify": "openssl s_client -connect <host>:443 -showcerts </dev/null | openssl x509 -noout -issuer",
+        "gap": "Operator-owned. Owed: doc; optional: show issuer + \"self-signed placeholder in use\" warning on the TLS pane."
+      },
+      {
+        "id": "NGNX-APP-001940",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "The same rate limiting as 001030, plus client body/header timeouts and client_max_body_size.",
+        "board_setting": "Security > Rate limiting: login and API requests per minute",
+        "verdict": "MET",
+        "group": null,
+        "evidence": "limit_req_zone/limit_conn_zone nginx/tm-limits.conf:4-6; limit_conn snippet included topic-manager.conf:86; limit_req for login :122 and API :143; 429 JSON :110-115.",
+        "verify": "grep -R 'limit_req\\|limit_conn' /etc/nginx/",
+        "gap": ""
+      },
+      {
+        "id": "NGNX-APP-001960",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "A FIPS-approved cipher list replaces HIGH:!aNULL:!MD5. Fixed in this release.",
+        "board_setting": "TLS > Cipher policy (FIPS, read-only)",
+        "verdict": "MET",
+        "group": null,
+        "evidence": "nginx/topic-manager.conf:60-62 ECDHE AES-GCM SHA-256/384 only, TLS1.3 AES-GCM suites, curves P-384/P-256; :63 prefer server ciphers.",
+        "verify": "nginx -qT | grep -E 'ssl_(protocols|ciphers|conf_command|ecdh_curve)'",
+        "gap": ""
+      },
+      {
+        "id": "NGNX-APP-002660",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Use a FIPS-validated module: on a FIPS-enabled Ubuntu 24.04 host, nginx links the system OpenSSL, which runs the FIPS provider. The app must not break in that mode.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "INHERITED + PROVEN: tm-qc /proc/sys/crypto/fips_enabled=1, openssl list -providers -> \"Ubuntu 24.04 OpenSSL Cryptographic Module 3.0.13-0ubuntu3.15+Fips2 status: active\"; nginx links the system OpenSSL; v1.2.0 installed and healthy on that host. GET /api/system/tls reports FIPS mode (tm/hoststatus.py:148 fips_mode).",
+        "verify": "openssl list -providers | grep -A2 fips ; cat /proc/sys/crypto/fips_enabled",
+        "gap": ""
+      },
+      {
+        "id": "NGNX-APP-003040",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "The www-data account password is locked. Installer check.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G1-installer-host-checks",
+        "evidence": "INHERITED-UNVERIFIED (not measured: passwd -S needs root, sudo on tm-qc needs a password). Stock Ubuntu www-data has \"*\" in /etc/shadow (locked). No product check.",
+        "verify": "sudo passwd -S www-data  -> L (locked)",
+        "gap": "No installer check."
+      },
+      {
+        "id": "NGNX-APP-003060",
+        "sev": "CAT II",
+        "decision": "Other",
+        "james_comment": "",
+        "board_why": "API maintenance sessions separated. Admin is via SSH on a separate port or management network. Largely inherited; document.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G6-docs-evidence",
+        "evidence": "OTHER / N/A: the check applies only to the NGINX Plus API (api directive); none is configured. Administration is SSH (PPSM 22) on the host, not through nginx.",
+        "verify": "nginx -qT | grep -E '^\\s*api\\b'  -> none (N/A)",
+        "gap": "Document N/A."
+      },
+      {
+        "id": "NGNX-APP-003220",
+        "sev": "CAT II",
+        "decision": "Other",
+        "james_comment": "",
+        "board_why": "Access-token keys = the Flask secret_key used for session signing. It is in config.yaml at 640 root:topic-manager. Treat as met with documentation.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "OTHER. Access-token key = Flask secret_key in config.yaml, 640 root:topic-manager (install.sh:1571-1577 checks/fixes), refused if unset or placeholder (app.py:57-62), generated from secrets/os.urandom (install.sh:1261). Cert/key perms MET (000730); uploads restricted to EC P-256/P-384, RSA 2048-4096, SHA-2 (tm/tls_check.py:48). No rotation procedure for secret_key is documented.",
+        "verify": "ls -l /etc/topic-manager/config.yaml /etc/topic-manager/tls/server.*",
+        "gap": "Owed: documentation (rotation = edit secret_key, restart, everyone re-signs in)."
+      },
+      {
+        "id": "NGNX-APP-003330",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Token revocation = server-side session delete on logout or timeout. Already implemented; document.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G4-session-auth-consent",
+        "evidence": "Logout deletes the server row (routes.py:358-388, models.py:174-176); expiry invalidates (models.py:154-160) and SESSION_EXPIRED is audited (routes.py:215-217). NOT done: a session survives removal from required_group or an AD password reset until its idle timeout (group is checked only at login, auth.validate_credentials); no administrator revoke of another user's sessions (models.list_active_sessions is unused by any route).",
+        "verify": "Remove a signed-in user from required_group -> their next request is refused; audit row with reason.",
+        "gap": "Authentication-source change does not revoke."
+      },
+      {
+        "id": "SRG-APP-000001-DB-000031",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "The same app-level concurrent session cap as NGINX 000010.",
+        "board_setting": "Security > Sessions: max concurrent sessions per user",
+        "verdict": "MET",
+        "group": null,
+        "evidence": "settings_schema.py:36 default 3 (range 0..50 :62), enforced at login routes.py:299-307; all users are administrators by design (SRG default would be 10 for DBAs).",
+        "verify": "Sign in 4 times as one user -> 4th is 429 LOGIN_REFUSED.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000089-DB-000064",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "The app writes the audit trail into tm.db. Audit generation is the app's job, not SQLite's.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G5-audit-record-content",
+        "evidence": "21 DB actions (README Compliance). NOT audited: FAILED topic writes (routes.py:709-710, 750-751, 769-770 return 502 with no record), failed cluster test/metadata, reads of the audit trail itself (GET /api/audit routes.py:800, GET /api/audit/export routes.py:813), CSRF refusals (routes.py:190) and 400 validation refusals on write routes.",
+        "verify": "Force a Kafka create failure -> an audit row with outcome failure; export the audit CSV -> AUDIT_EXPORT row.",
+        "gap": "Unsuccessful events and access to audit data."
+      },
+      {
+        "id": "SRG-APP-000095-DB-000039",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Audit rows carry the action type.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "audit_log.action NOT NULL (models.py:84).",
+        "verify": "Inspect any export row.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000096-DB-000040",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Audit rows carry a timestamp.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "audit_log.ts NOT NULL (models.py:82), set by audit._new_record (audit.py:157).",
+        "verify": "Inspect any export row.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000097-DB-000041",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Audit rows carry the cluster/topic (where).",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "target + cluster_id columns (models.py:85,87), e.g. CREATE topic + cluster id routes.py:714-716.",
+        "verify": "Inspect CREATE/DELETE rows.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000098-DB-000042",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Audit rows carry the source IP.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G5-audit-record-content",
+        "evidence": "No source column (models.py:80-88). The client address is recorded only for auth events, and in the TARGET field: LOGIN routes.py:318, LOGIN_FAILED :278, LOGIN_REFUSED :349, LOGOUT :386, SESSION_EXPIRED :216. CREATE/UPDATE_CONFIG/DELETE, CLUSTER_*, SETTINGS_UPDATE, SYSTEM_APPLY_*, SERVICE_RESTART carry no source. README Compliance claims \"Audit log with user, IP, timestamp\" for all rows.",
+        "verify": "Delete a topic -> its row names the client address.",
+        "gap": "Add a source column (request.remote_addr; \"system\" for timer/helper rows)."
+      },
+      {
+        "id": "SRG-APP-000099-DB-000043",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Audit rows carry success/failure.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G5-audit-record-content",
+        "evidence": "No outcome column. Success is implied by the action word; only auth has failure words (LOGIN_FAILED/REFUSED) and SYSTEM_APPLY_RESULT carries state in detail (apply.py:367). Failed topic writes are not recorded at all (see 000089).",
+        "verify": "Every row states success|failure.",
+        "gap": "Add an outcome column + record failures."
+      },
+      {
+        "id": "SRG-APP-000100-DB-000201",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Audit rows carry the username.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "audit_log.user NOT NULL (models.py:83); system rows use SYSTEM_USER (audit_retention.py:97).",
+        "verify": "Inspect rows.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000116-DB-000057",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Timestamps come from the system clock, so the clock must be synced.",
+        "board_setting": "System > Time source (NTP servers)",
+        "verdict": "MET",
+        "group": null,
+        "evidence": "Timestamps from the OS clock: datetime.now(timezone.utc) audit.py:157, models.py:135-136.",
+        "verify": "Compare a fresh row ts with date -u.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000118-DB-000059",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "tm.db is mode 644 today. Fixed to 0600 in this release.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "tm.db 0600 / data dir 0700 created by os.open (models.py:16-37) and narrowed at start (:73-76); install.sh:1107 safe_install_dir 700 topic-manager; syslog copy in /var/log/auth.log root:adm 0640 (audit.py:31-35); backups 0700 root (install.sh:1126, upgrade-full.sh:2454-2457).",
+        "verify": "sudo -u nobody test -r /opt/topic-manager/data/tm.db && echo FINDING ; stat -c '%a %U' /opt/topic-manager/data/tm.db",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000119-DB-000060",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Same file permission fix. The app offers no audit edit/delete API.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "Same modes; no audit edit/delete API (routes.py: only GET /audit, GET /audit/export).",
+        "verify": "As 000118.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000120-DB-000061",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Same file permission fix. Retention pruning is bounded by a setting.",
+        "board_setting": "Logging > Audit retention",
+        "verdict": "MET",
+        "group": null,
+        "evidence": "Same modes; pruning bounded audit_retention_days >= 30, audit_max_rows >= 10000 (settings_schema.py:68-69) and audited AUDIT_PRUNE in the same transaction (audit_retention.py:97).",
+        "verify": "As 000118; Settings refuses retention 29.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000121-DB-000202",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Audit features = the audit module and settings. Only admin-group users reach Settings.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "Audit features reachable only through @require_auth routes; every authenticated user is a member of required_group (design, README \"No role separation\").",
+        "verify": "Unauthenticated GET /api/audit -> 401.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000122-DB-000203",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Audit configuration lives in config.yaml at 640 root:topic-manager.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "config.yaml 640 root:topic-manager (install.sh:1571); retention settings changed only via audited SETTINGS_UPDATE (routes.py:920).",
+        "verify": "ls -l /etc/topic-manager/config.yaml",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000123-DB-000204",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Auditing cannot be switched off from the UI. Keep it that way.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "No setting disables auditing; audit write failure blocks the action (audit.py:121-133, routes.py:112-120).",
+        "verify": "Settings has no audit on/off.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000133-DB-000198",
+        "sev": "CAT I",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "SQLite comes from the OS package; install is root-only. Mostly inherited.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "install.sh:913 and upgrade-full.sh:415 refuse non-root; SQLite is the OS libsqlite3.",
+        "verify": "Run install.sh as non-root -> refused.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000133-DB-000199",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "tm.db lives in its own directory /opt/topic-manager/data.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "tm.db in its own /opt/topic-manager/data (install.sh:71,1107).",
+        "verify": "ls -ld /opt/topic-manager/data",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000133-DB-000200",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Database objects are owned by the topic-manager service account.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "data dir and db owned by the service account (install.sh:1107,1167).",
+        "verify": "stat -c %U /opt/topic-manager/data/tm.db",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000141-DB-000091",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "No sample databases or extra objects ship.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "Three tables + two indexes only (models.py:79-111); no sample DB ships.",
+        "verify": "python3 -c sqlite_master listing",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000141-DB-000093",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "SQLite load_extension stays disabled (Python's default). Assert it in code.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G7-db-hardening",
+        "evidence": "Behaviour MET by default (Python sqlite3 has load_extension disabled). Board asked to ASSERT it in code: no enable_load_extension / PRAGMA anywhere in tm/ (AST scan, 0 hits); get_db models.py:60-63 is a bare sqlite3.connect.",
+        "verify": "A test that get_db connections refuse load_extension.",
+        "gap": "Explicit disable/assert + a test."
+      },
+      {
+        "id": "SRG-APP-000179-DB-000114",
+        "sev": "CAT I",
+        "decision": "Other",
+        "james_comment": "",
+        "board_why": "SQLite performs no cryptography, so the FIPS requirement lands on the OS and Python. Likely N/A for SQLite itself, with a note.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G6-docs-evidence",
+        "evidence": "OTHER. SQLite does no cryptography (N/A for the DBMS). The app layer is the real gap: README.md:1054 - the cryptography and confluent-kafka wheels bundle their OWN OpenSSL, outside the host validated module; tm/tls_check.py uses the host openssl CLI for uploads.",
+        "verify": "N/A for SQLite; document the app-layer limitation.",
+        "gap": "Document; removing the bundled OpenSSL is out of scope A."
+      },
+      {
+        "id": "SRG-APP-000220-DB-000149",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Logout deletes the server-side session row.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "Logout deletes the row (routes.py:363-366, models.py:174-176); expired rows purged (models.py:195-197).",
+        "verify": "Reuse a cookie after sign-out -> 401.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000223-DB-000168",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Session IDs come from secrets.token_urlsafe.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "Session ids are server-generated uuid.uuid4() (models.py:143; os.urandom, 122 bits) and only ids present in the table validate (models.py:154-160). NOTE the board text said secrets.token_urlsafe: the code uses uuid4.",
+        "verify": "Forge a sid -> 401.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000225-DB-000153",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "The app refuses to start on a DB open failure (fail closed). Verify.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "create_app runs init_db and refuses a missing/placeholder secret_key (app.py:57-62,86); audit unavailable -> 503 and no action (routes.py:94-120); SQLite transactions roll back.",
+        "verify": "Make tm.db unwritable -> write routes 503.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000226-DB-000147",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Use SQLite journal/WAL; errors go to the journal.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "SQLite default rollback journal (no journal_mode PRAGMA anywhere); failures to journald/syslog at CRIT (audit.py:135-153).",
+        "verify": "journalctl -u topic-manager",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000231-DB-000154",
+        "sev": "CAT I",
+        "decision": "Other",
+        "james_comment": "",
+        "board_why": "Confidentiality at rest. File permissions today; full-disk encryption is a host/platform decision (LUKS or vSAN encryption).",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G6-docs-evidence",
+        "evidence": "OTHER. Integrity/confidentiality at rest = file modes (MET above); encryption at rest is a host/platform decision (LUKS / vSAN encryption) with an AO-determination escape in the check.",
+        "verify": "Document the AO decision point.",
+        "gap": "Document."
+      },
+      {
+        "id": "SRG-APP-000243-DB-000374",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Only the service account and root can reach the file (after the 0600 fix).",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "DB 0600/0700 service account; backups /var/backups/topic-manager 0700 root (install.sh:1126, upgrade-full.sh:2454-2457).",
+        "verify": "find /opt/topic-manager/data /var/backups/topic-manager -perm /o+r",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000251-DB-000160",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Inputs are validated (topic names, config allow-list, integer bounds).",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "Topic name regex routes.py:683, bounded ints :691-694, config allow-list :700, settings validators settings_schema.py, cluster validators clusters.py:68-71.",
+        "verify": "Create topic \"a b\" -> 400.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000251-DB-000391",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "No dynamic SQL; all queries are parameterised. Verify with grep.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "AST scan of every execute(): the only non-constant SQL builds \"?\" placeholder lists (routes.py:853, settings_schema.py:244) or names module constants (apply.py _UPSERT_SETTING/_SELECT_SETTING, audit_retention.py _OLDEST_SQL). No eval/exec.",
+        "verify": "Re-run the AST scan.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000266-DB-000162",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "API errors return generic messages; detail goes to the server log.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G5-audit-record-content",
+        "evidence": "Raw exception text reaches the client: jsonify({\"error\": str(exc)}), 502 at routes.py:648, 660, 710, 730, 751, 770, 789 (Kafka/broker errors: broker host names, internal addresses, library text). Board said \"API errors return generic messages\" - true for login (routes.py:255), not for Kafka routes.",
+        "verify": "Point a cluster at a dead broker -> client sees a generic sentence; detail only in the service log.",
+        "gap": "Generic client message + server-side detail."
+      },
+      {
+        "id": "SRG-APP-000295-DB-000305",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Idle and absolute session termination already exist.",
+        "board_setting": "Security > Sessions: idle timeout (exists)",
+        "verdict": "PARTLY",
+        "group": "G4-session-auth-consent",
+        "evidence": "Idle timeout only (sliding expires_at, models.py:163-171). There is NO absolute session lifetime (created_at is stored, models.py:100, but never enforced). Board text \"Idle and absolute session termination already exist\" is wrong about absolute.",
+        "verify": "Keep a tab active past the absolute limit -> 401 SESSION_EXPIRED with reason absolute.",
+        "gap": "Absolute lifetime (organisation-defined) + reason in the audit row."
+      },
+      {
+        "id": "SRG-APP-000296-DB-000306",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "A Sign out button exists.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "Sign out button -> POST /api/auth/logout (routes.py:358).",
+        "verify": "Click Sign out.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000357-DB-000316",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Audit storage capacity must be defined: a max rows/days retention setting.",
+        "board_setting": "Logging > Audit retention and capacity",
+        "verdict": "MET",
+        "group": null,
+        "evidence": "Retention by days/rows (settings_schema.py:42-43) + capacity = max(rows/limit, db/(db+free)) (audit_retention.py).",
+        "verify": "GET /api/audit/capacity",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000359-DB-000319",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Warn at 75% of the audit capacity (banner in Settings plus a syslog message).",
+        "board_setting": "Logging > Capacity warning threshold (75%)",
+        "verdict": "MET",
+        "group": null,
+        "evidence": "audit_warn_pct default 75 (settings_schema.py:44); AUDIT_CAPACITY_WARNING row + syslog WARNING per crossing + Settings banner (audit_retention.py:20,189-192).",
+        "verify": "Lower audit_max_rows below 75% -> warning row + syslog line.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000360-DB-000320",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Alert on audit write failure: syslog at CRIT plus a UI banner.",
+        "board_setting": "Logging > Remote syslog destination",
+        "verdict": "PARTLY",
+        "group": "G3-audit-offload",
+        "evidence": "AUDIT_WRITE_FAILED at CRIT to local syslog with the whole record (audit.py:135-153) and 503 to the actor. Real-time alert to support staff exists only when remote syslog is configured (default off, settings_schema.py:30). No persistent UI indication of an audit-failure state (board: \"plus a UI banner\").",
+        "verify": "Make tm.db read-only -> CRIT line at the collector within seconds; Settings shows an audit-failure banner.",
+        "gap": "Off-host by default is not guaranteed; no UI banner."
+      },
+      {
+        "id": "SRG-APP-000374-DB-000322",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Store timestamps in UTC ISO-8601.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G5-audit-record-content",
+        "evidence": "Stored in UTC but not self-describing: audit.py:157 and audit_retention.py:51 write \"%Y-%m-%d %H:%M:%S\" with no Z/offset; CSV header just \"timestamp\" (audit.py:273); AuditTab.js:60 shows e.ts raw. Board: \"Store timestamps in UTC ISO-8601\". Sessions already use isoformat +00:00 (models.py:138-139).",
+        "verify": "Export row shows 2026-10-02T12:00:00Z (or header says UTC).",
+        "gap": "Mark UTC. HAZARD: retention compares ts as strings (audit_retention.py:74-76, _OLDEST_SQL :42) - changing the stored format mixes formats in one column."
+      },
+      {
+        "id": "SRG-APP-000375-DB-000323",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "One-second or finer granularity.",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "One-second granularity (audit.py:157).",
+        "verify": "Inspect rows.",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000456-DB-000390",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "SQLite is patched through Ubuntu updates within 30 days. Inherited from the OS patch process.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G6-docs-evidence",
+        "evidence": "INHERITED: SQLite is the OS libsqlite3 3.45.1 (SBOM.md:74,97), patched by the host update process; the product does nothing to prevent or verify it (an air-gapped host patches only through the operator).",
+        "verify": "apt list --upgradable | grep libsqlite3 ; unattended-upgrades log",
+        "gap": "Document the dependency on the OS patch process (no build)."
+      },
+      {
+        "id": "SRG-APP-000515-DB-000318",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Off-load the audit trail to the log management facility continuously (syslog).",
+        "board_setting": "Logging > Remote syslog destination",
+        "verdict": "PARTLY",
+        "group": "G3-audit-offload",
+        "evidence": "Every committed row is emitted to local syslog (audit.py:103-118) and forwarded by rsyslog with a disk-assisted queue when Settings syslog is applied (tm-apply:776-813). Default OFF (settings_schema.py:30) unless install.sh --syslog-host; a fresh install off-loads nothing and says so nowhere at install.",
+        "verify": "Collector receives topic-manager-audit lines in near real time.",
+        "gap": "Destination is inherently operator-chosen; owed: install/upgrade WARN and compliance status when none is set."
+      },
+      {
+        "id": "SRG-APP-000795-DB-000130",
+        "sev": "CAT II",
+        "decision": "Other",
+        "james_comment": "",
+        "board_why": "Alert on audit tampering. Could come from AIDE/auditd watches on tm.db (OS layer) instead of the app.",
+        "board_setting": null,
+        "verdict": "PARTLY",
+        "group": "G7-db-hardening",
+        "evidence": "OTHER. Nothing detects out-of-band access/modification/deletion of tm.db or the audit syslog copy. Candidates: an auditd watch rule (-w /opt/topic-manager/data/tm.db -p wa -k tm-audit) shipped by the installer, or AIDE. Host layer.",
+        "verify": "auditctl -l | grep tm.db",
+        "gap": "Decide ship-a-rule vs document."
+      },
+      {
+        "id": "SRG-APP-000920-DB-000320",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Clock sync. Chrony/timesyncd set from Settings.",
+        "board_setting": "System > Time source (NTP servers)",
+        "verdict": "MET",
+        "group": null,
+        "evidence": "Settings Time source (settings_schema.py:35, tm-apply chrony/timesyncd render :959, :1014), install.sh --ntp-server / --install-chrony; default leaves the host daemon (STIG host: chrony).",
+        "verify": "chronyc tracking",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-000925-DB-000330",
+        "sev": "CAT II",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "Compare against the authoritative time source; show offset/status in Settings.",
+        "board_setting": "System > Time source status",
+        "verdict": "MET",
+        "group": null,
+        "evidence": "chrony sources rendered with maxpoll 16 (tm-apply:959); offset/stratum/last sync shown by GET /api/system/time (routes.py:1044, hoststatus.py:106-130).",
+        "verify": "chronyc sources ; Settings > Time source status",
+        "gap": ""
+      },
+      {
+        "id": "SRG-APP-001035-DB-000323",
+        "sev": "CAT I",
+        "decision": "Yes",
+        "james_comment": "",
+        "board_why": "CAT I. SQLite 3.45.1 from Ubuntu 24.04 LTS is vendor-supported until 2029 (standard) / 2034 (ESM).",
+        "board_setting": null,
+        "verdict": "MET",
+        "group": null,
+        "evidence": "SQLite 3.45.1 from Ubuntu 24.04 LTS (SBOM.md:74; measured on .90 2026-09-26), vendor-supported.",
+        "verify": "python3 -c 'import sqlite3;print(sqlite3.sqlite_version)'",
+        "gap": ""
+      }
+    ],
+    "scope_groups": [
+      {
+        "group": "G2-nginx-config",
+        "title": "nginx configuration (log_format, worker_connections, error pages)",
+        "count": 3,
+        "rules": [
+          {
+            "id": "NGNX-APP-000010",
+            "verdict": "PARTLY",
+            "gap": "nginx worker_connections not managed/declared; the app cap is the real control and is undocumented as the answer to this rule."
+          },
+          {
+            "id": "NGNX-APP-000240",
+            "verdict": "NOT MET",
+            "gap": "Ship a named log_format (http context, conf.d) and use it on every access_log the product writes (file and syslog)."
+          },
+          {
+            "id": "NGNX-APP-001070",
+            "verdict": "PARTLY",
+            "gap": "Custom 404/50x pages (small)."
+          }
+        ],
+        "files": [
+          "nginx/topic-manager.conf (:168-172 access_log/error_log; error_page)",
+          "NEW nginx/tm-log-format.conf -> /etc/nginx/conf.d/ (http context) or extend nginx/tm-limits.conf",
+          "install/libexec/tm-apply (render_nginx_syslog :825-832 must name the format)",
+          "install.sh (install_if_absent list :1421; nginx.conf edits follow manage_nginx_ssl_protocols :349-418)",
+          "install/upgrade-full.sh (BASELINE_PATHS, owned-artefacts list, manifest, restore retirement)",
+          "prepare-offline.sh (no-git allowlist)",
+          "NEW static error pages under /var/www/topic-manager or nginx/ (if built)",
+          "tests/t36-nginx-limits.sh, t43-web-tier-round4.sh, t45-rollback-host-artefacts.sh"
+        ],
+        "note": "worker_connections lives in /etc/nginx/nginx.conf (events block) - a second managed line in a file the product already edits."
+      },
+      {
+        "group": "G1-installer-host-checks",
+        "title": "Installer / upgrade host checks (nginx service account, modules, /etc/nginx and log modes)",
+        "count": 6,
+        "rules": [
+          {
+            "id": "NGNX-APP-000140",
+            "verdict": "PARTLY",
+            "gap": "No installer/audit-only check."
+          },
+          {
+            "id": "NGNX-APP-000150",
+            "verdict": "PARTLY",
+            "gap": "No installer/audit-only check."
+          },
+          {
+            "id": "NGNX-APP-000370",
+            "verdict": "PARTLY",
+            "gap": "No installer allow-list check."
+          },
+          {
+            "id": "NGNX-APP-000400",
+            "verdict": "PARTLY",
+            "gap": "Pre-create the site logs 0640 and verify; the access log holds client IPs."
+          },
+          {
+            "id": "NGNX-APP-001590",
+            "verdict": "PARTLY",
+            "gap": "No installer check."
+          },
+          {
+            "id": "NGNX-APP-003040",
+            "verdict": "PARTLY",
+            "gap": "No installer check."
+          }
+        ],
+        "files": [
+          "install.sh (new check block near the nginx section ~:1405-1500; pre-create /var/log/nginx/topic-manager-*.log 0640)",
+          "install/upgrade-full.sh (--audit-only rows via row() :1542, phase-2 permission audit ~:1840-1990; web account row :1852)",
+          "TROUBLESHOOTING.md (keyed to exact row strings)",
+          "docs/INSTALL.md",
+          "tests/t38-install-upgrade-v120.sh or a new tN"
+        ],
+        "note": "Five of six are true on a stock STIG host today (measured tm-qc); the work is verification and, for 000400, making the site logs 0640 at creation."
+      },
+      {
+        "group": "G4-session-auth-consent",
+        "title": "Session / authentication / consent",
+        "count": 3,
+        "rules": [
+          {
+            "id": "NGNX-APP-000180",
+            "verdict": "PARTLY",
+            "gap": "Default off, not server-enforced, acceptance not audited. James: \"Keep a Custom Selection Panel like now incase DoD needs to come down\" = keep the operator on/off toggle (and keep the text replaceable)."
+          },
+          {
+            "id": "NGNX-APP-003330",
+            "verdict": "PARTLY",
+            "gap": "Authentication-source change does not revoke."
+          },
+          {
+            "id": "SRG-APP-000295-DB-000305",
+            "verdict": "PARTLY",
+            "gap": "Absolute lifetime (organisation-defined) + reason in the audit row."
+          }
+        ],
+        "files": [
+          "tm/models.py (validate_session :154-160: absolute lifetime from created_at)",
+          "tm/routes.py (require_auth :200-245, login :258-339, logout reasons :60-64)",
+          "tm/config.py (DEFAULT_SESSION_TIMEOUT_MINUTES; new absolute default)",
+          "tm/settings_schema.py (new keys, ranges, ADMIN_DEFAULTS)",
+          "tm/auth.py (group re-check if 003330 is built)",
+          "app/components/LoginView.js (:14-36,:108-152 consent)",
+          "app/main.js (idle timer)",
+          "app/components/SettingsTab.js (Security > Sessions, Banner and consent)",
+          "install.sh (consent flag/default)",
+          "config/config.yaml.example + tools/check-config-example.sh (if a config key is added)",
+          "tests/t14-idle-session.sh, t08-settings-banner.sh, t30/t31 settings"
+        ],
+        "note": "New audit actions (e.g. CONSENT_ACCEPTED, SESSION_REVOKED) oblige README Compliance list + t39 count."
+      },
+      {
+        "group": "G6-docs-evidence",
+        "title": "Documentation / STIG evidence for inherited, N/A and Other rules",
+        "count": 8,
+        "rules": [
+          {
+            "id": "NGNX-APP-000250",
+            "verdict": "PARTLY",
+            "gap": "Inherited from OS STIG; owed: documentation (and optionally a check row)."
+          },
+          {
+            "id": "NGNX-APP-000850",
+            "verdict": "PARTLY",
+            "gap": "Owed: written accepted-risk + removal plan (board: document now, remove later)."
+          },
+          {
+            "id": "NGNX-APP-001630",
+            "verdict": "PARTLY",
+            "gap": "Decide document-only vs an optional allow-list (see design questions)."
+          },
+          {
+            "id": "NGNX-APP-001900",
+            "verdict": "PARTLY",
+            "gap": "Operator-owned. Owed: doc; optional: show issuer + \"self-signed placeholder in use\" warning on the TLS pane."
+          },
+          {
+            "id": "NGNX-APP-003060",
+            "verdict": "PARTLY",
+            "gap": "Document N/A."
+          },
+          {
+            "id": "SRG-APP-000179-DB-000114",
+            "verdict": "PARTLY",
+            "gap": "Document; removing the bundled OpenSSL is out of scope A."
+          },
+          {
+            "id": "SRG-APP-000231-DB-000154",
+            "verdict": "PARTLY",
+            "gap": "Document."
+          },
+          {
+            "id": "SRG-APP-000456-DB-000390",
+            "verdict": "PARTLY",
+            "gap": "Document the dependency on the OS patch process (no build)."
+          }
+        ],
+        "files": [
+          "README.md Compliance",
+          "docs/INSTALL.md",
+          "NEW docs/STIG-COMPLIANCE.md (or a Settings pane/API - see design questions)",
+          "SBOM.md (SQLite patch dependency)",
+          "nginx/tm-security-headers.conf (unsafe-eval accepted-risk comment)"
+        ],
+        "note": "Also the home for the per-rule evidence of the 42 MET rules if the evidence form is a document."
+      },
+      {
+        "group": "G3-audit-offload",
+        "title": "Audit off-load and failure alerting",
+        "count": 3,
+        "rules": [
+          {
+            "id": "NGNX-APP-001400",
+            "verdict": "PARTLY",
+            "gap": "nginx.conf main log directives; no install-time warning when no collector is configured."
+          },
+          {
+            "id": "SRG-APP-000360-DB-000320",
+            "verdict": "PARTLY",
+            "gap": "Off-host by default is not guaranteed; no UI banner."
+          },
+          {
+            "id": "SRG-APP-000515-DB-000318",
+            "verdict": "PARTLY",
+            "gap": "Destination is inherently operator-chosen; owed: install/upgrade WARN and compliance status when none is set."
+          }
+        ],
+        "files": [
+          "install/libexec/tm-apply (syslog domain :776-832)",
+          "install.sh (--syslog-host handling :853-909; WARN when none)",
+          "install/upgrade-full.sh (--audit-only WARN row)",
+          "/etc/nginx/nginx.conf http-level access_log/error_log (new managed edit)",
+          "tm/audit.py (write_failed :135-153: persistent failure flag for a UI banner)",
+          "tm/routes.py (new status field or route)",
+          "app/components/SettingsTab.js / app/main.js (banner)"
+        ],
+        "note": "The destination is inherently operator-chosen; the gap is the default-off state being silent and nginx.conf main logs never reaching syslog."
+      },
+      {
+        "group": "G5-audit-record-content",
+        "title": "Audit record content and error hygiene",
+        "count": 5,
+        "rules": [
+          {
+            "id": "SRG-APP-000089-DB-000064",
+            "verdict": "PARTLY",
+            "gap": "Unsuccessful events and access to audit data."
+          },
+          {
+            "id": "SRG-APP-000098-DB-000042",
+            "verdict": "PARTLY",
+            "gap": "Add a source column (request.remote_addr; \"system\" for timer/helper rows)."
+          },
+          {
+            "id": "SRG-APP-000099-DB-000043",
+            "verdict": "PARTLY",
+            "gap": "Add an outcome column + record failures."
+          },
+          {
+            "id": "SRG-APP-000266-DB-000162",
+            "verdict": "PARTLY",
+            "gap": "Generic client message + server-side detail."
+          },
+          {
+            "id": "SRG-APP-000374-DB-000322",
+            "verdict": "PARTLY",
+            "gap": "Mark UTC. HAZARD: retention compares ts as strings (audit_retention.py:74-76, _OLDEST_SQL :42) - changing the stored format mixes formats in one column."
+          }
+        ],
+        "files": [
+          "tm/models.py (audit_log schema :80-88 + migration for source/outcome columns)",
+          "tm/audit.py (_new_record :156-159, log_action :199-238 signature, format_record :64-70 syslog line, export_audit_csv :264-276 header)",
+          "tm/routes.py (22 log_action call sites incl. failures at :709-710, :750-751, :769-770; str(exc) at :648, :660, :710, :730, :751, :770, :789; audit read/export :800-821)",
+          "tm/apply.py (:370, :389, :442, :466)",
+          "tm/audit_retention.py (:42, :51, :74-76 ts string compare; :97, :192)",
+          "app/components/AuditTab.js (columns :60)",
+          "README.md (Compliance action list + \"user, IP, timestamp\" claim)",
+          "tests/t16, t32-audit-syslog.sh, t33-audit-retention.sh, t39-docs-v120.sh, t42-route-characterisation.sh"
+        ],
+        "note": "Largest blast radius in the release: the audit row shape is consumed by the syslog collector (key=value line), the CSV export, the Audit tab, retention and the README."
+      },
+      {
+        "group": "G7-db-hardening",
+        "title": "Database file protections",
+        "count": 2,
+        "rules": [
+          {
+            "id": "SRG-APP-000141-DB-000093",
+            "verdict": "PARTLY",
+            "gap": "Explicit disable/assert + a test."
+          },
+          {
+            "id": "SRG-APP-000795-DB-000130",
+            "verdict": "PARTLY",
+            "gap": "Decide ship-a-rule vs document."
+          }
+        ],
+        "files": [
+          "tm/models.py (get_db :60-63 explicit load_extension disable)",
+          "NEW install/auditd/topic-manager.rules -> /etc/audit/rules.d/ (if 795 is built) + install.sh/upgrade-full.sh/manifest/restore + prepare-offline.sh",
+          "tests/t17-audit-db-modes.sh"
+        ],
+        "note": "auditd is a new host artefact; the STIG host already runs auditd, a non-STIG host may not have it installed (would be a new package -> conflicts with \"no new infrastructure\")."
+      }
+    ],
+    "scope": [
+      "README.md",
+      "README.md Compliance",
+      "SBOM.md",
+      "TROUBLESHOOTING.md",
+      "app/components/AuditTab.js",
+      "app/components/LoginView.js",
+      "app/components/SettingsTab.js",
+      "app/components/SettingsTab.js / app/main.js",
+      "app/main.js",
+      "config/config.yaml.example + tools/check-config-example.sh",
+      "docs/INSTALL.md",
+      "install.sh",
+      "install/libexec/tm-apply",
+      "install/upgrade-full.sh",
+      "nginx/tm-security-headers.conf",
+      "nginx/topic-manager.conf",
+      "prepare-offline.sh",
+      "tests/t14-idle-session.sh, t08-settings-banner.sh, t30/t31 settings",
+      "tests/t16, t32-audit-syslog.sh, t33-audit-retention.sh, t39-docs-v120.sh, t42-route-characterisation.sh",
+      "tests/t17-audit-db-modes.sh",
+      "tests/t36-nginx-limits.sh, t43-web-tier-round4.sh, t45-rollback-host-artefacts.sh",
+      "tests/t38-install-upgrade-v120.sh or a new tN",
+      "tm/apply.py",
+      "tm/audit.py",
+      "tm/audit_retention.py",
+      "tm/auth.py",
+      "tm/config.py",
+      "tm/models.py",
+      "tm/routes.py",
+      "tm/settings_schema.py",
+      "NEW nginx/tm-log-format.conf (or extend nginx/tm-limits.conf)",
+      "NEW docs/STIG-COMPLIANCE.md (DQ3)",
+      "NEW install/auditd/topic-manager.rules (only if DQ4 builds SRG-795)",
+      "CHANGELOG.md",
+      "every contract version surface (cascade)",
+      ".claude/project.yml (surfaces/gates/hazards if a new doc or gate is added)"
+    ],
+    "consumers": [
+      "Off-host syslog collector (Graylog or other) parses the audit key=value line tm/audit.py:67-70 - adding source/outcome or changing ts format changes what it parses.",
+      "CSV export consumers: header row tm/audit.py:273 (timestamp,user,action,target,detail,cluster_id).",
+      "app/components/AuditTab.js renders e.ts and the columns; tm/audit.get_audit_log dict keys :252-255.",
+      "tm/audit_retention.py compares ts lexicographically (:74-76) and reads MIN(ts) (:42) - a mixed-format ts column breaks age pruning silently.",
+      "README.md Compliance list of audited actions (21 + AUDIT_WRITE_FAILED) and t39 which holds README to the AST-derived set; also README claims \"user, IP, timestamp\" for every row, which is untrue today for non-auth rows.",
+      "tm/apply.py and tm/audit_retention.py write audit rows of their own (5 sites) - any log_action signature change reaches them, and install/libexec/tm-apply runs `python -m tm.apply audit` via topic-manager-apply-audit.path.",
+      "install/upgrade-full.sh owned-artefacts list, installed-files.manifest, BASELINE_PATHS and --restore retirement: every new host file (log_format conf, auditd rule, error pages) must be recorded or a rollback leaves/deletes it wrongly (v1.2.0 rounds 5-7).",
+      "prepare-offline.sh no-git fallback allowlist and git-archive bundle: new tracked dirs must be listed.",
+      "tools/check-env-neutral.sh will scan any new doc (no site names/addresses).",
+      "PPSM.csv + SettingsTab.downloadPpsm() pair (tools/check-ppsm-consistency.sh) if any port/service row changes (none expected).",
+      "TROUBLESHOOTING.md is keyed to exact installer/upgrade output strings - new check rows oblige entries.",
+      "tests/mutations.txt / tests/mutate.sh controls that pin current audit-row and nginx-config text.",
+      "Ubuntu /etc/logrotate.d/nginx (OS-owned) recreates /var/log/nginx/*.log 0640 www-data adm after rotation; the product must not fight it."
+    ],
+    "surfaces": [
+      "VERSION",
+      "tm/VERSION",
+      "app/components/modals/AboutModal.js",
+      "app/components/SettingsTab.js (PPSM version row)",
+      "app/components/TopBar.js + index.html + AboutModal ?v= tokens (16)",
+      "docs/INSTALL.md",
+      "SBOM.md",
+      "README.md (incl. Compliance action list)",
+      "CHANGELOG.md",
+      "TROUBLESHOOTING.md",
+      "install/README.md (if bundle contents change)",
+      "app/styles/main.css",
+      "install.sh",
+      "prepare-offline.sh",
+      "PPSM.csv",
+      ".claude/project.yml"
+    ],
+    "hazards_in_path": [
+      "nginx-add-header-inheritance (any new location, e.g. error pages, must include tm-security-headers.conf; prove with curl -skI per route class)",
+      "csv-single-quoted-literals (SettingsTab.js strings: no apostrophes)",
+      "version-surface-drift",
+      "stig-umask-403 (pre-created logs/pages must be readable by the real principal)",
+      "agent-heredoc-backslashes (nginx log_format strings carry $ and quotes)",
+      "misleading-failure-message (new check rows)",
+      "sqlite3-cli-absent (any host check of tm.db uses python3)",
+      "offline-bundle-is-a-repository (do NOT add auditd or any package to the bundle without a decision: scope says no new infrastructure)"
+    ],
+    "unknowns": [
+      "Second engine did not run (both Codex logins revoked); single-engine enumeration.",
+      "NGNX-APP-003040: passwd -S www-data not measured (needs root on tm-qc); assumed locked from stock Ubuntu.",
+      "nginx default error page body text under server_tokens off was not fetched (001070).",
+      "Whether tm-qc nginx log modes (0644 before first rotation) reproduce on a FRESH install vs the upgrade path that created them - measured on one host only.",
+      "Ubuntu 24.04 nginx package dynamic-module set on a host that installs nginx-full/extras: modules-enabled empty on tm-qc only.",
+      "WO-0005 file not present in ../topic-manager-v121/.work at scout time (v1.2.1 commits exist); its final file list may move before merge.",
+      "Organisation-defined values (absolute session lifetime, worker_connections, allow-list) are James/AO decisions, not derivable from the code.",
+      "The board \"why\" text was wrong in three places, corrected here: session ids are uuid4 not secrets.token_urlsafe (SRG-223); there is no absolute session timeout (SRG-295); API errors are not generic for Kafka routes (SRG-266)."
+    ]
+  },
+  "design_questions": [
+    "DQ1 Enforce vs check-and-report: for host state the product does not own (www-data shell/groups/password lock, /etc/nginx modes, loaded modules, nginx log modes), should install/upgrade ENFORCE it (change the host), CHECK and BLOCK, or CHECK and WARN (report only, with --audit-only showing it)?",
+    "DQ2 The OS service account: change www-data (usermod -s nologin, gpasswd -d, passwd -l) when it is non-compliant, or only verify and report, leaving the account to the OS STIG owner?",
+    "DQ3 Where the STIG evidence lives: an operator-facing compliance page/report in Settings (live per-rule status from the host, downloadable like the PPSM CSV), a static docs/STIG-COMPLIANCE.md, or both - and if both, which is the source of truth and what gate holds them to each other (cf. the PPSM pair)?",
+    "DQ4 'Other' rules (000250, 001630, 001900, 003060, 003220; SRG 179, 231, 795): document as inherited/N/A with the AO decision point, or build the optional control (client allow-list for 001630, issuer/self-signed warning for 001900, an auditd watch on tm.db for 795)?",
+    "DQ5 nginx.conf main context: manage the http-level access_log/error_log (syslog) and events worker_connections lines the way ssl_protocols is managed (a second and third edit of a file the OS package owns), or leave nginx.conf alone and document the literal-check findings as satisfied by the site configuration?",
+    "DQ6 Audit row shape: add source and outcome as new columns (migration; key=value syslog line and CSV header change for collectors), or encode them in the existing target/detail fields (no schema change, weaker evidence)? And the UTC marker: rewrite stored ts to ISO-8601 Z (migrate existing rows; retention compares ts as strings) or keep the stored form and label it UTC on export/display?",
+    "DQ7 Unsuccessful events: audit every failed write (Kafka 502s, validation 400s, CSRF 403s) and every audit read/export, or only failed Kafka/cluster writes plus export - given that failed requests are attacker-generatable and grow the audit table?",
+    "DQ8 Session lifetime and revocation: an absolute lifetime (value? 8 h / 12 h / org-defined setting) and whether removal from required_group revokes live sessions (periodic LDAP re-check vs only at the next sign-in vs an administrator 'end sessions' action)?",
+    "DQ9 Consent banner (000180): keep the app modal (James: keep the custom selection panel) but make it server-enforced and audited, or add the STIG's nginx cookie gate; and should a fresh install default it ON (DoD text) with an installer flag to turn it off?",
+    "DQ10 Off-load default: a fresh install with no --syslog-host - WARN only, refuse to finish without --syslog-host or an explicit --no-remote-syslog acknowledgement, or record it as an open item on the compliance page?"
+  ],
+  "openproject": {
+    "project": 5,
+    "ticket": 163,
+    "url": "https://openproject.int.crypticlight.com/work_packages/163"
+  },
+  "panel": {
+    "runs": [
+      {
+        "date": "2026-10-02",
+        "mode": "steering",
+        "brief": "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/brief.txt (sha1 fb95598c2806cd2256b739ec4d19778232fbc8b0; codex copy adds a VERSION canary)",
+        "asked": [
+          "claude (this agent)",
+          "codex gpt-daybreak-blue-latest xhigh (local)",
+          "local deepseek-coder-v2:16b (Luna2024)",
+          "gemini-3.1-pro-preview"
+        ],
+        "answered": [
+          "claude",
+          "gemini"
+        ],
+        "silent": [
+          {
+            "engine": "codex gpt-daybreak-blue-latest",
+            "reason": "exit 30 TOOL_FAILURE: refresh_token_invalidated 401 (login revoked); tried once",
+            "transcript": "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/codex-out/transcript.txt"
+          },
+          {
+            "seat": "local",
+            "model": "deepseek-coder-v2:16b",
+            "reason": "Luna2024 unreachable: TCP 11434/11435/22 timed out; prompt never sent"
+          }
+        ],
+        "engine_count": 2,
+        "verdict_class": "TWO-ENGINE - below the three-engine floor (exit 2)",
+        "samples": {
+          "claude": 1,
+          "gemini": 2
+        },
+        "brief_caveat": "near-unanimity on 6/10; brief stated 'must not break host STIG' and 'no new infrastructure', which may have led DQ1/2/4/5",
+        "ledger": {
+          "DQ1": {
+            "claude": "CHECK+WARN for host state; BLOCK only on the product's own artefacts (site log modes it creates); never change unowned host state",
+            "gemini": "CHECK+WARN via --audit-only, no halt, no mutation (2/2 samples)",
+            "split": "agree on WARN; Claude alone adds BLOCK for product-owned artefacts"
+          },
+          "DQ2": {
+            "claude": "verify and report only; never usermod/gpasswd/passwd -l www-data",
+            "gemini": "check and warn; account belongs to OS STIG owner (2/2)",
+            "split": "unanimous (2 engines)"
+          },
+          "DQ3": {
+            "claude": "both; docs/STIG-COMPLIANCE.md = source of truth (rule->control->check), live Settings page = measurement; PPSM-style gate on rule-id/check-id set",
+            "gemini": "both; static doc = source of truth, CI check keeps live page aligned",
+            "split": "unanimous (2 engines)"
+          },
+          "DQ4": {
+            "claude": "document inherited/N/A with AO point; build only the cheap 001900 issuer/self-signed warning; no auditd, no allow-list",
+            "gemini": "document all as inherited/N/A; build nothing (2/2)",
+            "split": "Claude alone builds the 001900 warning"
+          },
+          "DQ5": {
+            "claude": "no further nginx.conf edits; put log_format + syslog logging in product-owned conf.d; worker_connections documented as met by app session cap",
+            "gemini": "leave nginx.conf alone; document literal checks as met by site config and app session cap (2/2)",
+            "split": "agree no new nginx.conf edits; differ on whether http-level logging moves to conf.d (build) or is documented only"
+          },
+          "DQ6": {
+            "claude": "new source/outcome columns by migration; rewrite all ts to ISO-8601 Z in one transaction",
+            "gemini": "new columns; rewrite ts to ISO-8601 Z (2/2)",
+            "split": "unanimous (2 engines); both name this the biggest risk"
+          },
+          "DQ7": {
+            "claude": "audit failed writes incl. authenticated 400/403 + audit reads and exports; unauthenticated failures rate-limited/aggregated",
+            "gemini": "only failed Kafka/cluster writes, admin actions, exports; ignore 400/CSRF 403 as DoS vector (2/2)",
+            "split": "CONTRADICTED: Claude includes authenticated validation/CSRF failures and audit reads; Gemini excludes them"
+          },
+          "DQ8": {
+            "claude": "absolute lifetime org setting default 12 h; periodic LDAP re-check (~15 min) + admin end-sessions action",
+            "gemini": "12 h default; sample 1: periodic LDAP re-check ~15 min; sample 2: LDAP check on every API request",
+            "split": "agree 12 h + active revocation; mechanism unstable within Gemini; Claude alone adds admin action"
+          },
+          "DQ9": {
+            "claude": "keep app modal, server-enforce, audit acceptance, no nginx cookie gate; fresh install ON (DoD text) with off flag",
+            "gemini": "same; --disable-consent-banner flag (2/2)",
+            "split": "unanimous (2 engines)"
+          },
+          "DQ10": {
+            "claude": "refuse without --syslog-host or explicit --no-remote-syslog; acknowledged-off shown as open item on compliance page",
+            "gemini": "same (2/2)",
+            "split": "unanimous (2 engines)"
+          }
+        },
+        "recommendation_by": "claude (this agent; not an average)",
+        "answers": {
+          "claude": "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/answer-claude.txt",
+          "gemini": [
+            "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/answer-gemini.txt",
+            "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/answer-gemini-2.txt"
+          ]
+        },
+        "run": 1
+      },
+      {
+        "run": 2,
+        "date": "2026-10-02",
+        "mode": "steering",
+        "scope": "re-ask of the 5 splits only (DQ1, DQ4, DQ5, DQ7, DQ8); DQ2/3/6/9/10 STAND from run 1",
+        "brief": "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/run2/brief.txt (sha1 9da13fc7335087af30f6ad47e0a9397163dc053b; gemini/local copies identical; brief-codex.txt adds a VERSION canary, sha1 a7c325e3a4f3865b64b90e1bef0cfb3e79937c47)",
+        "brief_change": "neutralised: removed 'must not break the host STIG posture' and 'no new infrastructure'; stated facts only (OS STIG baseline is the operator's; offline bundle holds app wheels/config, auditd not in it; v1.3.0 goal = board's Yes rules); options listed 'in no particular order'",
+        "asked": [
+          "claude (this agent)",
+          "codex gpt-daybreak-blue-latest xhigh (local, Daybreak Blue)",
+          "codex gpt-6-astra high (VM .202.75, Codex pipeline - fallback)",
+          "local deepseek-coder-v2:16b (Luna2024)",
+          "gemini-3.1-pro-preview",
+          "codex gpt-6-astra high (VM .202.75, remote user james, attempt 2 after James reset credits)"
+        ],
+        "answered": [
+          "claude",
+          "gemini",
+          "codex (pipeline, VM)"
+        ],
+        "silent": [
+          {
+            "engine": "codex gpt-daybreak-blue-latest (local)",
+            "reason": "exit 30 TOOL_FAILURE: 'workspace routing discovery unauthorized (401)', reconnect 5/5 failed - re-login did not restore the lane",
+            "transcript": "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/run2/codex-out/transcript.txt"
+          },
+          {
+            "seat": "local",
+            "model": "deepseek-coder-v2:16b",
+            "reason": "Luna2024 192.168.50.183 TCP 11434 refused/timed out on a single nc probe; prompt never sent"
+          },
+          {
+            "engine": "codex gpt-6-astra (VM) attempt 1",
+            "reason": "workspace out of credits (superseded by attempt 2, which answered)"
+          }
+        ],
+        "engine_count": 3,
+        "verdict_class": "THREE-ENGINE (claude, gemini, codex VM); local deepseek SILENT; Daybreak Blue lane still 401",
+        "samples": {
+          "claude": 1,
+          "gemini": 2,
+          "codex": 1
+        },
+        "ledger": {
+          "DQ1": {
+            "claude": "CHECK+WARN for host state the product does not create; ENFORCE (+BLOCK on drift) for what it creates, e.g. site log created 0640 www-data:adm",
+            "gemini": "CHECK and WARN for OS host state; ENFORCE for product-created files (2/2)",
+            "split": "AGREED 3/3 on WARN host / ENFORCE own files; Codex alone adds BLOCK of compliance acceptance (the compliance status, not the install) absent an approved exception",
+            "codex": "CHECK and WARN for operator-owned baseline state; CHECK and BLOCK compliance acceptance for applicable failures without an approved exception. ENFORCE secure creation and permissions for product-owned files, including site logs before first rotation."
+          },
+          "DQ4": {
+            "claude": "per rule: build 001900 issuer/self-signed WARN; 001630 AO item with optional off-by-default allow-list in own site config; 795 operator item + reference auditd rule in docs; rest inherited/N/A",
+            "gemini": "document all as inherited/N/A with AO point; build nothing (2/2)",
+            "split": "3-WAY: all build-or-agree 001900 except Gemini (builds nothing); Codex alone builds 001630 allow-list and auditd integration for 795 and wants inheritance EVIDENCE, not labels",
+            "codex": "Build optional client restrictions for 001630 and certificate issuer/self-signed warnings for 001900 ... For SRG 795, offer operator-managed auditd integration with installation, persistence, and coverage checks ... For 000250, 003060, 003220, SRG 179 and 231, require AO-resolved applicability and inheritance evidence."
+          },
+          "DQ5": {
+            "claude": "(a) named DoD log_format + syslog in the product's own conf.d/site config; nginx.conf untouched",
+            "gemini": "(a) (2/2)",
+            "split": "AGREED 3/3 on (a)",
+            "codex": "Choose (a): ship a named log_format in product-owned configuration included at http scope, reference it from the site, and configure syslog when a collector is supplied; verify required fields, inclusion, syntax, and emitted records."
+          },
+          "DQ7": {
+            "claude": "signed-in failures (Kafka 502, 400, CSRF 403) + every audit read/export; anonymous failures to nginx/syslog stream, aggregated",
+            "gemini": "s1: all authenticated failed writes (Kafka/validation/CSRF) + exports, ignore anonymous; s2: only authenticated failed Kafka/cluster writes + exports",
+            "split": "Claude + Codex agree (incl. audit reads); Gemini narrower and unstable on 400/403",
+            "codex": "Audit every authenticated failed write, including validation and CSRF rejection, plus audit reads and exports ... Record anonymous failures through bounded security logging with aggregation, counts, and suppression summaries."
+          },
+          "DQ8": {
+            "claude": "org setting default 12 h; 15-min LDAP re-check + admin end-sessions; LDAP down = FAIL-CLOSED for writes after one missed interval, reads continue",
+            "gemini": "org setting default 12 h; 15-min LDAP re-check; LDAP down = FAIL-OPEN for existing sessions (2/2)",
+            "split": "CONTRADICTED 3-way on (iii): Gemini fail-open, Claude fail-closed for writes only, Codex deny all protected requests; default 12 h (Claude, Gemini) vs 8 h (Codex); interval 15 min (Claude, Gemini) vs 5 min (Codex); admin end-sessions: Claude + Codex",
+            "codex": "organization-defined absolute lifetime with an 8-hour shipped default ... re-check required_group every 5 minutes and provide an authorized, audited admin 'end sessions' action ... When a re-check is due and LDAP is unreachable, deny protected requests until verification succeeds."
+          }
+        },
+        "recommendation_by": "claude (this agent; not an average)",
+        "recommendation": {
+          "DQ1": "WARN host / ENFORCE own files (both engines)",
+          "DQ4": "side with Claude on 001900 warning only (cheap, in-vantage); 001630/795/rest inherited with AO point - Gemini's case against an allow-list is sound",
+          "DQ5": "(a) (both engines)",
+          "DQ7": "Claude: authenticated 502/400/403 + exports + audit reads; anonymous aggregated off-table",
+          "DQ8": "Claude on (iii): fail-closed for writes, reads continue - Gemini's fail-open lets a removed admin keep write access for the whole LDAP outage; adopt admin end-sessions"
+        },
+        "answers": {
+          "claude": "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/run2/answer-claude.txt (committed before reading others)",
+          "gemini": [
+            "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/run2/answer-gemini.txt",
+            "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/run2/answer-gemini-2.txt"
+          ],
+          "codex": "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/run2/codex-vm-out2/last-message.txt"
+        },
+        "codex_run": {
+          "banner": "OpenAI Codex v0.160.0; model: gpt-6-astra; reasoning effort: high; sandbox read-only; session 01a0ffbf-1eac-78b2-a80e-a46d0ad5db70",
+          "label": "Codex (pipeline, VM) - NOT Daybreak Blue",
+          "canary": "CANARY: 1.2.0 = VERSION 1.2.0 (verified; exec of cat VERSION shown in transcript)",
+          "wrapper_verdict": "ask_codex.py exit 30 'NO VERIFIABLE EVIDENCE' - the evidence-quote gate is a code-review check; this brief forbade reading the repo, so it cannot quote lines. Counted as ANSWERED on the canary (an executed, verified VERSION:1 read), not as a review finding",
+          "self_reported": "requested_model vm-default, effective_model unavailable",
+          "answer": "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/run2/codex-vm-out2/last-message.txt",
+          "transcript": "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/panel-wo6/run2/codex-vm-out2/transcript.txt"
+        },
+        "ruling": {
+          "DQ1": {
+            "by": "James",
+            "date": "2026-10-02",
+            "decision": "CHECK+WARN for host state the product does not create; ENFORCE (create correctly, BLOCK on drift) for product-owned files e.g. site log 0640 www-data:adm"
+          },
+          "DQ2": {
+            "by": "James",
+            "date": "2026-10-02",
+            "decision": "verify and report only; never modify www-data"
+          },
+          "DQ3": {
+            "by": "James",
+            "date": "2026-10-02",
+            "decision": "both: docs/STIG-COMPLIANCE.md source of truth + live Settings page, held by a sync gate (PPSM-style)"
+          },
+          "DQ4": {
+            "by": "James",
+            "date": "2026-10-02",
+            "decision": "build only the 001900 issuer/self-signed warning; document the other Other rules (000250, 001630, 003060, 003220, SRG 179, 231, 795) as inherited/N/A with the AO decision point"
+          },
+          "DQ5": {
+            "by": "James",
+            "date": "2026-10-02",
+            "decision": "(a) named DoD log_format + syslog logging in the product's own conf.d/site config; nginx.conf untouched"
+          },
+          "DQ6": {
+            "by": "James",
+            "date": "2026-10-02",
+            "decision": "new source/outcome columns by migration; rewrite ts to ISO-8601 Z"
+          },
+          "DQ7": {
+            "by": "James",
+            "date": "2026-10-02",
+            "decision": "audit signed-in failures incl. 400/403, plus exports and audit reads; anonymous failures to nginx/syslog only"
+          },
+          "DQ8": {
+            "by": "James",
+            "date": "2026-10-02",
+            "decision": "absolute lifetime org setting default 12 h; AD group re-check every 15 min; admin 'end sessions' action; AD outage = refuse writes, allow reads"
+          },
+          "DQ9": {
+            "by": "James",
+            "date": "2026-10-02",
+            "decision": "keep app modal, server-enforced + audited, default ON with installer off flag"
+          },
+          "DQ10": {
+            "by": "James",
+            "date": "2026-10-02",
+            "decision": "refuse without --syslog-host or explicit --no-remote-syslog"
+          }
+        },
+        "codex_vs_ruling": {
+          "DQ4": "CONTRADICTS: Codex would also build the 001630 allow-list and auditd integration for 795, and calls blanket inherited/N/A 'conceal unmet controls' - ruling stands, James decides",
+          "DQ8": "CONTRADICTS: Codex 8 h default (ruling 12 h), 5 min re-check (ruling 15), deny ALL protected requests on LDAP outage (ruling allows reads) - ruling stands, James decides",
+          "DQ1": "minor addition: BLOCK compliance acceptance without an approved exception - consistent with the ruling if read as the compliance-page status",
+          "DQ5": "agrees",
+          "DQ7": "agrees"
+        }
+      }
+    ],
+    "current": 2
+  },
+  "decisions": [
+    {
+      "by": "James",
+      "date": "2026-10-02",
+      "id": "codex-contradictions-reviewed",
+      "ruling": "After seeing Codex's run-2 answers: KEEP DQ8 (12h org setting, 15-min AD re-check, admin End sessions, AD outage = reads allowed, writes refused) and KEEP DQ4 (build only the 001900 issuer/self-signed warning; document the other Other rules as inherited, citing evidence)."
+    }
+  ],
+  "stages": {
+    "decide": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "v1.3.0 = scope A (board Yes/Other rules v1.2.0 didn't build): 30 items G1-G7. Panel run 2: Claude, Gemini, Codex (VM, gpt-6-astra) answered; deepseek SILENT (Luna2024 down), attested by James. Rulings by James 2026-10-02: DQ1 warn on host state, enforce + block on product-owned files; DQ2 www-data verify/report only; DQ3 docs/STIG-COMPLIANCE.md source of truth + live Settings page + sync gate; DQ4 build only the 001900 issuer/self-signed warning, document the rest with evidence; DQ5 DoD log_format + syslog in product conf.d; DQ6 source/outcome columns + ISO-8601 Z migration; DQ7 audit signed-in failures incl. 400/403, exports, audit reads; DQ8 12h org setting, 15-min AD re-check, admin End sessions, AD outage = reads only; DQ9 app consent modal, server-enforced + audited, default ON + installer flag; DQ10 refuse without --syslog-host or --no-remote-syslog. Codex contradicted DQ4/DQ8; James kept both. Open: build from release/v1.2.1.",
+      "at": "2026-10-03T03:22:27Z"
+    }
+  }
+}
