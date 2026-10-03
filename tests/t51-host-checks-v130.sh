@@ -41,8 +41,8 @@ _host() {
     printf 'root:x:0:\nadm:x:4:syslog\nwww-data:x:33:\nsudo:x:27:admin\n' > "$R/etc/group"
     printf 'root:!:19000::::::\nwww-data:*:19000:0:99999:7:::\n' > "$R/etc/shadow"
     printf 'user www-data;\nworker_processes auto;\n' > "$R/etc/nginx/nginx.conf"
-    cp "${TM_REPO_ROOT}/nginx/topic-manager.conf" "$R/etc/nginx/sites-available/topic-manager"
-    cp "${TM_REPO_ROOT}/nginx/tm-log-format.conf" "$R/etc/nginx/conf.d/topic-manager-log-format.conf"
+    cp "$(tm_nginx_site)" "$R/etc/nginx/sites-available/topic-manager"
+    cp "${TM_LOG_FORMAT:-${TM_REPO_ROOT}/nginx/tm-log-format.conf}" "$R/etc/nginx/conf.d/topic-manager-log-format.conf"
     cp "${TM_REPO_ROOT}/nginx/tm-security-headers.conf" "$R/etc/nginx/snippets/tm-security-headers.conf"
     chmod -R go-w "$R/etc/nginx"
     : > "$R/var/log/nginx/topic-manager-access.log"; : > "$R/var/log/nginx/topic-manager-error.log"
@@ -53,9 +53,9 @@ _host() {
         printf '    ssl_protocols TLSv1.2 TLSv1.3; # managed by Topic Manager\n'
         printf '    access_log /var/log/nginx/access.log;\n    error_log /var/log/nginx/error.log;\n}\n'
         printf '# configuration file /etc/nginx/conf.d/topic-manager-log-format.conf:\n'
-        cat "${TM_REPO_ROOT}/nginx/tm-log-format.conf"
+        cat "${TM_LOG_FORMAT:-${TM_REPO_ROOT}/nginx/tm-log-format.conf}"
         printf '# configuration file /etc/nginx/sites-enabled/topic-manager:\n'
-        cat "${TM_REPO_ROOT}/nginx/topic-manager.conf"
+        cat "$(tm_nginx_site)"
     } > "$R/dump"
     printf '#!/bin/sh\n[ "$1" = -T ] || exit 0\n[ -f "%s/nginx.fail" ] && exit 1\ncat "%s/dump"\n' "$R" "$R" > "$RB/nginx"
     chmod 755 "$RB/nginx"
@@ -233,12 +233,14 @@ a_compliance_page() {
     printf 'clusters: []\n' > "${TM_TMP}/clusters.d/clusters.yaml"
     printf 'server:\n  secret_key: "%s"\nauth:\n  ldap_server: "ldaps://dc.example.org:636"\n  ldap_domain: example.org\n  ldap_base_dn: "DC=example,DC=org"\naudit:\n  db_path: "%s/data/tm.db"\nlogging:\n  log_level: CRITICAL\n' \
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" "$TM_TMP" > "${TM_TMP}/config.yaml"
+    mkdir -p "${TM_TMP}/bin"; printf '#!/bin/sh\nexit 0\n' > "${TM_TMP}/bin/systemctl"; chmod 755 "${TM_TMP}/bin/systemctl"
+    printf '1\n' > "${TM_TMP}/fips"
     printf '{"domain":"compliance","job":"00000000000000d1","state":"ok","finished_at":"2026-10-02T10:00:00+00:00","message":"m","details":[],"checks":[{"key":"site_log_modes","status":"fail","detail":"0644"},{"key":"web_account_shell","status":"pass","detail":"nologin","extra":"dropped"},{"key":"BAD KEY","status":"pass","detail":"x"}]}' \
         > "${TM_TMP}/run/compliance.result"
     local out
-    out="$(PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 TM_CONFIG="${TM_TMP}/config.yaml" \
+    out="$(PATH="${TM_TMP}/bin:${PATH}" PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 TM_CONFIG="${TM_TMP}/config.yaml" \
         TM_CLUSTERS_DIR="${TM_TMP}/clusters.d" TM_SYSLOG_SOCKET="${TM_TMP}/none.sock" TM_APPLY_RESULT_DIR="${TM_TMP}/run" \
-        TM_TLS_CERT="${TM_TMP}/no.crt" "$PY" - <<'PYEOF' 2>"${TM_TMP}/err" | tr -d '\r'
+        TM_TLS_CERT="${TM_TMP}/no.crt" TM_FIPS_FLAG="${TM_TMP}/fips" "$PY" - <<'PYEOF' 2>"${TM_TMP}/err" | tr -d '\r'
 import datetime, json, os, sqlite3
 from tm.app import create_app
 app = create_app()
@@ -267,6 +269,26 @@ print('recheck=%s' % chk('NGNX-APP-003330', 'group_recheck')['status'])
 print('open=%s' % ','.join(doc['open_items']))
 print('measured=%s' % doc['host']['measured_at'])
 print('nomet=%s' % by['NGNX-APP-000720']['status'])
+for k in ('fips_mode', 'time_sync', 'tls_issuer', 'audit_write_state'):
+    rid = {'fips_mode': 'NGNX-APP-002660', 'time_sync': 'SRG-APP-000920-DB-000320', 'tls_issuer': 'NGNX-APP-001900',
+           'audit_write_state': 'SRG-APP-000089-DB-000064'}[k]
+    print('%s=%s' % (k, chk(rid, k)['status']))
+from tm import apply as A
+from tm.config import load_config
+cfg = load_config()
+st = A.status(cfg, 'compliance')
+print('clean=%s' % sorted(c['key'] for c in st['checks']))
+d = sqlite3.connect(os.environ['TM_CONFIG'].replace('config.yaml', 'data/tm.db'))
+print('result_row=%s' % d.execute("SELECT source, outcome FROM audit_log WHERE action='SYSTEM_APPLY_RESULT' AND target='compliance'").fetchall())
+d.close()
+os.unlink(os.path.join(os.environ['TM_APPLY_RESULT_DIR'], 'compliance.result'))
+os.makedirs(os.path.join(os.path.dirname(os.environ['TM_CONFIG']), 'data', 'apply'), exist_ok=True)
+open(os.path.join(os.path.dirname(os.environ['TM_CONFIG']), 'data', 'apply', 'compliance.last'), 'w').write(json.dumps({'job': '00000000000000d1', 'requested_at': '2026-10-02T09:59:00+00:00'}))
+print('after_reboot=%s' % [c['key'] for c in A.status(cfg, 'compliance').get('checks', [])])
+r = c.post('/api/system/apply/compliance', data='{}', headers={'Content-Type': 'application/json', 'X-TM-Request': '1'})
+print('post=%d' % r.status_code)
+staged = json.load(open(os.path.join(os.path.dirname(os.environ['TM_CONFIG']), 'data', 'apply', 'compliance.json')))
+print('staged=%s %s' % (staged['settings'], staged['files']))
 PYEOF
 )"
     tm_assert_eq "anon=401" "$(grep '^anon=' <<<"$out")" "the compliance page answers without sign-in: ${out} $(cat "${TM_TMP}/err")"
@@ -284,6 +306,18 @@ PYEOF
         *) _tm_afail "the open items do not list the warnings and the failure: ${out}" ;; esac
     tm_assert_eq "measured=2026-10-02T10:00:00+00:00" "$(grep '^measured=' <<<"$out")" "the host measurement time is not shown"
     tm_assert_eq "nomet=NOT-MET" "$(grep '^nomet=' <<<"$out")" "a deferred rule is not shown NOT-MET"
+    tm_assert_eq "fips_mode=pass" "$(grep '^fips_mode=' <<<"$out")" "FIPS mode on is not a pass"
+    tm_assert_eq "time_sync=warn" "$(grep '^time_sync=' <<<"$out")" "an unsynchronised (unmeasurable) clock is not a warning"
+    tm_assert_eq "tls_issuer=unknown" "$(grep '^tls_issuer=' <<<"$out")" "an unreadable certificate is guessed about"
+    tm_assert_eq "audit_write_state=pass" "$(grep '^audit_write_state=' <<<"$out")" "a healthy audit store is not a pass"
+    tm_assert_eq "clean=['site_log_modes', 'web_account_shell']" "$(grep '^clean=' <<<"$out")" \
+        "a malformed check key from the result file reached the status: ${out}"
+    tm_assert_eq "result_row=[('system', 'success')]" "$(grep '^result_row=' <<<"$out")" \
+        "the measurement's SYSTEM_APPLY_RESULT is not the system's, with the helper's outcome"
+    tm_assert_eq "after_reboot=['site_log_modes', 'web_account_shell']" "$(grep '^after_reboot=' <<<"$out")" \
+        "the measured checks are lost when /run is (a reboot)"
+    tm_assert_eq "post=202" "$(grep '^post=' <<<"$out")" "Measure host now is refused: ${out} $(cat "${TM_TMP}/err")"
+    tm_assert_eq "staged=() {}" "$(grep '^staged=' <<<"$out" | sed 's/{} {}/() {}/')" "the measurement request carries settings or files: ${out}"
 }
 tm_case "the-compliance-page-carries-every-rule-and-its-measurements" tmapp a_compliance_page
 
@@ -303,5 +337,56 @@ print('none=%s' % h.issuer_status({'subject': '', 'issuer': ''}))
     grep -q 'hostPanels.tls.issuer_warning' "${TM_REPO_ROOT}/app/components/SettingsTab.js" || _tm_afail "the TLS pane does not show the issuer warning"
 }
 tm_case "a-self-signed-certificate-is-a-warning-on-the-tls-pane" none a_issuer_warning
+
+# The Settings side of v1.3.0, executed: the compliance CSV, End sessions and
+# the consent text, from the real SettingsTab under node.
+a_settings_v130() {
+    local js="${TM_SETTINGS_SOURCE:-${TM_REPO_ROOT}/app/components/SettingsTab.js}"
+    node - "$js" <<'JSEOF' > "${TM_TMP}/out" 2>&1 || _tm_afail "$(cat "${TM_TMP}/out")"
+const fs = require('fs'), vm = require('vm'), assert = require('assert');
+const calls = [];
+let csv = null, answer = { ok: true, status: 200, json: async () => ({ ok: true, ended: 2, sessions: [] }) };
+const sandbox = { ClusterModal: {}, console, AbortController, setTimeout, clearTimeout, Date,
+    fetch: async (url, opts = {}) => { calls.push([url, opts.method || 'GET', opts.body]); return answer; },
+    Blob: function (parts) { csv = parts.join(''); }, URL: { createObjectURL: () => 'blob:x' },
+    document: { createElement: () => ({ click() {} }), getElementById: () => null, body: { style: {} } } };
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(process.argv[2], 'utf8') + '\n;globalThis.__S = SettingsTab; globalThis.__csv = settingsComplianceCsv;', sandbox);
+(async () => {
+    const doc = { rules: [{ id: 'R-1', sev: 'CAT I', decision: 'Yes', status: 'MET', title: 'T q', checks: [{ key: 'k1', where: 'host', status: 'fail', detail: 'd"1' }, { key: 'k2', where: 'app', status: 'pass', detail: 'd2' }] },
+                          { id: 'R-2', sev: 'CAT II', decision: 'No', status: 'NOT-MET', title: 'U', checks: [] }],
+                  host: { measured_at: '2026-10-02T10:00:00+00:00' } };
+    const lines = sandbox.__csv(doc).split('\n');
+    assert.equal(lines[0], '"Rule","Severity","Decision","Status","Live check","Where","Result","Detail","Title"');
+    assert.equal(lines[1], '"R-1","CAT I","Yes","MET","k1","host","fail","d""1","T q"');
+    assert.equal(lines[2], '"R-1","CAT I","Yes","MET","k2","app","pass","d2","T q"');
+    assert.equal(lines[3], '"R-2","CAT II","No","NOT-MET","","","","","U"');
+    assert.ok(lines[4].startsWith('"Host measured","2026-10-02T10:00:00+00:00"'));
+    const S = sandbox.__S;
+    const inst = Object.assign({}, S.data());
+    for (const [k, f] of Object.entries(S.methods)) inst[k] = f.bind(inst);
+    inst.compliance = doc; inst.downloadCompliance(); assert.ok(csv && csv.startsWith('"Rule"'), 'the download is not the CSV');
+    await inst.endSessions('bob');
+    await inst.endSessions(null);
+    const ends = calls.filter(c => c[0] === '/api/sessions/end');
+    assert.deepEqual(ends.map(c => [c[1], JSON.parse(c[2])]), [['POST', { user: 'bob' }], ['POST', { all: true }]]);
+    assert.equal(inst.sessionsMessage, '✓ Ended 2 session(s).');
+    answer = { ok: false, status: 503, json: async () => ({ error: 'audit_unavailable' }) };
+    await inst.endSessions('bob');
+    assert.match(inst.sessionsMessage, /^✕ Audit logging is unavailable/);
+    answer = { ok: true, status: 200, json: async () => ({}) };
+    inst.settingsLoaded = true; inst.savedHostSettings = {}; inst.dowText = 'MY NOTICE';
+    calls.length = 0;
+    await inst.saveConsentText(false);
+    assert.deepEqual(JSON.parse(calls.find(c => c[1] === 'PUT')[2]), { dow_text: 'MY NOTICE' });
+    calls.length = 0;
+    await inst.saveConsentText(true);
+    assert.deepEqual(JSON.parse(calls.find(c => c[1] === 'PUT')[2]), { dow_text: '' }, 'the standard wording is not restored by saving empty text');
+    console.log('SETTINGS V130 OK');
+})().catch(e => { console.error(e.message); process.exit(1); });
+JSEOF
+    tm_assert_eq "SETTINGS V130 OK" "$(tr -d '\r' < "${TM_TMP}/out")" "the Settings v1.3.0 controls do not behave"
+}
+tm_case "settings-builds-the-compliance-csv-and-ends-sessions-as-asked" node a_settings_v130
 
 tm_finish

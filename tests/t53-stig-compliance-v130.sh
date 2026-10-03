@@ -15,7 +15,7 @@ set -uo pipefail
 
 tm_header "STIG compliance: the document and the page agree, and the gate can fail"
 
-GATE="${TM_REPO_ROOT}/tools/check-stig-compliance.sh"
+GATE="${TM_STIG_GATE:-${TM_REPO_ROOT}/tools/check-stig-compliance.sh}"
 DOC="${TM_REPO_ROOT}/docs/STIG-COMPLIANCE.md"
 RULES="$(tm_py_root)/tm/compliance.py"
 HELPER="$(tm_apply_helper)"

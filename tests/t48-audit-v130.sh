@@ -180,6 +180,34 @@ print('old_ts=%d' % rows(\"SELECT COUNT(*) FROM audit_log WHERE ts LIKE '% %'\")
 }
 tm_case "a-migration-that-cannot-record-itself-changes-nothing" none a_migration_is_atomic
 
+# A v1.2 table with no rows still gains the columns, and says so; a stray
+# old-format row written later (an old worker during an upgrade) is rewritten
+# at the next start, and that is recorded too.
+a_migration_variants() {
+    _setup
+    local out
+    out="$(_py "
+d = db()
+d.execute('CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, user TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, detail TEXT, cluster_id TEXT)')
+d.commit(); d.close()
+from tm.models import init_db
+init_db(cfg)
+print('empty=%d %s' % (rows(\"SELECT COUNT(*) FROM audit_log WHERE action='AUDIT_SCHEMA_MIGRATED'\")[0][0], rows(\"SELECT detail FROM audit_log\")[0][0].split(';')[0]))
+d = db(); d.execute(\"INSERT INTO audit_log (ts,user,action,target,detail,cluster_id,source,outcome) VALUES ('2026-03-04 05:06:07','u','CREATE','late','','','x','success')\"); d.commit(); d.close()
+init_db(cfg)
+print('late=%s' % rows(\"SELECT ts FROM audit_log WHERE target='late'\")[0][0])
+print('late_rows=%d' % rows(\"SELECT COUNT(*) FROM audit_log WHERE action='AUDIT_SCHEMA_MIGRATED'\")[0][0])
+print('late_detail=%s' % rows(\"SELECT detail FROM audit_log WHERE action='AUDIT_SCHEMA_MIGRATED' ORDER BY id DESC\")[0][0].split(';')[:2])
+")"
+    tm_assert_eq "empty=1 audit_log v1.3.0: columns added: source, outcome" "$(_line empty "$out")" \
+        "an empty v1.2 table's migration was not recorded: ${out}"
+    tm_assert_eq "late=2026-03-04T05:06:07Z" "$(_line late "$out")" "a late old-format row was not rewritten at the next start"
+    tm_assert_eq "late_rows=2" "$(_line late_rows "$out")" "a rewrite-only migration was not recorded"
+    tm_assert_eq "late_detail=['audit_log v1.3.0: columns added: none', ' 1 timestamp(s) rewritten to ISO 8601 UTC (Z)']" \
+        "$(_line late_detail "$out")" "a rewrite-only migration does not say what it did: ${out}"
+}
+tm_case "an-empty-table-and-a-late-old-row-are-each-migrated-and-recorded" none a_migration_variants
+
 # DQ6: retention compares ts AS STRINGS. Rows on the cutoff's own day, one an
 # hour older than the cutoff and one an hour younger, written in the OLD
 # format: left unmigrated, " " sorts before "T" and BOTH would be pruned.
@@ -282,6 +310,19 @@ r = c.get('/api/topics')
 print('listleak=%d %s' % (r.status_code, 'broker-secret' in r.get_data(as_text=True)))
 r = c.get('/api/clusters/c1/test')
 print('testleak=%s' % ('broker-secret' in r.get_data(as_text=True)))
+# An EXPIRED session's cross-site write is anonymous: not in tm.db.
+x = signed_in('ghost')
+d = db(); d.execute(\"UPDATE sessions SET expires_at='2000-01-01T00:00:00+00:00' WHERE id='sid-ghost'\"); d.commit(); d.close()
+n = rows('SELECT COUNT(*) FROM audit_log')[0][0]
+x.put('/api/settings', data=json.dumps({'banner_text': 'x'}), headers={'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site'})
+print('ghost_rows=%d' % (rows('SELECT COUNT(*) FROM audit_log')[0][0] - n))
+# No cluster profile: our own sentence passes through; a write is a 409.
+open(os.environ['TM_CLUSTERS_DIR'] + '/clusters.yaml', 'w').write('clusters: []\\n')
+r = c.get('/api/topics')
+print('nocluster=%d %s' % (r.status_code, r.get_json().get('code')))
+print('nocluster_text=%s' % r.get_json()['error'].startswith('No cluster profile is configured yet'))
+r = c.post('/api/topics', data=json.dumps({'name': 'x1'}), headers=H)
+print('nocluster_write=%d' % r.status_code)
 ")"
     tm_assert_eq "kafka=502 kafka_error" "$(_line kafka "$out")" "a Kafka refusal is not a 502 with the generic code: ${out}"
     tm_assert_eq "leak=False" "$(_line leak "$out")" "the browser was told the broker's name, address or the library's text"
@@ -297,6 +338,10 @@ print('testleak=%s' % ('broker-secret' in r.get_data(as_text=True)))
     tm_assert_eq "anon_logged=True" "$(_line anon_logged "$out")" "an anonymous refusal went nowhere at all"
     tm_assert_eq "listleak=502 False" "$(_line listleak "$out")" "a Kafka read error leaks the broker"
     tm_assert_eq "testleak=False" "$(_line testleak "$out")" "the cluster test leaks the broker"
+    tm_assert_eq "ghost_rows=0" "$(_line ghost_rows "$out")" "an expired session's refused write reached the audit database"
+    tm_assert_eq "nocluster=502 no_cluster" "$(_line nocluster "$out")" "a missing cluster profile is reported as a Kafka failure: ${out}"
+    tm_assert_eq "nocluster_text=True" "$(_line nocluster_text "$out")" "the product's own no-cluster sentence was replaced"
+    tm_assert_eq "nocluster_write=409" "$(_line nocluster_write "$out")" "a write with no cluster profile is not a 409"
 }
 tm_case "signed-in-failures-are-audited-anonymous-ones-are-not-and-nothing-leaks" tmapp a_failures_are_audited
 
@@ -313,6 +358,12 @@ d = db(); d.execute(\"CREATE TRIGGER t_broken BEFORE INSERT ON audit_log BEGIN S
 r = c.get('/api/audit/export')
 print('broken=%d %s %s' % (r.status_code, r.get_json().get('error'), 'timestamp' in r.get_data(as_text=True)))
 print('broken_read=%d' % c.get('/api/audit').status_code)
+# A write refused because the audit store is broken is NOT recorded again by
+# the refusal recorder: one AUDIT_WRITE_FAILED per refused change, not two.
+crit = []
+audit.syslog_send = lambda msg, sev=6: crit.append(msg) or True
+r = c.put('/api/settings', data=json.dumps({'banner_text': 'z'}), headers=H)
+print('refused_broken=%d %s crit=%d' % (r.status_code, r.get_json().get('error'), sum('AUDIT_WRITE_FAILED' in m for m in crit)))
 ")"
     tm_assert_eq "read=200 AUDIT_READ" "$(_line read "$out")" "an audit read is not recorded before it is served"
     tm_assert_eq 'export=200 "AUDIT_EXPORT"' "$(_line export "$out")" "an export is not recorded before it is built"
@@ -322,6 +373,8 @@ print('broken_read=%d' % c.get('/api/audit').status_code)
     esac
     tm_assert_eq "broken=503 audit_unavailable False" "$(_line broken "$out")" "an export was served with its record unwritable"
     tm_assert_eq "broken_read=503" "$(_line broken_read "$out")" "a read was served with its record unwritable"
+    tm_assert_eq "refused_broken=503 audit_unavailable crit=1" "$(_line refused_broken "$out")" \
+        "a change refused for a broken audit store was recorded twice (or not refused): ${out}"
 }
 tm_case "every-audit-read-and-export-is-recorded-first" tmapp a_audit_reads_are_audited
 
@@ -354,7 +407,7 @@ print('recovered=%s %s' % (w['current'], bool(w['recovered_at'])))
 tm_case "an-audit-write-failure-stays-visible-until-a-write-succeeds" none a_write_failure_banner
 
 a_banner_is_rendered() {
-    local js="${TM_REPO_ROOT}/app/components/SettingsTab.js" at="${TM_REPO_ROOT}/app/components/AuditTab.js"
+    local js="${TM_SETTINGS_SOURCE:-${TM_REPO_ROOT}/app/components/SettingsTab.js}" at="${TM_AUDITTAB_JS:-${TM_REPO_ROOT}/app/components/AuditTab.js}"
     grep -q 'v-if="hostPanels.capacity?.write_failure?.current"' "$js" || _tm_afail "Settings has no audit-failure banner bound to write_failure.current"
     grep -q 'v-if="writeFailure && writeFailure.current"' "$at" || _tm_afail "the Audit tab has no audit-failure banner"
     grep -q "fetch('/api/audit/capacity'" "$at" || _tm_afail "the Audit tab does not read the failure state"
@@ -362,5 +415,33 @@ a_banner_is_rendered() {
     grep -q '<th>Outcome</th>' "$at" || _tm_afail "the Audit tab has no Outcome column"
 }
 tm_case "the-banner-and-the-new-columns-are-in-the-ui" none a_banner_is_rendered
+
+# The anonymous-refusal limiter: BURST lines per WINDOW, then one summary.
+a_anonymous_limiter() {
+    local out
+    out="$(PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYEOF' 2>&1 | tr -d '\r'
+import logging
+from tm import routes
+lines = []
+class Grab(logging.Handler):
+    def emit(self, r): lines.append(r.getMessage())
+routes.log.addHandler(Grab()); routes.log.setLevel(logging.INFO)
+now = [1000.0]
+routes.time.monotonic = lambda: now[0]
+lim = routes._AnonymousRefusals()
+got = [lim.note(403, 'PUT', '/api/x', '192.0.2.1') for _ in range(12)]
+print('first=%d logged=%d' % (got.count(True), len(lines)))
+now[0] += lim.WINDOW + 1
+lim.note(401, 'GET', '/api/y', '192.0.2.2')
+print('summary=%s' % [l for l in lines if 'more refused' in l])
+print('after=%d' % len(lines))
+PYEOF
+)"
+    tm_assert_eq "first=10 logged=10" "$(grep '^first=' <<<"$out")" "the limiter does not log exactly the first 10 in a window: ${out}"
+    tm_assert_eq "summary=['ANON_REQUEST_REFUSED: 2 more refused anonymous request(s) in the last 60 s were not logged one by one']" \
+        "$(grep '^summary=' <<<"$out")" "the suppressed refusals are not summarised when the window closes: ${out}"
+    tm_assert_eq "after=12" "$(grep '^after=' <<<"$out")" "a new window does not log again"
+}
+tm_case "anonymous-refusals-are-logged-ten-a-minute-then-summarised" tmapp a_anonymous_limiter
 
 tm_finish

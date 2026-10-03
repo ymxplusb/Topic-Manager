@@ -52,6 +52,7 @@ def _mark_audited():
     if has_request_context():
         g.tm_audited = True
 
+
 _FORMULA_CHARS = ('=', '+', '-', '@', '\t', '\r')
 
 

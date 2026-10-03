@@ -83,6 +83,11 @@ def client(user, sid, created_ago_h=0.0, verified_ago_min=None):
         d.execute('INSERT OR REPLACE INTO session_meta (id, verified_at) VALUES (?, ?)', (sid, (now - datetime.timedelta(minutes=verified_ago_min)).isoformat()))
     d.commit(); d.close()
     return cl
+def cookie(user, sid):            # a browser holding that session's cookie, the row untouched
+    cl = app.test_client()
+    with cl.session_transaction() as s:
+        s['user'] = {'username': user}; s['sid'] = sid
+    return cl
 H = {'Content-Type': 'application/json', 'X-TM-Request': '1'}
 $1
 PYEOF
@@ -129,6 +134,8 @@ a_group_recheck() {
     out="$(_app "
 fresh = client('alice', 's-fresh', verified_ago_min=5)
 print('fresh=%d asked=%s' % (fresh.get('/api/settings').status_code, asked))
+new = client('alice', 's-new')                     # no re-check yet: the sign-in verified it
+print('new=%d asked=%s' % (new.get('/api/settings').status_code, asked))
 stale = client('alice', 's-stale', verified_ago_min=20)
 print('member=%d asked=%s' % (stale.get('/api/settings').status_code, asked))
 d = db(); v = d.execute(\"SELECT verified_at FROM session_meta WHERE id='s-stale'\").fetchone()[0]; d.close()
@@ -147,6 +154,7 @@ verdicts['gone'] = ('not_found', 'the account is no longer in the directory')
 print('gone=%d' % client('gone', 's-g', verified_ago_min=20).get('/api/settings').status_code)
 ")"
     tm_assert_eq "fresh=200 asked=[]" "$(_line fresh "$out")" "a session verified 5 minutes ago was re-checked (or refused): ${out}"
+    tm_assert_eq "new=200 asked=[]" "$(_line new "$out")" "a session signed in just now was re-checked at once (its sign-in verified it)"
     tm_assert_eq "member=200 asked=['alice']" "$(_line member "$out")" "a session verified 20 minutes ago was not re-checked"
     tm_assert_eq "moved=True" "$(_line moved "$out")" "a successful re-check did not move verified_at"
     tm_assert_eq "revoked=401 revoked" "$(_line revoked "$out")" "a user removed from the group kept the session: ${out}"
@@ -212,6 +220,10 @@ print('user=%d %s' % (r.status_code, r.get_json().get('ended')))
 r = bob.get('/api/settings')
 print('bob=%d %s' % (r.status_code, r.get_json().get('reason')))
 print('bob_reason=%s' % rows('SESSION_EXPIRED')[-1][2])
+# A sign-in in between cleans expired rows: bob's ended row must survive it
+# long enough for its next request to be told WHY.
+app.test_client().post('/api/auth/login', data=json.dumps({'username': 'dave', 'password': 'p'}), headers=H)
+print('kept_reason=%s' % cookie('bob', 'sid-bob-secret').get('/api/settings').get_json().get('reason'))
 print('carol_before=%d' % carol.get('/api/settings').status_code)
 r = admin.post('/api/sessions/end', data=json.dumps({'all': True}), headers=H)
 print('all=%d %s' % (r.status_code, r.get_json().get('ended')))
@@ -226,10 +238,11 @@ print('ended_rows=%s' % [(u, t, d) for u, t, d, _ in rows('SESSIONS_ENDED')])
     tm_assert_eq "user=200 1" "$(_line user "$out")" "ending bob's sessions (named in another case) did not end exactly one"
     tm_assert_eq "bob=401 ended" "$(_line bob "$out")" "bob's ended session still answered"
     tm_assert_eq "bob_reason=ended by admin" "$(_line bob_reason "$out")" "the ended session's next request does not say who ended it"
+    tm_assert_eq "kept_reason=ended" "$(_line kept_reason "$out")" "an ended session's row was cleaned before it could say why"
     tm_assert_eq "carol_before=200" "$(_line carol_before "$out")" "ending bob's sessions ended carol's"
-    tm_assert_eq "all=200 2" "$(_line all "$out")" "ending everyone's did not end exactly the two others (carol, admin's other)"
+    tm_assert_eq "all=200 3" "$(_line all "$out")" "ending everyone's did not end exactly the three others (carol, admin's other, dave)"
     tm_assert_eq "carol=401 admin2=401 admin=200" "$(_line carol "$out")" "ending all sessions ended the caller's own or missed one"
-    tm_assert_eq "ended_rows=[('admin', 'BOB', 'ended 1 session(s) of BOB; the caller kept their own'), ('admin', 'every user', 'ended 2 session(s) of every user; the caller kept their own')]" \
+    tm_assert_eq "ended_rows=[('admin', 'BOB', 'ended 1 session(s) of BOB; the caller kept their own'), ('admin', 'every user', 'ended 3 session(s) of every user; the caller kept their own')]" \
         "$(_line ended_rows "$out")" "SESSIONS_ENDED does not record who ended what"
 }
 tm_case "an-administrator-ends-a-users-or-everyones-sessions" tmapp a_end_sessions
@@ -279,5 +292,61 @@ PYEOF
     tm_assert_eq "unsupported=unsupported" "$(_line unsupported "$out")" "a host with no service account is not 'unsupported'"
 }
 tm_case "the-directory-answers-map-to-the-four-verdicts" tmapp a_check_membership
+
+# The browser's half: app/main.js arms a sign-out at the absolute end the
+# server sent, a few seconds early, and says why. The real file under node.
+a_browser_signs_out_at_the_absolute_end() {
+    local out
+    out="$(node - "${TM_MAIN_JS:-${TM_REPO_ROOT}/app/main.js}" <<'JSEOF' 2>&1 | tr -d '\r'
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+let App = null, now = 1_000_000;
+const timers = [], posts = [];
+const win = { fetch: async (url, init) => { if (init && init.method === 'POST') posts.push([url, init.body]); return { ok: false, json: async () => ({}) }; } };
+const Vue = { createApp: a => { App = a; return { mount() {} }; }, ref: v => ({ value: v }), computed: f => ({ get value() { return f(); } }), onMounted() {}, onUnmounted() {} };
+const stubs = ['LoginView', 'TopBar', 'TopicsTab', 'ConsumerGroupsTab', 'AuditTab', 'SettingsTab', 'AboutModal'];
+const g = { setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: id => { if (timers[id - 1]) timers[id - 1].cleared = true; },
+            setInterval: () => 0, clearInterval() {}, Date: { now: () => now, parse: Date.parse } };
+// In a browser the components' bare fetch IS window.fetch (which main.js wraps).
+new Function('Vue', 'window', 'document', 'fetch', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', ...stubs, src)(
+    Vue, win, { addEventListener() {}, removeEventListener() {} }, (...a) => win.fetch(...a), g.setTimeout, g.clearTimeout, g.setInterval, g.clearInterval, g.Date, ...stubs.map(() => ({})));
+const vm = App.setup();
+const ends = new Date(now + 2 * 3600 * 1000).toISOString();
+vm.onLoggedIn({ username: 'u' }, 15, ends);
+const abs = timers.filter(t => !t.cleared && t.ms > 15 * 60 * 1000);
+console.log('armed=' + abs.length + ' ms=' + (abs[0] && abs[0].ms));
+(async () => {
+  await abs[0].fn(); await new Promise(r => setImmediate(r));
+  console.log('posted=' + JSON.stringify(posts));
+  console.log('notice=' + vm.loginNotice.value);
+  console.log('user=' + vm.user.value);
+  timers.length = 0;
+  vm.onLoggedIn({ username: 'u' }, 15, '');
+  console.log('none=' + timers.filter(t => t.ms > 15 * 60 * 1000).length);
+})();
+JSEOF
+)"
+    tm_assert_eq "armed=1 ms=7195000" "$(grep '^armed=' <<<"$out")" "no sign-out is armed at the absolute end (minus the 5 s lead): ${out}"
+    tm_assert_eq 'posted=[["/api/auth/logout","{\"reason\":\"absolute\"}"]]' "$(grep '^posted=' <<<"$out")" \
+        "the absolute sign-out is not posted with its reason (the audit row would say 'explicit'): ${out}"
+    case "$(grep '^notice=' <<<"$out")" in "notice=You were signed out because the session reached its maximum lifetime."*) ;;
+        *) _tm_afail "the sign-in page is not told why: ${out}" ;; esac
+    tm_assert_eq "user=null" "$(grep '^user=' <<<"$out")" "the browser stayed signed in"
+    tm_assert_eq "none=0" "$(grep '^none=' <<<"$out")" "a timer was armed with no end from the server"
+}
+tm_case "the-browser-signs-out-at-the-absolute-end-and-says-why" node a_browser_signs_out_at_the_absolute_end
+
+a_absolute_logout_reason() {
+    _setup
+    local out
+    out="$(_app "
+c = client('alice', 's-a', verified_ago_min=1)
+c.post('/api/auth/logout', data=json.dumps({'reason': 'absolute'}), headers=H)
+print('detail=%s' % rows('LOGOUT')[-1][2])
+")"
+    tm_assert_eq "detail=automatic sign-out at the absolute session lifetime" "$(_line detail "$out")" \
+        "a sign-out at the absolute lifetime is recorded as something else: ${out}"
+}
+tm_case "an-absolute-sign-out-is-recorded-as-one" tmapp a_absolute_logout_reason
 
 tm_finish

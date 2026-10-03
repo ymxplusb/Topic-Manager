@@ -86,7 +86,11 @@ print('refused=%d %s tried=%d' % (r.status_code, r.get_json().get('code'), len(t
 print('declined=%d' % c.post('/api/auth/consent', data=json.dumps({'accepted': 'yes'}), headers=H).status_code)
 print('csrf=%d' % c.post('/api/auth/consent', data=json.dumps({'accepted': True}), headers={'Content-Type': 'application/json'}).status_code)
 print('accept=%d' % c.post('/api/auth/consent', data=json.dumps({'accepted': True}), headers=H).status_code)
-print('signin=%d' % c.post('/api/auth/login', data=cred, headers=H).status_code)
+r = c.post('/api/auth/login', data=cred, headers=H)
+print('signin=%d' % r.status_code)
+import datetime
+end = datetime.datetime.fromisoformat(r.get_json()['session_ends_at'])
+print('ends_h=%.0f' % ((end - datetime.datetime.now(datetime.timezone.utc)).total_seconds() / 3600))
 print('rows=%s' % [(a, u) for a, u, _ in rows('CONSENT_ACCEPTED', 'LOGIN')])
 print('detail=%s' % rows('CONSENT_ACCEPTED')[0][2].split(' accepted ')[0])
 c.post('/api/auth/logout', data='{}', headers=H)
@@ -105,6 +109,7 @@ print('consent_rows=%d' % len(rows('CONSENT_ACCEPTED')))
     tm_assert_eq "csrf=403" "$(_line csrf "$out")" "a cross-site acceptance was taken"
     tm_assert_eq "accept=200" "$(_line accept "$out")" "an acceptance was refused"
     tm_assert_eq "signin=200" "$(_line signin "$out")" "a sign-in after the acceptance was refused: ${out}"
+    tm_assert_eq "ends_h=12" "$(_line ends_h "$out")" "the sign-in does not tell the browser when the session ends"
     tm_assert_eq "rows=[('LOGIN', 'alice'), ('CONSENT_ACCEPTED', 'alice'), ('LOGIN', 'alice')]" "$(_line rows "$out")" \
         "CONSENT_ACCEPTED is not recorded for the user, just before LOGIN: ${out}"
     tm_assert_eq "detail=standard DoD notice" "$(_line detail "$out")" "the acceptance does not name the notice"
@@ -223,5 +228,21 @@ a_install_seeds_consent() {
     grep -q -- '--no-consent-banner) OPT_CONSENT=false ;;' "$(tm_install_sh)" || _tm_afail "install.sh has no --no-consent-banner flag"
 }
 tm_case "a-fresh-install-turns-the-notice-on-and-a-reinstall-keeps-it" none a_install_seeds_consent
+
+# What install.sh runs for the seed: the application's own CLI.
+a_seed_cli() {
+    _setup
+    local out
+    PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 TM_CLUSTERS_DIR="${TM_TMP}/clusters.d" \
+        TM_SYSLOG_SOCKET="${TM_TMP}/none.sock" "$PY" -m tm.apply --config "${TM_TMP}/config.yaml" --by installer \
+        seed dow_enabled=true session_absolute_hours=8 > "${TM_TMP}/seed.out" 2>&1 || _tm_afail "seed failed: $(cat "${TM_TMP}/seed.out")"
+    out="$("$PY" -c "import sqlite3,sys; d=sqlite3.connect(sys.argv[1]); print(sorted(d.execute(\"SELECT key, value FROM app_settings WHERE key IN ('dow_enabled','session_absolute_hours')\").fetchall()))" "${TM_TMP}/data/tm.db" | tr -d '\r')"
+    tm_assert_eq "[('dow_enabled', 'true'), ('session_absolute_hours', '8')]" "$out" "the installer's seed did not store the consent switch"
+    PYTHONPATH="$PYROOT" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 TM_CLUSTERS_DIR="${TM_TMP}/clusters.d" \
+        TM_SYSLOG_SOCKET="${TM_TMP}/none.sock" "$PY" -m tm.apply --config "${TM_TMP}/config.yaml" seed dow_enabled=maybe > "${TM_TMP}/seed.out" 2>&1 \
+        && _tm_afail "the seed stored dow_enabled=maybe"
+    true
+}
+tm_case "the-installers-seed-takes-the-consent-switch-and-validates-it" tmapp a_seed_cli
 
 tm_finish

@@ -48,7 +48,7 @@ _serve() {
         "$(tm_nginx_site)" > "$D/site.conf"
     grep -q "listen 127.0.0.1:${PORT} ssl;" "$D/site.conf" || _tm_afail "the site's listen line moved; this case cannot relocate it"
     sed -e "s/^\([[:space:]]*\)listen 80;/\1listen 127.0.0.1:${HPORT};/" -e "s#/var/log/nginx/#${D}/log/#g" \
-        -e 's/YOUR-HOSTNAME.YOUR-DOMAIN.com/tm.example.org/' "${TM_REPO_ROOT}/nginx/topic-manager-http.conf" > "$D/http.conf"
+        -e 's/YOUR-HOSTNAME.YOUR-DOMAIN.com/tm.example.org/' "${TM_HTTP_SITE:-${TM_REPO_ROOT}/nginx/topic-manager-http.conf}" > "$D/http.conf"
     # The snippets' own names are tm-*.conf; the site includes them by those names.
     for f in tm-limits-server tm-limits-login tm-limits-api tm-syslog tm-security-headers; do
         [ -f "${TM_REPO_ROOT}/nginx/${f}.conf" ] || _tm_afail "missing shipped snippet ${f}.conf"
@@ -62,7 +62,7 @@ http {
     client_body_temp_path ${D}/body; proxy_temp_path ${D}/proxy; fastcgi_temp_path ${D}/fcgi;
     uwsgi_temp_path ${D}/uwsgi; scgi_temp_path ${D}/scgi;
     include ${TM_REPO_ROOT}/nginx/tm-limits.conf;
-    include ${TM_REPO_ROOT}/nginx/tm-log-format.conf;
+    include ${TM_LOG_FORMAT:-${TM_REPO_ROOT}/nginx/tm-log-format.conf};
     include ${D}/site.conf;
     include ${D}/http.conf;
 }
@@ -126,7 +126,7 @@ a_syslog_render_uses_the_format() {
 tm_case "the-syslog-copy-is-in-the-dod-format-and-passes-nginx-t" "linux,chown" a_syslog_render_uses_the_format
 
 a_format_fields() {
-    local f="${TM_REPO_ROOT}/nginx/tm-log-format.conf" k missing="" body
+    local f="${TM_LOG_FORMAT:-${TM_REPO_ROOT}/nginx/tm-log-format.conf}" k missing="" body
     body="$(grep -v '^#' "$f")"
     for k in '$server_name' '$server_addr' '$remote_addr' '$remote_user' '$time_local' '$status' '$request' '$request_id' '$http_user_agent' '$http_x_forwarded_for'; do
         grep -qF -- "$k" <<<"$body" || missing="${missing} ${k}"
