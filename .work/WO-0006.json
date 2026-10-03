@@ -1676,6 +1676,12 @@
       "meaning": "passed",
       "verdict": "v1.3.0 = scope A (board Yes/Other rules v1.2.0 didn't build): 30 items G1-G7. Panel run 2: Claude, Gemini, Codex (VM, gpt-6-astra) answered; deepseek SILENT (Luna2024 down), attested by James. Rulings by James 2026-10-02: DQ1 warn on host state, enforce + block on product-owned files; DQ2 www-data verify/report only; DQ3 docs/STIG-COMPLIANCE.md source of truth + live Settings page + sync gate; DQ4 build only the 001900 issuer/self-signed warning, document the rest with evidence; DQ5 DoD log_format + syslog in product conf.d; DQ6 source/outcome columns + ISO-8601 Z migration; DQ7 audit signed-in failures incl. 400/403, exports, audit reads; DQ8 12h org setting, 15-min AD re-check, admin End sessions, AD outage = reads only; DQ9 app consent modal, server-enforced + audited, default ON + installer flag; DQ10 refuse without --syslog-host or --no-remote-syslog. Codex contradicted DQ4/DQ8; James kept both. Open: build from release/v1.2.1.",
       "at": "2026-10-03T03:22:27Z"
+    },
+    "build": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "v1.3.0 built to James's DQ1-10 rulings + 4 build-question rulings: G1-G7 (commits f426e54..f15df69, records 9fc6d29/c05fcbe); amendments logged (compliance unit + 9th polkit pair, tm/compliance.py, tm/hoststatus.py, tm/service_control.py, check-stig-compliance.sh gate, :80 site log_format, install/README). Linux strict 536/0/0, 13 gates, sonar-local 0 new vs v1.2.1, mutate 773/763/0 survived. Real-host offline upgrade on tm-qc PASS (6 doc defects). render-proof RENDERS on tm-qc (1 display gap; audit-failure banner browser-faked only).",
+      "at": "2026-10-03T13:07:47Z"
     }
   },
   "builder": {
@@ -1760,5 +1766,30 @@
     "mutant_sanity": "after f15df69: all 135 Python mutants M608-M790 compile, every shell mutant passes bash -n, every JS mutant passes node --check.",
     "final_gate_at_head": "f15df69 (fresh container, bundle with tags): check-requirements-lock --require-online PASS (15); tests/run.sh --strict 536 passed, 0 failed, 0 skipped, rc 0; all 13 declared gates rc 0 (sonar-local below). sonar-local ran at 691eebe; f15df69 differs from it only in tests/mutations.txt (data, not analysed).",
     "remote_cleanup": "every container I started (tm-wo6-builder, -gate, -gate2, -mut, -m643) removed; /tmp/tm-wo6-builder removed; docker volumes 134 before and after; no network left."
+  },
+  "clean_room_upgrade": {
+    "date": "2026-10-03",
+    "target": "tm-qc 1.2.0 -> 1.3.0 offline in place",
+    "build": "c05fcbe",
+    "bundle_sha256": "6e85182d5ba7ceb04b9eee5dc50c2fd77280e4166cc90de23a6631a680b66f16",
+    "verdict": "PASS (RESULT: exit 0 with --no-remote-syslog; documented refusal without it); compliance unit via polkit OK; audit migration OK; site logs 0640; DoD log_format live; TLS1.0/1.1 refused; STIG 207/10 same ids, no new",
+    "doc_defects": [
+      "offline command blocks (README, INSTALL §12, install/README, prepare-offline.sh text) omit --no-remote-syslog/--syslog-host",
+      "--backup-only needs no flag + the refused upgrade's exit 1 undocumented",
+      "compliance API (GET /api/compliance, POST /api/system/apply/compliance) undocumented",
+      "no prune dry-run; STIG-COMPLIANCE.md says a prune writes AUDIT_PRUNE but a no-op prune writes none",
+      "INSTALL §7 verify has no v1.3.0 checks",
+      "rotated site log .1 is root:root 0640 vs docs www-data:adm (check accepts root)"
+    ],
+    "incident": "3 chars of tm-qc claude_admin sudo password in an agent tool output; rotated 2026-10-03 (Vault first, verified)"
+  },
+  "render_proof": {
+    "date": "2026-10-03",
+    "target": "tm-qc v1.3.0",
+    "verdict": "RENDERS",
+    "items": "consent server-enforced+audited PASS; compliance page 75 rules + CSV PASS; TLS 001900 warning PASS; sessions 12h + End sessions PASS; audit Source/Outcome + export audited + failure outcome PASS; audit-failure banner NOT TRIGGERED server-side (browser-faked only); v1.2.1 quiet-results regression PASS",
+    "gaps": [
+      "a session ended by End sessions keeps the app shell and shows 'Authentication required' in the tab instead of returning to the login view (server refuses correctly; display gap)"
+    ]
   }
 }
