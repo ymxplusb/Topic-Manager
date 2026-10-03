@@ -19,7 +19,7 @@ const scenario = process.argv[3];
 const source = fs.readFileSync(process.env.TM_SETTINGS_SOURCE || path.join(root, 'app/components/SettingsTab.js'), 'utf8');
 // Independent contract fixtures: do not derive expected fields/ranges from code.
 const groups = {
-    sessions: { session_max_concurrent: '7' },
+    sessions: { session_max_concurrent: '7', session_absolute_hours: '5' },
     rate: { ratelimit_login_per_min: '22', ratelimit_login_burst: '8', ratelimit_api_per_min: '450', ratelimit_api_burst: '140', ratelimit_conn_per_ip: '30' },
     redirect: { http_redirect_enabled: 'false' },
     syslog: { syslog_enabled: 'true', syslog_host: 'logs.example.org', syslog_port: '10514', syslog_protocol: 'udp', syslog_app_id: 'tm.audit-2' },
@@ -413,7 +413,7 @@ async function main() {
         }
     } else if (scenario === 'integration') {
         const inst = await ready();
-        assert.equal(Object.keys(loaded).length, 21, 'full GET fixture');
+        assert.equal(Object.keys(loaded).length, 22, 'full GET fixture');
         const normalized = { ...loaded, syslog_protocol: 'udp', ntp_servers: 'a.example.org,b.example.org', session_max_concurrent: '8' };
         handler = (url, opts) => opts.method === 'PUT' ? json({ ok: true, changed: ['syslog_protocol', 'ntp_servers', 'session_max_concurrent'] }) : json(normalized);
         inst.hostSettings.syslog_protocol = 'UDP';
@@ -541,7 +541,7 @@ async function main() {
                 : url === '/api/system/tls' ? tls : status(url.split('/').pop()));
             const inst = instance();
             await inst.loadSettings();
-            await finish(Promise.all(['syslog', 'time', 'nginx', 'tls'].map(domain => inst.runHostApply(domain))));
+            await finish(Promise.all(['syslog', 'time', 'nginx', 'tls', 'compliance'].map(domain => inst.runHostApply(domain))));
             calls = [];
             return inst;
         };
@@ -549,8 +549,8 @@ async function main() {
             // Page open, every domain last applied OK (and, separately, idle).
             for (const state of ['ok', 'idle']) {
                 const inst = await mounted(domain => ({ domain, state, ...verbose }));
-                assert.equal(blocks(inst), 'nginx,nginx,syslog,time,tls', 'the five apply panes are rendered');
-                for (const domain of ['syslog', 'time', 'nginx', 'tls']) {
+                assert.equal(blocks(inst), 'compliance,nginx,nginx,syslog,time,tls', 'the six apply panes are rendered (v1.3.0: + compliance)');
+                for (const domain of ['syslog', 'time', 'nginx', 'tls', 'compliance']) {
                     assert.equal(inst.applyJobs[domain].state, state, 'the fixture status was loaded for ' + domain);
                     assert.equal(inst.applyJobs[domain].job, 'job77', 'the loaded status carries a job id for ' + domain);
                     for (const b of renderedFor(inst, domain)) {
@@ -579,7 +579,7 @@ async function main() {
                 assert.equal(b.text, '✓ Applied.', 'a user apply success renders exactly one line');
                 assert.equal(b.state, 'ok');
             }
-            for (const domain of ['syslog', 'time', 'tls']) assert.ok(renderedFor(inst, domain).every(b => b.text === ''), 'only the applied pane speaks');
+            for (const domain of ['syslog', 'time', 'tls', 'compliance']) assert.ok(renderedFor(inst, domain).every(b => b.text === ''), 'only the applied pane speaks');
             assert.ok(!renderStatusBlocks(inst).some(b => /Job|backup|timesyncd/.test(b.text)), 'no job id or details after a success');
             // Gone on a change of group; a re-select of the same group keeps it.
             inst.selectGroup(inst.activeGroup);
@@ -652,7 +652,7 @@ async function main() {
             assert.match(inst.sectionMessages.time, /^✕ ntp_servers: bad server/, 'a failed save keeps its message');
         }
     } else throw new Error('Unknown scenario: ' + scenario);
-    const expected = { bindings: 93, validation: 269, errors: 14, apply: 47, timeout: 13, panels: 27, tls: 107, ppsm: 32, integration: 79, quiet: 84 };
+    const expected = { bindings: 96, validation: 269, errors: 14, apply: 47, timeout: 13, panels: 27, tls: 107, ppsm: 32, integration: 79, quiet: 95 };
     rawAssert.equal(assertions, expected[scenario], 'complete the exact scenario assertion count');
     console.log('ALL ' + assertions + ' ASSERTIONS PASSED');
 }

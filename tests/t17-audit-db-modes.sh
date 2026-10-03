@@ -263,4 +263,32 @@ o_install() {
 }
 tm_case "install-creates-data-0700-and-enforces" none o_install
 
+# v1.3.0 (SRG-APP-000141-DB-000093): no external executable can be loaded into
+# the database engine through a connection the application opens. Python
+# builds sqlite3 with extension loading OFF; get_db states it on every
+# connection, and this asks SQLite itself.
+m_no_extensions() {
+    local out
+    out="$(PYTHONPATH="$(tm_py_root)" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 "$PY" - "${TM_TMP}/x/tm.db" <<'PYEOF' 2>&1 | tr -d '\r'
+import sqlite3, sys
+from tm import models
+seen = []
+class Spy(sqlite3.Connection):
+    def enable_load_extension(self, on):
+        seen.append(on); return super().enable_load_extension(on)
+real = sqlite3.connect
+sqlite3.connect = lambda *a, **k: real(*a, factory=Spy, **k)
+c = models.get_db({'audit': {'db_path': sys.argv[1]}})
+try:
+    c.execute("SELECT load_extension('tm-no-such-extension')"); print('loaded')
+except sqlite3.OperationalError as exc:
+    print('refused=%s' % ('not authorized' in str(exc)))
+print('stated=%s' % seen)
+PYEOF
+)"
+    tm_assert_eq "refused=True" "$(grep -E '^(refused=|loaded)' <<<"$out")" "load_extension() was attempted through get_db: ${out}"
+    tm_assert_eq "stated=[False]" "$(grep '^stated=' <<<"$out")" "get_db does not switch extension loading off itself: ${out}"
+}
+tm_case "get-db-refuses-load-extension" none m_no_extensions
+
 tm_finish

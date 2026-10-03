@@ -281,7 +281,7 @@ new Function('polkit', fs.readFileSync(process.argv[2], 'utf8'))(polkit);
 const ask = (user, unit, verb) => rule({ id: 'org.freedesktop.systemd1.manage-units',
     lookup: (k) => ({ unit, verb })[k] }, { user });
 const out = [];
-for (const d of ['syslog', 'time', 'nginx', 'tls']) {
+for (const d of ['syslog', 'time', 'nginx', 'tls', 'compliance']) {
   const u = `topic-manager-apply-${d}.service`;
   out.push(`${d}:start=${ask('topic-manager', u, 'start')}`);
   for (const v of ['stop', 'restart', 'reload', 'kill', 'enable']) out.push(`${d}:${v}=${ask('topic-manager', u, v)}`);
@@ -292,7 +292,7 @@ out.push(`sshd=${ask('topic-manager', 'ssh.service', 'start')}`);
 console.log(out.join('\n'));
 JSEOF
     local d v
-    for d in syslog time nginx tls; do
+    for d in syslog time nginx tls compliance; do
         grep -qx "${d}:start=yes" "${TM_TMP}/pk.out" || _tm_afail "polkit does not let the app START the ${d} apply unit"
         for v in stop restart reload kill enable other-user; do
             grep -qx "${d}:${v}=nh" "${TM_TMP}/pk.out" || _tm_afail "polkit grants ${v} on the ${d} apply unit: $(grep "^${d}:${v}" "${TM_TMP}/pk.out")"
@@ -301,7 +301,7 @@ JSEOF
     grep -qx 'unknown=nh' "${TM_TMP}/pk.out" || _tm_afail "polkit matches apply units by PREFIX"
     grep -qx 'sshd=nh' "${TM_TMP}/pk.out" || _tm_afail "polkit grants an unrelated unit"
 }
-tm_case "polkit-grants-start-of-the-four-apply-units-and-nothing-else" node a_polkit_rule
+tm_case "polkit-grants-start-of-the-five-apply-units-and-nothing-else" node a_polkit_rule
 
 a_allowed_units_match_polkit() {
     local out
@@ -310,11 +310,11 @@ from tm import service_control as s
 print(' '.join(sorted(s.APPLY_UNITS.values())))
 print(all(u in s.ALLOWED_UNITS for u in s.APPLY_UNITS.values()))
 " | tr -d '\r')"
-    tm_assert_eq "topic-manager-apply-nginx.service topic-manager-apply-syslog.service topic-manager-apply-time.service topic-manager-apply-tls.service" \
-        "$(sed -n 1p <<<"$out")" "service_control.APPLY_UNITS is not the four units"
+    tm_assert_eq "topic-manager-apply-compliance.service topic-manager-apply-nginx.service topic-manager-apply-syslog.service topic-manager-apply-time.service topic-manager-apply-tls.service" \
+        "$(sed -n 1p <<<"$out")" "service_control.APPLY_UNITS is not the five units (v1.3.0: + compliance)"
     tm_assert_eq "True" "$(sed -n 2p <<<"$out")" "ALLOWED_UNITS does not carry the apply units"
     local u
-    for u in syslog time nginx tls; do
+    for u in syslog time nginx tls compliance; do
         grep -q "topic-manager-apply-${u}.service" "${TM_REPO_ROOT}/install/polkit/50-topic-manager.rules" \
             || _tm_afail "the polkit rule does not name topic-manager-apply-${u}.service"
         tm_assert_file "${TM_REPO_ROOT}/systemd/topic-manager-apply-${u}.service"

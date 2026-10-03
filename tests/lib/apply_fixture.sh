@@ -32,6 +32,7 @@ fx_setup() {   # fx_setup — builds $FX (root), $FXBIN (tools)
     printf -- '-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n' > "$FX"/etc/ssl/certs/ca-certificates.crt
     # The shipped files, installed the way install.sh installs them.
     cp "${TM_REPO_ROOT}/nginx/tm-limits.conf" "$FX"/etc/nginx/conf.d/topic-manager-limits.conf
+    cp "${TM_REPO_ROOT}/nginx/tm-log-format.conf" "$FX"/etc/nginx/conf.d/topic-manager-log-format.conf
     for f in tm-limits-server tm-limits-login tm-limits-api tm-syslog tm-security-headers; do
         cp "${TM_REPO_ROOT}/nginx/${f}.conf" "$FX/etc/nginx/snippets/${f}.conf"
     done

@@ -7,7 +7,8 @@
 # one set object under two names. The first `_ALL_KEYS.add('syslog_host')`
 # would have published the syslog collector, the NTP servers and the rate
 # limits on /api/settings/public, which answers WITHOUT authentication. These
-# cases pin the public set at exactly the five display keys — by identity, by
+# cases pin the public set at exactly the six display and consent keys (v1.3.0
+# added dow_text, the replaceable consent notice) — by identity, by
 # content and by what the unauthenticated route actually returns after every
 # admin key has been saved.
 #
@@ -81,7 +82,7 @@ PYEOF
 }
 
 # ─── the public set ─────────────────────────────────────────────────────────
-a_public_set_is_five() {
+a_public_set_is_six() {
     _setup
     local out
     out="$(_app "
@@ -92,8 +93,8 @@ print('alias=%s' % (routes._ALL_KEYS is routes._PUBLIC_KEYS))
 print('leak=%s' % ','.join(sorted(routes._PUBLIC_KEYS & routes.settings_schema.ADMIN_KEYS)))
 print('all_has_admin=%s' % routes.settings_schema.ADMIN_KEYS.issubset(routes._ALL_KEYS))
 ")"
-    tm_assert_eq "public=banner_bg,banner_enabled,banner_fg,banner_text,dow_enabled" \
-        "$(grep '^public=' <<<"$out")" "the PUBLIC settings set is not exactly the five display keys: ${out}"
+    tm_assert_eq "public=banner_bg,banner_enabled,banner_fg,banner_text,dow_enabled,dow_text" \
+        "$(grep '^public=' <<<"$out")" "the PUBLIC settings set is not exactly the six display and consent keys: ${out}"
     tm_assert_eq "frozen=True" "$(grep '^frozen=' <<<"$out")" \
         "_PUBLIC_KEYS can be extended in place — one .add() publishes an admin setting"
     tm_assert_eq "alias=False" "$(grep '^alias=' <<<"$out")" \
@@ -102,9 +103,9 @@ print('all_has_admin=%s' % routes.settings_schema.ADMIN_KEYS.issubset(routes._AL
     tm_assert_eq "all_has_admin=True" "$(grep '^all_has_admin=' <<<"$out")" \
         "the authenticated settings set does not carry every admin key"
 }
-tm_case "public-settings-set-is-exactly-five-keys" tmapp a_public_set_is_five
+tm_case "public-settings-set-is-exactly-six-keys" tmapp a_public_set_is_six
 
-a_public_route_serves_five() {
+a_public_route_serves_six() {
     _setup
     local out
     out="$(_app "
@@ -121,15 +122,15 @@ print('full_host=%s' % full.get('syslog_host'))
 print('full_n=%d' % len(full))
 ")"
     tm_assert_eq "put=200" "$(grep '^put=' <<<"$out")" "saving admin settings failed: ${out}"
-    tm_assert_eq "keys=banner_bg,banner_enabled,banner_fg,banner_text,dow_enabled" \
+    tm_assert_eq "keys=banner_bg,banner_enabled,banner_fg,banner_text,dow_enabled,dow_text" \
         "$(grep '^keys=' <<<"$out")" \
         "the UNAUTHENTICATED /api/settings/public returned more than the display keys: ${out}"
     tm_assert_eq "text=HELLO" "$(grep '^text=' <<<"$out")" "the public route stopped serving the banner"
     tm_assert_eq "full_host=logs.example.org" "$(grep '^full_host=' <<<"$out")" \
         "the authenticated route does not return the saved admin setting"
-    tm_assert_eq "full_n=21" "$(grep '^full_n=' <<<"$out")" "GET /api/settings is not 5 display + 16 admin keys"
+    tm_assert_eq "full_n=23" "$(grep '^full_n=' <<<"$out")" "GET /api/settings is not 6 display + 17 admin keys"
 }
-tm_case "public-route-never-serves-an-admin-key" tmapp a_public_route_serves_five
+tm_case "public-route-never-serves-an-admin-key" tmapp a_public_route_serves_six
 
 # ─── the contract table ──────────────────────────────────────────────────────
 a_defaults_are_the_contract() {
@@ -138,6 +139,7 @@ a_defaults_are_the_contract() {
 from tm import settings_schema as s
 want = {'syslog_enabled':'false','syslog_host':'','syslog_port':'6514','syslog_protocol':'tls',
  'syslog_app_id':'topic-manager','ntp_servers':'','session_max_concurrent':'3',
+ 'session_absolute_hours':'12',
  'ratelimit_login_per_min':'10','ratelimit_login_burst':'5','ratelimit_api_per_min':'300',
  'ratelimit_api_burst':'100','ratelimit_conn_per_ip':'20','audit_retention_days':'365',
  'audit_max_rows':'5000000','audit_warn_pct':'75','http_redirect_enabled':'true'}
@@ -160,6 +162,7 @@ ok = [('syslog_host','logs.example.org'),('syslog_host','192.0.2.7'),('syslog_ho
       ('syslog_app_id','a'*48),('syslog_enabled',True),('syslog_enabled','FALSE'),
       ('ntp_servers','ntp1.example.org, 192.0.2.1'),('ntp_servers',','.join('n%d.example.org' % i for i in range(5))),
       ('session_max_concurrent','0'),('session_max_concurrent','50'),('ratelimit_login_per_min','1'),
+      ('session_absolute_hours','1'),('session_absolute_hours','24'),
       ('ratelimit_login_per_min','600'),('ratelimit_login_burst','0'),('ratelimit_api_per_min','10'),
       ('ratelimit_api_per_min','6000'),('ratelimit_api_burst','1000'),('ratelimit_conn_per_ip','500'),
       ('audit_retention_days','30'),('audit_retention_days','3650'),('audit_max_rows','10000'),
@@ -179,6 +182,7 @@ bad = [('syslog_host','2001:db8::1%a\nb'),('syslog_host','2001:db8::1%eth0'),('n
        ('syslog_app_id','x;y'),('syslog_app_id','x"y'),('syslog_enabled','yes'),('syslog_enabled','1'),
        ('ntp_servers','a,b,c,d,e,f'),('ntp_servers','a,,b'),('ntp_servers','a;b'),('ntp_servers','a,A'),
        ('ntp_servers','ntp1 ntp2'),('session_max_concurrent','51'),('session_max_concurrent','-1'),
+       ('session_absolute_hours','0'),('session_absolute_hours','25'),
        ('ratelimit_login_per_min','0'),('ratelimit_login_per_min','601'),('ratelimit_login_burst','101'),
        ('ratelimit_api_per_min','9'),('ratelimit_api_per_min','6001'),('ratelimit_api_burst','1001'),
        ('ratelimit_conn_per_ip','0'),('ratelimit_conn_per_ip','501'),('audit_retention_days','29'),

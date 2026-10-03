@@ -84,6 +84,14 @@ a_troubleshooting_is_keyed_to_real_strings() {
         "$(tm_install_sh)|Installing chrony would also remove"
         "$(tm_install_sh)|The service is installed and running, but applying"
         "$(tm_upgrade_sh)|did NOT succeed"
+        "$H|a compliance measurement carries no settings"
+        "$(tm_py_root)/tm/routes.py|Read and accept the notice before signing in."
+        "$(tm_py_root)/tm/routes.py|The directory could not be reached to re-check your group membership, so changes are refused"
+        "$(tm_py_root)/tm/routes.py|The Kafka cluster refused the request or did not answer."
+        "$(tm_install_sh)|No remote syslog collector was named."
+        "$(tm_install_sh)|A host STIG check FAILED on Topic Manager's own files or configuration"
+        "$(tm_install_sh)|The Topic Manager nginx logs could not be made private"
+        "$(tm_upgrade_sh)|Refusing to upgrade: the audit trail would stay on this host without anyone saying so."
     )
     local pair src text
     for pair in "${PAIRS[@]}"; do

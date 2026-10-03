@@ -242,7 +242,7 @@ sys.exit(1 if bad else 0)
 PYEOF
     local rc=$?
     [ "$rc" -eq 0 ] || _tm_afail "CLEAN-ROOM N3: a count of the polkit rule's pairs is not the rule's: $(cat "${TM_TMP}/pk")"
-    tm_assert_grep "DERIVED 8 pairs over 7 units" "${TM_TMP}/pk" "the rule is not the eight pairs over seven units this release reviewed"
+    tm_assert_grep "DERIVED 9 pairs over 8 units" "${TM_TMP}/pk" "the rule is not the nine pairs over eight units this release reviewed (v1.3.0: + the compliance measurement)"
     local seen; seen="$(sed -n 's/^SEEN //p' "${TM_TMP}/pk")"
     [ "${seen:-0}" -ge 5 ] || _tm_afail "only ${seen:-0} unit/verb-pair counts found (README x2, INSTALL, install/README, TROUBLESHOOTING, the rule)"
 }

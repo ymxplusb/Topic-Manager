@@ -131,6 +131,7 @@ a_redirect_ignores_the_client_host() {
     mkdir -p "$d"
     sed -e "s/^\([[:space:]]*\)listen 80;/\1listen 127.0.0.1:${port};/" \
         -e 's/YOUR-HOSTNAME.YOUR-DOMAIN.com/tm.example.org/' \
+        -e "s#/var/log/nginx/#${d}/#g" \
         "${TM_REPO_ROOT}/nginx/topic-manager-http.conf" > "$d/site.conf"
     grep -q "listen 127.0.0.1:${port};" "$d/site.conf" || _tm_afail "the :80 site's listen line moved; the case cannot relocate it"
     cat > "$d/nginx.conf" <<NGX
@@ -141,6 +142,7 @@ http {
     access_log off;
     client_body_temp_path ${d}/body; proxy_temp_path ${d}/proxy; fastcgi_temp_path ${d}/fcgi;
     uwsgi_temp_path ${d}/uwsgi; scgi_temp_path ${d}/scgi;
+    include ${TM_REPO_ROOT}/nginx/tm-log-format.conf;
     include ${d}/site.conf;
 }
 NGX

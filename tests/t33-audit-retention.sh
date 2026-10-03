@@ -38,7 +38,8 @@ def db(): return get_db(cfg)
 def setting(k, v):
     d = db(); d.execute('INSERT OR REPLACE INTO app_settings VALUES (?,?)', (k, v)); d.commit(); d.close()
 def add_rows(n, days_ago, action='CREATE'):
-    ts = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_ago)).strftime('%Y-%m-%d %H:%M:%S')
+    # v1.3.0: rows are written in the stored format, ISO 8601 Z (tm/audit.TS_FORMAT).
+    ts = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_ago)).strftime(audit.TS_FORMAT)
     d = db(); d.executemany('INSERT INTO audit_log (ts,user,action,target,detail,cluster_id) VALUES (?,?,?,?,?,?)',
                             [(ts, 'u', action, 't%d' % i, '', '') for i in range(n)]); d.commit(); d.close()
 def count(where='1=1'):
@@ -143,7 +144,7 @@ print('keys=%s' % ','.join(sorted(c6)))
         "crossing 75% did not warn EXACTLY once over three capacity reads: ${out}"
     tm_assert_eq "rearmed=False True warns=2" "$(grep '^rearmed=' <<<"$out")" \
         "falling below and crossing again did not warn a second time: ${out}"
-    tm_assert_eq "keys=last_prune,max_rows,oldest,pct,retention_days,rows,warn_pct,warning" \
+    tm_assert_eq "keys=last_prune,max_rows,oldest,pct,retention_days,rows,warn_pct,warning,write_failure" \
         "$(grep '^keys=' <<<"$out")" "the capacity document is not the contract's shape"
 }
 tm_case "capacity-warns-once-per-crossing" none a_capacity_crossing
