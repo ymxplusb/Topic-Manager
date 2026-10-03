@@ -6866,8 +6866,8 @@ DESC|v1.3.0 af1 F5 the sign-in does not use the acceptance up
 TESTS|t50-consent-v130.sh
 TARGET|py:routes
 EQUIV|no
-ANCHOR|    if consent and not consume_consent_token(db, consent['token'], CONSENT_VALID_S, time.time()):
-REPLACE|    if False:
+ANCHOR|    if not consent or consume_consent_token(db, consent['token'], CONSENT_VALID_S, time.time()):
+REPLACE|    if True:
 
 --- M808
 DESC|v1.3.0 af1 F5 the cookie's own word is the acceptance again (no server lookup)
@@ -6993,7 +6993,7 @@ DESC|v1.3.0 af1 UI a 401 is not noticed
 TESTS|t49-sessions-v130.sh
 TARGET|mainjs
 EQUIV|no
-ANCHOR|    if (r && r.status === 401 && tmSessionEnded && !input.startsWith('/api/auth/')) {
+ANCHOR|    if (r?.status === 401 && tmSessionEnded && !input.startsWith('/api/auth/')) {
 REPLACE|    if (false) {
 
 --- M823
@@ -7001,8 +7001,8 @@ DESC|v1.3.0 af1 UI a sign-in route's own 401 ends the session
 TESTS|t49-sessions-v130.sh
 TARGET|mainjs
 EQUIV|no
-ANCHOR|    if (r && r.status === 401 && tmSessionEnded && !input.startsWith('/api/auth/')) {
-REPLACE|    if (r && r.status === 401 && tmSessionEnded) {
+ANCHOR|    if (r?.status === 401 && tmSessionEnded && !input.startsWith('/api/auth/')) {
+REPLACE|    if (r?.status === 401 && tmSessionEnded) {
 
 --- M824
 DESC|v1.3.0 af1 UI a GET's 401 is not noticed

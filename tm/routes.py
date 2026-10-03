@@ -591,6 +591,20 @@ def _consent_gate():
     return (consent if consent_on else None), None
 
 
+def _use_consent(db, consent):
+    """One acceptance, one sign-in: the token is used up inside the sign-in's
+    open transaction on `db` (committed with the session it creates). A second
+    sign-in presenting the same token (a replayed cookie, or two racing
+    requests) finds it gone: the transaction is rolled back, `db` closed, and
+    the 403 returned. None when there is nothing to use or it was used now."""
+    if not consent or consume_consent_token(db, consent['token'], CONSENT_VALID_S, time.time()):
+        return None
+    db.rollback()
+    db.close()
+    session.pop('consent', None)
+    return jsonify({'error': CONSENT_REQUIRED_MESSAGE, 'code': 'consent_required'}), 403
+
+
 @bp.route('/auth/login', methods=['POST'])
 def login():
     data, err = _parse_json_body()
@@ -645,14 +659,9 @@ def login():
     active = count_active_sessions(db, result['username'])
     if 0 < max_s <= active:          # a limit of zero means unlimited
         return _refuse_session_limit(cfg, db, result['username'], active, max_s)
-    # One acceptance, one sign-in: used up in the transaction that creates the
-    # session. A second sign-in presenting the same token (a replayed cookie,
-    # or two racing requests) finds it gone and is refused.
-    if consent and not consume_consent_token(db, consent['token'], CONSENT_VALID_S, time.time()):
-        db.rollback()
-        db.close()
-        session.pop('consent', None)
-        return jsonify({'error': CONSENT_REQUIRED_MESSAGE, 'code': 'consent_required'}), 403
+    refused = _use_consent(db, consent)
+    if refused:
+        return refused
 
     sid = create_session(db, result['username'], _timeout(), request.remote_addr)
     ends_at = session_absolute_end(db, sid, _absolute_hours(db))

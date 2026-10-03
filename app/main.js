@@ -39,9 +39,9 @@ let tmSessionEnded = null;      // set by App.setup: (reason, error) => void
 // reasons and are left to the views that called them.
 const TM_REQUEST_HEADER = 'X-TM-Request';
 function tmWatchSession(input, r) {
-    if (r && r.status === 401 && tmSessionEnded && !input.startsWith('/api/auth/')) {
+    if (r?.status === 401 && tmSessionEnded && !input.startsWith('/api/auth/')) {
         const body = typeof r.clone === 'function' ? r.clone().json().catch(() => ({})) : Promise.resolve({});
-        body.then(d => tmSessionEnded((d && d.reason) || '', (d && d.error) || ''));
+        body.then(d => tmSessionEnded(d?.reason || '', d?.error || ''));
     }
     return r;
 }

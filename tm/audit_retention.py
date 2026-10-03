@@ -40,6 +40,7 @@ LAST_PRUNE_KEY = 'audit_last_prune'
 WARNED_KEY = 'audit_capacity_warned'
 SYSTEM_USER = 'system'
 _OLDEST_SQL = 'SELECT MIN(ts) FROM audit_log'
+_COUNT_SQL = 'SELECT COUNT(*) FROM audit_log'
 
 
 def _now():
@@ -77,7 +78,7 @@ def preview(cfg, now=None):
     try:
         s = _settings(db)
         cutoff = _ts(now - timedelta(days=s['audit_retention_days']))
-        total = db.execute('SELECT COUNT(*) FROM audit_log').fetchone()[0]
+        total = db.execute(_COUNT_SQL).fetchone()[0]
         by_age = db.execute('SELECT COUNT(*) FROM audit_log WHERE ts < ?', (cutoff,)).fetchone()[0]
         # prune() keeps max_rows - 1 of what the age rule leaves (its own row
         # makes max_rows), oldest first by id.
@@ -133,7 +134,7 @@ def prune(cfg, now=None):
     finally:
         remaining = None
         try:
-            remaining = db.execute('SELECT COUNT(*) FROM audit_log').fetchone()[0]
+            remaining = db.execute(_COUNT_SQL).fetchone()[0]
             oldest = db.execute(_OLDEST_SQL).fetchone()[0]
         except Exception:
             oldest = None
@@ -179,7 +180,7 @@ def capacity(cfg, record_crossing=True):
     db = get_db(cfg)
     try:
         s = _settings(db)
-        rows = db.execute('SELECT COUNT(*) FROM audit_log').fetchone()[0]
+        rows = db.execute(_COUNT_SQL).fetchone()[0]
         oldest = db.execute(_OLDEST_SQL).fetchone()[0]
         last_prune = _last_prune(db)
     finally:
