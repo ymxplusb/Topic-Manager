@@ -93,7 +93,8 @@ end = datetime.datetime.fromisoformat(r.get_json()['session_ends_at'])
 print('ends_h=%.0f' % ((end - datetime.datetime.now(datetime.timezone.utc)).total_seconds() / 3600))
 print('rows=%s' % [(a, u) for a, u, _ in rows('CONSENT_ACCEPTED', 'LOGIN')])
 print('detail=%s' % rows('CONSENT_ACCEPTED')[0][2].split(' accepted ')[0])
-c.post('/api/auth/logout', data='{}', headers=H)
+# The same browser, straight away, no sign-out in between: the acceptance
+# was spent by the first sign-in.
 print('reuse=%d' % c.post('/api/auth/login', data=cred, headers=H).status_code)
 c2 = app.test_client()
 c2.post('/api/auth/consent', data=json.dumps({'accepted': True}), headers=H)

@@ -233,10 +233,12 @@ from tm import audit_retention as R
 r = R.prune(cfg, now=now)
 print('deleted=%d' % r['deleted_age'])
 print('left=%s' % sorted(t for (t,) in rows(\"SELECT target FROM audit_log WHERE action='CREATE'\")))
+print('oldest=%s' % (R.capacity(cfg, record_crossing=False)['oldest'] == (cut + datetime.timedelta(hours=1)).isoformat()))
 ")"
     tm_assert_eq "deleted=2" "$(_line deleted "$out")" "retention after the migration did not delete exactly the two older rows: ${out}"
     tm_assert_eq "left=['new', 'younger']" "$(_line left "$out")" \
         "retention after the migration pruned by the wrong order (a mixed-format column): ${out}"
+    tm_assert_eq "oldest=True" "$(_line oldest "$out")" "the capacity's oldest entry is not read from the migrated format: ${out}"
 }
 tm_case "retention-prunes-correctly-after-the-migration" none a_retention_after_migration
 

@@ -1520,8 +1520,8 @@ DESC|routes: PUT stores an admin value without validating it
 TESTS|t31-settings-keys.sh
 TARGET|py:routes
 EQUIV|no
-ANCHOR|                accepted[k] = settings_schema.normalise(k, v)
-REPLACE|                accepted[k] = str(v)
+ANCHOR|            accepted[k] = settings_schema.normalise(k, v)
+REPLACE|            accepted[k] = str(v)
 
 --- M187
 DESC|routes: admin settings audited by name only (no old -> new)
@@ -1647,7 +1647,7 @@ DESC|routes: tls is applicable through the generic route
 TESTS|t35-apply-routes.sh
 TARGET|py:routes
 EQUIV|no
-ANCHOR|    if domain not in apply_mod.APPLY_DOMAINS:
+ANCHOR|    if domain not in apply_mod.REQUEST_DOMAINS:
 REPLACE|    if domain not in apply_mod.STATUS_DOMAINS:
 
 --- M201
@@ -1699,10 +1699,7 @@ DESC|audit: the pre-check only takes the lock (the probe row is never written)
 TESTS|t32-audit-syslog.sh
 TARGET|py:audit
 EQUIV|no
-ANCHOR|        db.execute('INSERT INTO audit_log (ts, user, action, target, detail, cluster_id) '
-ANCHOR|                   'VALUES (?,?,?,?,?,?)',
-ANCHOR|                   (probe['ts'], probe['user'], probe['action'], probe['target'],
-ANCHOR|                    probe['detail'], probe['cluster_id']))
+ANCHOR|        db.execute(_INSERT, _row(probe))
 
 --- M207
 DESC|audit: records go to facility daemon, not authpriv
@@ -1734,7 +1731,7 @@ TESTS|t33-audit-retention.sh
 TARGET|py:audit_retention
 EQUIV|no
 ANCHOR|            record = audit.log_action(cfg, SYSTEM_USER, 'AUDIT_PRUNE', 'audit_log',
-ANCHOR|                                      detail, '', db=db)
+ANCHOR|                                      detail, '', db=db, source=audit.SYSTEM_SOURCE)
 REPLACE|            record = None
 
 --- M211
@@ -5184,3 +5181,1540 @@ TESTS|t47-round6-lock-and-docs.sh
 EQUIV|no
 ANCHOR|trap 'result_line "$?"' EXIT   # verdict only: no rollback past this point
 REPLACE|trap 'result_line "$?"' ERR
+
+# ─── v1.3.0 (WO-0006): STIG decisions of 2026-10-02 — audit, sessions, consent, host checks, the web tier, the gate ─
+--- M608
+DESC|v1.3.0 audit ts back to the unmarked v1.2 format
+TESTS|t48-audit-v130.sh t33-audit-retention.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|TS_FORMAT = '%Y-%m-%dT%H:%M:%SZ'
+REPLACE|TS_FORMAT = '%Y-%m-%d %H:%M:%S'
+
+--- M609
+DESC|v1.3.0 outcome vocabulary widened (anything accepted)
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    if outcome not in OUTCOMES:
+REPLACE|    if False:
+
+--- M610
+DESC|v1.3.0 request_source never sees the request (always system)
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    if has_request_context():
+ANCHOR|        return request.remote_addr or 'unknown'
+REPLACE|    if False:
+REPLACE|        return request.remote_addr or 'unknown'
+
+--- M611
+DESC|v1.3.0 request_source drops the client address
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|        return request.remote_addr or 'unknown'
+REPLACE|        return 'unknown'
+
+--- M612
+DESC|v1.3.0 a route that audited itself is not marked (refusal recorded twice)
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|        g.tm_audited = True
+REPLACE|        pass
+
+--- M613
+DESC|v1.3.0 an explicit source is ignored
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|            'source': request_source() if source is None else str(source)[:64],
+REPLACE|            'source': request_source(),
+
+--- M614
+DESC|v1.3.0 the syslog line loses source/outcome
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    return 'action=%s user=%s target=%s cluster=%s detail=%s ts=%s source=%s outcome=%s' % (
+REPLACE|    return 'action=%s user=%s target=%s cluster=%s detail=%s ts=%s' % (
+
+--- M615
+DESC|v1.3.0 a write failure is not noted for the banner
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    if cfg is not None:
+ANCHOR|        _note_write_failure(cfg, record, exc)
+REPLACE|    if cfg is None:
+REPLACE|        _note_write_failure(cfg, record, exc)
+
+--- M616
+DESC|v1.3.0 a later success does not mark the failure recovered
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    if doc and not doc.get('recovered_at'):
+REPLACE|    if False:
+
+--- M617
+DESC|v1.3.0 the failure state never says current
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    out['current'] = out['recovered_at'] is None
+REPLACE|    out['current'] = False
+
+--- M618
+DESC|v1.3.0 the failure file is world-readable
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+REPLACE|        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0), 0o644)
+
+--- M619
+DESC|v1.3.0 log_action never records success
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|    _note_success(cfg)
+ANCHOR|    if own:
+ANCHOR|        emit(record)
+REPLACE|    if own:
+REPLACE|        emit(record)
+
+--- M620
+DESC|v1.3.0 the CSV header loses the new columns
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|CSV_HEADER = ('timestamp', 'user', 'action', 'target', 'detail', 'cluster_id', 'source', 'outcome')
+REPLACE|CSV_HEADER = ('timestamp', 'user', 'action', 'target', 'detail', 'cluster_id')
+
+--- M621
+DESC|v1.3.0 the Audit tab entries lose outcome
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|             'source': r[7], 'outcome': r[8]}
+REPLACE|             'source': r[7]}
+
+--- M622
+DESC|v1.3.0 count_rows off by one
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|        return db.execute(_COUNT_SQL).fetchone()[0]
+REPLACE|        return db.execute(_COUNT_SQL).fetchone()[0] + 1
+
+--- M623
+DESC|v1.3.0 the migration does not rewrite timestamps
+TESTS|t48-audit-v130.sh t33-audit-retention.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|        rewritten = db.execute(
+ANCHOR|            "UPDATE audit_log SET ts = substr(ts, 1, 10) || 'T' || substr(ts, 12, 8) || 'Z' "
+ANCHOR|            'WHERE ts GLOB ?', (OLD_TS_GLOB,)).rowcount
+REPLACE|        rewritten = 0
+
+--- M624
+DESC|v1.3.0 sign-in rows do not get their address as source
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|            db.execute("UPDATE audit_log SET source = target WHERE source = '' AND action IN (%s)"
+ANCHOR|                       % marks, ADDRESS_IN_TARGET)
+
+--- M625
+DESC|v1.3.0 older rows claim a source
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|UNRECORDED_SOURCE = 'unrecorded'
+REPLACE|UNRECORDED_SOURCE = '127.0.0.1'
+
+--- M626
+DESC|v1.3.0 old failure actions are migrated as successes
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|            db.execute("UPDATE audit_log SET outcome = 'failure' WHERE outcome = '' AND action IN (%s)"
+ANCHOR|                       % ','.join('?' * len(FAILURE_ACTIONS)), FAILURE_ACTIONS)
+
+--- M627
+DESC|v1.3.0 old apply results: the outcome is not the state
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|            db.execute("UPDATE audit_log SET outcome = CASE WHEN detail LIKE '% state=ok %' "
+REPLACE|            db.execute("UPDATE audit_log SET outcome = CASE WHEN detail LIKE '% state=no %' "
+
+--- M628
+DESC|v1.3.0 a rewrite-only migration is not recorded
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|        if added or rewritten:
+REPLACE|        if added:
+
+--- M629
+DESC|v1.3.0 a columns-only migration is not recorded
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|        if added or rewritten:
+REPLACE|        if rewritten:
+
+--- M630
+DESC|v1.3.0 the migration is committed even when it failed (no atomicity)
+TESTS|t48-audit-v130.sh
+TARGET|py:audit
+EQUIV|no
+ANCHOR|            record = log_action(cfg, SYSTEM_SOURCE, 'AUDIT_SCHEMA_MIGRATED', 'audit_log',
+ANCHOR|                                detail, '', db=db, source=SYSTEM_SOURCE)
+REPLACE|            try:
+REPLACE|                record = log_action(cfg, SYSTEM_SOURCE, 'AUDIT_SCHEMA_MIGRATED', 'audit_log',
+REPLACE|                                    detail, '', db=db, source=SYSTEM_SOURCE)
+REPLACE|            except AuditUnavailable:
+REPLACE|                record = None
+
+--- M631
+DESC|v1.3.0 retention cutoff back in the v1.2 format (mixed-format compare)
+TESTS|t48-audit-v130.sh
+TARGET|py:audit_retention
+EQUIV|no
+ANCHOR|    return audit.utc_ts(dt)
+REPLACE|    return dt.strftime('%Y-%m-%d %H:%M:%S')
+
+--- M632
+DESC|v1.3.0 the capacity document loses write_failure
+TESTS|t33-audit-retention.sh
+TARGET|py:audit_retention
+EQUIV|no
+ANCHOR|           'write_failure': audit.write_failure_state(cfg)}
+REPLACE|           }
+
+--- M633
+DESC|v1.3.0 the oldest entry is parsed in the old format
+TESTS|t33-audit-retention.sh t48-audit-v130.sh
+TARGET|py:audit_retention
+EQUIV|no
+ANCHOR|        return datetime.strptime(ts, audit.TS_FORMAT).replace(
+REPLACE|        return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S').replace(
+
+--- M634
+DESC|v1.3.0 extension loading switched ON
+TESTS|t17-audit-db-modes.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|        disable(False)
+REPLACE|        disable(True)
+
+--- M635
+DESC|v1.3.0 get_db no longer states it
+TESTS|t17-audit-db-modes.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|    _refuse_extensions(conn)
+ANCHOR|    return conn
+REPLACE|    return conn
+
+--- M636
+DESC|v1.3.0 the absolute lifetime is never reached
+TESTS|t49-sessions-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|            and now - _parse(created) >= timedelta(hours=absolute_hours):
+REPLACE|            and now - _parse(created) < timedelta(hours=absolute_hours):
+
+--- M637
+DESC|v1.3.0 the absolute lifetime check is neutralised
+TESTS|t49-sessions-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|    if absolute_hours and _parse(created) is not None \
+REPLACE|    if False and _parse(created) is not None \
+
+--- M638
+DESC|v1.3.0 an ended session does not say why
+TESTS|t49-sessions-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|    if ended:
+ANCHOR|        return user, ended
+
+--- M639
+DESC|v1.3.0 the idle expiry compare is inverted
+TESTS|t49-sessions-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|    if expires <= _iso(now):
+REPLACE|    if expires > _iso(now):
+
+--- M640
+DESC|v1.3.0 the absolute end is an hour late
+TESTS|t49-sessions-v130.sh t50-consent-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|    return _iso(created + timedelta(hours=absolute_hours))
+REPLACE|    return _iso(created + timedelta(hours=absolute_hours + 1))
+
+--- M641
+DESC|v1.3.0 a never-re-checked session counts as never verified
+TESTS|t49-sessions-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|    return _parse(row[1] or row[0]), _parse(row[2])
+REPLACE|    return _parse(row[1]), _parse(row[2])
+
+--- M642
+DESC|v1.3.0 a successful re-check does not move verified_at
+TESTS|t49-sessions-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|        db.execute('UPDATE session_meta SET verified_at=?, verify_attempt_at=? WHERE id=?',
+ANCHOR|                   (now, now, sid))
+REPLACE|        db.execute('UPDATE session_meta SET verify_attempt_at=? WHERE id=?', (now, sid))
+
+--- M643
+DESC|v1.3.0 a failed re-check is not recorded (the directory is asked every request)
+TESTS|t49-sessions-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|        db.execute('UPDATE session_meta SET verify_attempt_at=? WHERE id=?', (now, sid))
+ANCHOR|    db.commit()
+REPLACE|    db.commit()
+
+--- M644
+DESC|v1.3.0 end_sessions ends the caller's own session too
+TESTS|t49-sessions-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|    args = [now, keep_sid or '']
+REPLACE|    args = [now, '']
+
+--- M645
+DESC|v1.3.0 end_sessions ignores the user filter
+TESTS|t49-sessions-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|    if user is not None:
+ANCHOR|        where += ' AND user = ?'
+ANCHOR|        args.append(session_user_key(user))
+
+--- M646
+DESC|v1.3.0 end_sessions does not record the reason
+TESTS|t49-sessions-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|        db.execute('UPDATE session_meta SET end_reason=? WHERE id=?', (str(reason)[:200], sid))
+
+--- M647
+DESC|v1.3.0 the session list exposes the session id
+TESTS|t49-sessions-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|    return [{'handle': session_handle(r[0]), 'user': r[1], 'created_at': r[2],
+REPLACE|    return [{'handle': r[0], 'user': r[1], 'created_at': r[2],
+
+--- M648
+DESC|v1.3.0 expired rows are cleaned at once (the reason is lost)
+TESTS|t49-sessions-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|EXPIRED_KEEP = timedelta(hours=24)
+REPLACE|EXPIRED_KEEP = timedelta(hours=0)
+
+--- M649
+DESC|v1.3.0 a 400 is not a refusal
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if response.status_code < 400 or not request.path.startswith('/api/'):
+REPLACE|    if response.status_code <= 400 or not request.path.startswith('/api/'):
+
+--- M650
+DESC|v1.3.0 refused writes are not recorded at all
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|            if unsafe and not getattr(g, 'tm_audited', False) and error not in _UNAUDITABLE:
+REPLACE|            if False:
+
+--- M651
+DESC|v1.3.0 a route that recorded its own failure is recorded twice
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|            if unsafe and not getattr(g, 'tm_audited', False) and error not in _UNAUDITABLE:
+REPLACE|            if unsafe and error not in _UNAUDITABLE:
+
+--- M652
+DESC|v1.3.0 a refusal for a broken audit store is recorded again
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|            if unsafe and not getattr(g, 'tm_audited', False) and error not in _UNAUDITABLE:
+REPLACE|            if unsafe and not getattr(g, 'tm_audited', False):
+
+--- M653
+DESC|v1.3.0 anonymous refusals are not logged
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|            _ANON_REFUSALS.note(response.status_code, request.method, request.path,
+ANCHOR|                                request.remote_addr or 'unknown')
+REPLACE|            pass
+
+--- M654
+DESC|v1.3.0 the limiter logs nothing
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    BURST = 10
+REPLACE|    BURST = 0
+
+--- M655
+DESC|v1.3.0 the limiter never summarises
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        if summary:
+ANCHOR|            log.warning('ANON_REQUEST_REFUSED: %d more refused anonymous request(s) in the '
+REPLACE|        if False:
+REPLACE|            log.warning('ANON_REQUEST_REFUSED: %d more refused anonymous request(s) in the '
+
+--- M656
+DESC|v1.3.0 an expired session's refusal is treated as signed in
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    return username if reason is None else None
+REPLACE|    return username
+
+--- M657
+DESC|v1.3.0 refused writes recorded as successes
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|                                 '', best_effort=True, outcome='failure')
+REPLACE|                                 '', best_effort=True)
+
+--- M658
+DESC|v1.3.0 Kafka errors leak the exception text again
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    return jsonify({'error': KAFKA_FAILED_MESSAGE % ref, 'code': 'kafka_error',
+ANCHOR|                    'reference': ref}), 502
+ANCHOR|
+ANCHOR|
+ANCHOR|def _write_cluster():
+REPLACE|    return jsonify({'error': str(exc), 'code': 'kafka_error',
+REPLACE|                    'reference': ref}), 502
+REPLACE|
+REPLACE|
+REPLACE|def _write_cluster():
+
+--- M659
+DESC|v1.3.0 the service log does not keep the Kafka detail
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    log.warning('%s failed [ref %s]: %s: %s', what, ref, type(exc).__name__,
+ANCHOR|                _log_safe(str(exc), 1000))
+REPLACE|    log.warning('%s failed [ref %s]', what, ref)
+
+--- M660
+DESC|v1.3.0 no-cluster is reported as a Kafka failure
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if isinstance(exc, NoClusterError):
+ANCHOR|        return jsonify({'error': str(exc), 'code': 'no_cluster'}), 502
+
+--- M661
+DESC|v1.3.0 a write with no cluster profile is a 500 again
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    except NoClusterError as exc:
+ANCHOR|        return None, (jsonify({'error': str(exc), 'code': 'no_cluster'}), 409)
+REPLACE|    except KeyError as exc:
+REPLACE|        return None, (jsonify({'error': str(exc), 'code': 'no_cluster'}), 409)
+
+--- M662
+DESC|v1.3.0 the cluster test leaks the broker
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        return jsonify({'ok': False, 'detail': {'error': KAFKA_FAILED_MESSAGE % ref,
+REPLACE|        return jsonify({'ok': False, 'detail': {'error': result,
+
+--- M663
+DESC|v1.3.0 a refused topic write is recorded as a success
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|                     % ref, cluster.get('id', ''), best_effort=True, outcome='failure')
+REPLACE|                     % ref, cluster.get('id', ''), best_effort=True)
+
+--- M664
+DESC|v1.3.0 a refused topic write is not recorded
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    audit.log_action(_cfg(), user, action, name,
+ANCHOR|                     'failed: the cluster refused the request or did not answer (reference %s)'
+ANCHOR|                     % ref, cluster.get('id', ''), best_effort=True, outcome='failure')
+
+--- M665
+DESC|v1.3.0 an audit read is served when its record cannot be written
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        audit.log_action(cfg, session['user']['username'], 'AUDIT_READ', 'audit_log',
+ANCHOR|                         'page=%d per_page=%d' % (page, per_page), '')
+REPLACE|        audit.log_action(cfg, session['user']['username'], 'AUDIT_READ', 'audit_log',
+REPLACE|                         'page=%d per_page=%d' % (page, per_page), '', best_effort=True)
+
+--- M666
+DESC|v1.3.0 an export is not recorded
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        audit.log_action(cfg, session['user']['username'], 'AUDIT_EXPORT', 'audit_log',
+ANCHOR|                         'CSV export of %d row(s)' % audit.count_rows(cfg), '')
+REPLACE|        pass
+
+--- M667
+DESC|v1.3.0 the group re-check is never run
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|            if reason is None:
+ANCHOR|                refusal = _recheck_group(cfg, db, sid, username)
+
+--- M668
+DESC|v1.3.0 a session is re-checked on every request
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if verified is not None and now - verified < timedelta(minutes=auth.GROUP_RECHECK_MINUTES):
+REPLACE|    if verified is not None and now - verified < timedelta(minutes=0):
+
+--- M669
+DESC|v1.3.0 a failed directory is asked again at once
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if attempted is not None and now - attempted < RECHECK_RETRY \
+REPLACE|    if attempted is not None and now - attempted < timedelta(0) \
+
+--- M670
+DESC|v1.3.0 a directory outage refuses reads too
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if request.method in _SAFE_METHODS or request.endpoint in _NEVER_REFUSED:
+REPLACE|    if request.endpoint in _NEVER_REFUSED:
+
+--- M671
+DESC|v1.3.0 a directory outage refuses sign-out
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|_NEVER_REFUSED = frozenset({'api.logout'})
+REPLACE|_NEVER_REFUSED = frozenset()
+
+--- M672
+DESC|v1.3.0 a directory outage lets writes through (fail-open)
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        return _write_refused_for_directory()      # a recent attempt failed
+REPLACE|        return None      # a recent attempt failed
+
+--- M673
+DESC|v1.3.0 an unreachable directory lets writes through on the first try
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        log.warning('group re-check for user=%s: directory unavailable (%s); writes are '
+ANCHOR|                    'refused until it answers', _log_safe(username), _log_safe(detail, 300))
+ANCHOR|        return _write_refused_for_directory()
+REPLACE|        log.warning('group re-check for user=%s: directory unavailable (%s); writes are '
+REPLACE|                    'refused until it answers', _log_safe(username), _log_safe(detail, 300))
+REPLACE|        return None
+
+--- M674
+DESC|v1.3.0 a removed user's other sessions survive
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    ended = end_sessions(db, 'revoked: %s' % detail, user=username)
+REPLACE|    ended = end_sessions(db, 'revoked: %s' % detail, user=username, keep_sid=sid)
+
+--- M675
+DESC|v1.3.0 a revocation is not recorded
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    audit.log_action(cfg, username, 'SESSION_REVOKED', request.remote_addr or 'unknown',
+REPLACE|    (lambda *a, **k: None)(cfg, username, 'SESSION_REVOKED', request.remote_addr or 'unknown',
+
+--- M676
+DESC|v1.3.0 SESSION_EXPIRED does not say which limit
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|                     END_REASONS.get(reason, reason), '', best_effort=True)
+REPLACE|                     'session no longer valid', '', best_effort=True)
+
+--- M677
+DESC|v1.3.0 the absolute lifetime is not Settings' value
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|def _absolute_hours(db):
+ANCHOR|    # v1.3.0 (SRG-APP-000295, DQ8): Settings > Security > Sessions, default 12.
+ANCHOR|    return settings_schema.int_setting(
+REPLACE|def _absolute_hours(db):
+REPLACE|    # v1.3.0 (SRG-APP-000295, DQ8): Settings > Security > Sessions, default 12.
+REPLACE|    return 12 or settings_schema.int_setting(
+
+--- M678
+DESC|v1.3.0 ending sessions does not keep the caller's own
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|                             keep_sid=session.get('sid'), commit=False)
+REPLACE|                             keep_sid=None, commit=False)
+
+--- M679
+DESC|v1.3.0 a body naming a user AND all is accepted
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if everyone == (target is not None) or (target is not None and (
+REPLACE|    if (target is not None and (
+
+--- M680
+DESC|v1.3.0 the caller is not marked in the list
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        r['current'] = r['handle'] == mine
+REPLACE|        r['current'] = False
+
+--- M681
+DESC|v1.3.0 whoami does not say when the session ends
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    return jsonify({'user': session['user'], 'timeout_minutes': _timeout(),
+ANCHOR|                    'session_ends_at': ends_at})
+REPLACE|    return jsonify({'user': session['user'], 'timeout_minutes': _timeout(),
+REPLACE|                    'session_ends_at': None})
+
+--- M682
+DESC|v1.3.0 an absolute sign-out is recorded as unspecified
+TESTS|t49-sessions-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    'absolute': 'automatic sign-out at the absolute session lifetime',
+
+--- M683
+DESC|v1.3.0 consent is not required while the notice is on
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if consent_on and consent is None:
+REPLACE|    if False:
+
+--- M684
+DESC|v1.3.0 consent is required while the notice is off
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if consent_on and consent is None:
+REPLACE|    if consent is None:
+
+--- M685
+DESC|v1.3.0 an old acceptance is still fresh
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    return c if 0 <= age <= CONSENT_VALID_S else None
+REPLACE|    return c if 0 <= age <= CONSENT_VALID_S * 100 else None
+
+--- M686
+DESC|v1.3.0 one acceptance serves every sign-in
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    session.pop('consent', None)        # one acceptance, one sign-in
+
+--- M687
+DESC|v1.3.0 any acceptance body is taken
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if data.get('accepted') is not True:
+REPLACE|    if not data.get('accepted'):
+
+--- M688
+DESC|v1.3.0 the acceptance is not recorded
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        if consent:
+ANCHOR|            audit.log_action(cfg, result['username'], 'CONSENT_ACCEPTED', 'consent notice',
+REPLACE|        if False:
+REPLACE|            audit.log_action(cfg, result['username'], 'CONSENT_ACCEPTED', 'consent notice',
+
+--- M689
+DESC|v1.3.0 the acceptance does not name a custom notice
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if not text:
+ANCHOR|        return 'standard DoD notice'
+REPLACE|    if True:
+REPLACE|        return 'standard DoD notice'
+
+--- M690
+DESC|v1.3.0 the notice text is recorded in full, not by digest
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        if k in _AUDIT_DIGEST_KEYS:
+REPLACE|        if False:
+
+--- M691
+DESC|v1.3.0 the consent text is stored unvalidated
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        elif k in settings_schema.PUBLIC_VALIDATORS:
+REPLACE|        elif False:
+
+--- M692
+DESC|v1.3.0 the sign-in does not say when the session ends
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    return jsonify({'user': result, 'timeout_minutes': _timeout(), 'session_ends_at': ends_at})
+REPLACE|    return jsonify({'user': result, 'timeout_minutes': _timeout()})
+
+--- M693
+DESC|v1.3.0 the measurement cannot be requested
+TESTS|t51-host-checks-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if domain not in apply_mod.REQUEST_DOMAINS:
+REPLACE|    if domain not in apply_mod.APPLY_DOMAINS:
+
+--- M694
+DESC|v1.3.0 a measurement stages every admin setting
+TESTS|t51-host-checks-v130.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|    if domain in CHECK_DOMAINS:
+ANCHOR|        return {}               # a measurement carries no settings
+REPLACE|    if False:
+REPLACE|        return {}               # a measurement carries no settings
+
+--- M695
+DESC|v1.3.0 a malformed check key passes
+TESTS|t51-host-checks-v130.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|        if not key or not set(key) <= _CHECK_KEY_CHARS:
+REPLACE|        if not key:
+
+--- M696
+DESC|v1.3.0 measured checks are lost on a reboot
+TESTS|t51-host-checks-v130.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|        if 'checks' in final:
+ANCHOR|            doc['checks'] = clean_checks(final.get('checks'))
+
+--- M697
+DESC|v1.3.0 an apply result is recorded with the poller as its source
+TESTS|t51-host-checks-v130.sh t43-web-tier-round4.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|                                        '', db=db, source=audit.SYSTEM_SOURCE,
+ANCHOR|                                        outcome='success' if res.get('state') == 'ok' else 'failure'))
+REPLACE|                                        '', db=db,
+REPLACE|                                        outcome='success' if res.get('state') == 'ok' else 'failure'))
+
+--- M698
+DESC|v1.3.0 every apply result is a success
+TESTS|t51-host-checks-v130.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|                                        outcome='success' if res.get('state') == 'ok' else 'failure'))
+REPLACE|                                        outcome='success'))
+
+--- M699
+DESC|v1.3.0 the seed refuses the consent switch
+TESTS|t50-consent-v130.sh
+TARGET|py:apply
+EQUIV|no
+ANCHOR|            values[k] = settings_schema.normalise_seed(k, v)
+REPLACE|            values[k] = settings_schema.normalise(k, v)
+
+--- M700
+DESC|v1.3.0 the absolute lifetime range widened
+TESTS|t31-settings-keys.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    'session_absolute_hours':  (1, 24),
+REPLACE|    'session_absolute_hours':  (0, 25),
+
+--- M701
+DESC|v1.3.0 the absolute lifetime default is 24 h
+TESTS|t31-settings-keys.sh t49-sessions-v130.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    'session_absolute_hours':  '12',
+REPLACE|    'session_absolute_hours':  '24',
+
+--- M702
+DESC|v1.3.0 the notice text may be any length
+TESTS|t50-consent-v130.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|CONSENT_TEXT_MAX = 4000
+REPLACE|CONSENT_TEXT_MAX = 40000
+
+--- M703
+DESC|v1.3.0 control characters reach the notice text
+TESTS|t50-consent-v130.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    if _CONSENT_TEXT_BAD.search(text):
+REPLACE|    if False:
+
+--- M704
+DESC|v1.3.0 line endings are not normalised
+TESTS|t50-consent-v130.sh
+TARGET|py:settings_schema
+EQUIV|no
+ANCHOR|    text = text.replace('\r\n', '\n').replace('\r', '\n')
+
+--- M705
+DESC|v1.3.0 a removed member is still a member
+TESTS|t49-sessions-v130.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|    if group and group.lower() not in _member_of(entry):
+REPLACE|    if False:
+
+--- M706
+DESC|v1.3.0 a deleted account is still a member
+TESTS|t49-sessions-v130.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|    if entry is None:
+ANCHOR|        return 'not_found', 'the account is no longer in the directory'
+
+--- M707
+DESC|v1.3.0 an unreachable directory counts as a member (fail-open)
+TESTS|t49-sessions-v130.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|        if not ok:
+ANCHOR|            return 'unavailable', 'service bind failed: %s' % err
+REPLACE|        if not ok:
+REPLACE|            return 'member', ''
+
+--- M708
+DESC|v1.3.0 the re-check runs without a service account
+TESTS|t49-sessions-v130.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|    if not recheck_supported(cfg):
+REPLACE|    if False:
+
+--- M709
+DESC|v1.3.0 the re-check has no connect bound
+TESTS|t49-sessions-v130.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|                        connect_timeout=RECHECK_TIMEOUT_S)
+REPLACE|                        )
+
+--- M710
+DESC|v1.3.0 the re-check has no read bound
+TESTS|t49-sessions-v130.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|    extra = {'receive_timeout': receive_timeout} if receive_timeout else {}
+REPLACE|    extra = {}
+
+--- M711
+DESC|v1.3.0 a self-signed certificate is not flagged
+TESTS|t51-host-checks-v130.sh
+TARGET|py:hoststatus
+EQUIV|no
+ANCHOR|    if subject == issuer:
+REPLACE|    if subject != issuer:
+
+--- M712
+DESC|v1.3.0 an unlimited session cap is not a warning
+TESTS|t51-host-checks-v130.sh
+TARGET|py:compliance
+EQUIV|no
+ANCHOR|    out = [_check('session_cap', 'pass' if cap > 0 else 'warn',
+REPLACE|    out = [_check('session_cap', 'pass' if cap >= 0 else 'warn',
+
+--- M713
+DESC|v1.3.0 the consent notice OFF is not an open item
+TESTS|t51-host-checks-v130.sh
+TARGET|py:compliance
+EQUIV|no
+ANCHOR|    if rows.get('dow_enabled') != 'true':
+REPLACE|    if False:
+
+--- M714
+DESC|v1.3.0 remote syslog never applied passes
+TESTS|t51-host-checks-v130.sh
+TARGET|py:compliance
+EQUIV|no
+ANCHOR|    if values is None:
+ANCHOR|        return _check('remote_syslog', 'warn', 'remote syslog has never been applied on this host: '
+REPLACE|    if values is None:
+REPLACE|        return _check('remote_syslog', 'pass', 'remote syslog has never been applied on this host: '
+
+--- M715
+DESC|v1.3.0 a wide database is a pass
+TESTS|t51-host-checks-v130.sh
+TARGET|py:compliance
+EQUIV|no
+ANCHOR|        out.append(_check('db_modes', 'fail' if wide else 'pass',
+REPLACE|        out.append(_check('db_modes', 'pass',
+
+--- M716
+DESC|v1.3.0 load_extension is not asked
+TESTS|t51-host-checks-v130.sh
+TARGET|py:compliance
+EQUIV|no
+ANCHOR|        conn.execute("SELECT load_extension('tm-compliance-probe')")
+REPLACE|        raise sqlite3.OperationalError('x')
+
+--- M717
+DESC|v1.3.0 the re-check is reported possible without a service account
+TESTS|t51-host-checks-v130.sh
+TARGET|py:compliance
+EQUIV|no
+ANCHOR|    if auth.recheck_supported(cfg):
+REPLACE|    if True:
+
+--- M718
+DESC|v1.3.0 FIPS off is a pass
+TESTS|t51-host-checks-v130.sh
+TARGET|py:compliance
+EQUIV|no
+ANCHOR|            _check('fips_mode', 'pass' if fips else 'warn',
+REPLACE|            _check('fips_mode', 'pass',
+
+--- M719
+DESC|v1.3.0 an unsynchronised clock is a pass
+TESTS|t51-host-checks-v130.sh
+TARGET|py:compliance
+EQUIV|no
+ANCHOR|            _check('time_sync', 'pass' if synced else 'warn',
+REPLACE|            _check('time_sync', 'pass',
+
+--- M720
+DESC|v1.3.0 an unreadable certificate is guessed about
+TESTS|t51-host-checks-v130.sh
+TARGET|py:compliance
+EQUIV|no
+ANCHOR|    if tls.get('self_signed') is None:
+REPLACE|    if False:
+
+--- M721
+DESC|v1.3.0 an unmeasured host check is a pass
+TESTS|t51-host-checks-v130.sh
+TARGET|py:compliance
+EQUIV|no
+ANCHOR|        live = [measured.get(k) or {'key': k, 'status': 'unknown', 'where':
+REPLACE|        live = [measured.get(k) or {'key': k, 'status': 'pass', 'where':
+
+--- M722
+DESC|v1.3.0 a failure is not an open item
+TESTS|t51-host-checks-v130.sh
+TARGET|py:compliance
+EQUIV|no
+ANCHOR|                         if c['status'] in ('warn', 'fail')})
+REPLACE|                         if c['status'] in ('warn',)})
+
+--- M723
+DESC|v1.3.0 a login shell is accepted
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    elif entry[6] in NOLOGIN_SHELLS:
+REPLACE|    elif entry[6]:
+
+--- M724
+DESC|v1.3.0 adm is not an administrative group
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|ADMIN_GROUPS = ('sudo', 'adm', 'wheel', 'admin', 'root')
+REPLACE|ADMIN_GROUPS = ('sudo', 'wheel', 'admin', 'root')
+
+--- M725
+DESC|v1.3.0 a set password counts as locked
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    elif sentry[1].startswith(('!', '*')):
+REPLACE|    elif sentry[1]:
+
+--- M726
+DESC|v1.3.0 group-writable files under /etc/nginx pass
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        if st.st_uid != 0 or st.st_mode & 0o022:
+REPLACE|        if st.st_uid != 0 or st.st_mode & 0o002:
+
+--- M727
+DESC|v1.3.0 drift of the product's own nginx files is only a warning
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    if mine:
+ANCHOR|        return [_check('nginx_config_modes', 'fail', 'Topic Manager files under /etc/nginx are '
+REPLACE|    if mine:
+REPLACE|        return [_check('nginx_config_modes', 'warn', 'Topic Manager files under /etc/nginx are '
+
+--- M728
+DESC|v1.3.0 a 0644 site log passes
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o137 or st.st_uid not in owners \
+REPLACE|        if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o133 or st.st_uid not in owners \
+
+--- M729
+DESC|v1.3.0 a world-readable rotated log passes
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        if st.st_mode & 0o007:
+REPLACE|        if st.st_mode & 0o002:
+
+--- M730
+DESC|v1.3.0 site-log drift is only a warning
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        return [_check('site_log_modes', 'fail', 'Topic Manager logs readable beyond root, %s '
+REPLACE|        return [_check('site_log_modes', 'warn', 'Topic Manager logs readable beyond root, %s '
+
+--- M731
+DESC|v1.3.0 a loaded module passes
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    if loaded:
+ANCHOR|        return [_check('nginx_modules', 'warn', 'dynamic module(s) loaded: %s. Topic Manager needs '
+REPLACE|    if False:
+REPLACE|        return [_check('nginx_modules', 'warn', 'dynamic module(s) loaded: %s. Topic Manager needs '
+
+--- M732
+DESC|v1.3.0 a weak protocol in another site fails the product
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|                (mine if path in _MANAGED_TLS_FILES else theirs).append('%s in %s' % (
+REPLACE|                mine.append('%s in %s' % (
+
+--- M733
+DESC|v1.3.0 TLSv1.1 is not weak
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|            weak = [p for p in line.split() if p in ('SSLv3', 'TLSv1', 'TLSv1.1')]
+REPLACE|            weak = [p for p in line.split() if p in ('SSLv3', 'TLSv1')]
+
+--- M734
+DESC|v1.3.0 a missing DoD field passes
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    lacking = [f for f in DOD_LOG_FIELDS if not fmt or not re.search(re.escape(f) + r'\b', fmt.group(1))]
+REPLACE|    lacking = []
+
+--- M735
+DESC|v1.3.0 the site need not use the format
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    elif not uses:
+REPLACE|    elif False:
+
+--- M736
+DESC|v1.3.0 server_tokens on passes
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    if site is not None and re.search(r'^\s*server_tokens\s+off\s*;', site, re.M):
+REPLACE|    if site is not None:
+
+--- M737
+DESC|v1.3.0 a missing error page passes
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    if site is not None and need <= codes:
+REPLACE|    if site is not None:
+
+--- M738
+DESC|v1.3.0 a readable TLS key passes
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    if stat.S_ISREG(st.st_mode) and st.st_uid == 0 and not st.st_mode & 0o077:
+REPLACE|    if stat.S_ISREG(st.st_mode) and st.st_uid == 0:
+
+--- M739
+DESC|v1.3.0 a FAIL does not fail the report
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    return 1 if any(c['status'] == 'fail' for c in checks) else 0
+REPLACE|    return 0
+
+--- M740
+DESC|v1.3.0 a measurement request carrying settings is taken
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|        if given not in (None, {}) or doc.get('files') not in (None, {}):
+REPLACE|        if False:
+
+--- M741
+DESC|v1.3.0 nginx -T failure is guessed about
+TESTS|t51-host-checks-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|    if rc != 0 or not out:
+ANCHOR|        return None
+ANCHOR|    # nginx -T marks each file it dumps with "# configuration file <path>:";
+REPLACE|    if not out:
+REPLACE|        return None
+REPLACE|    # nginx -T marks each file it dumps with "# configuration file <path>:";
+
+--- M742
+DESC|v1.3.0 the syslog copy of the access log is in "combined"
+TESTS|t52-nginx-v130.sh
+TARGET|helper
+EQUIV|no
+ANCHOR|            'severity=info tm_dod;\n'
+REPLACE|            'severity=info;\n'
+
+--- M743
+DESC|v1.3.0 a missing site log is created world-readable
+TESTS|t51-host-checks-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            install -m 640 -o "$web" -g "$grp" /dev/null "$p"
+REPLACE|            install -m 644 -o "$web" -g "$grp" /dev/null "$p"
+
+--- M744
+DESC|v1.3.0 an existing site log is not narrowed
+TESTS|t51-host-checks-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            chown "${web}:${grp}" "$p" && chmod u-x,g-wx,o-rwx "$p"
+REPLACE|            chown "${web}:${grp}" "$p"
+
+--- M745
+DESC|v1.3.0 a rotated copy keeps its other bits
+TESTS|t51-host-checks-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        chmod o-rwx "$p" || bad="${bad} ${p} (could not narrow)"
+REPLACE|        true
+
+--- M746
+DESC|v1.3.0 ensure_site_logs follows a symlink
+TESTS|t51-host-checks-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if [[ -L "$p" ]]; then bad="${bad} ${p} (a symlink)"; continue; fi
+
+--- M747
+DESC|v1.3.0 a missing helper is skipped silently
+TESTS|t51-host-checks-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        printf 'UNKNOWN\thost_checks\t%s is missing, so the host STIG checks were not run\n' "$1"
+REPLACE|        true
+
+--- M748
+DESC|v1.3.0 an install with neither flag goes ahead
+TESTS|t51-host-checks-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|if [[ -z "$OPT_SYSLOG_HOST" && $OPT_NO_REMOTE_SYSLOG != true && "$(saved_remote_syslog)" != true ]]; then
+REPLACE|if false; then
+
+--- M749
+DESC|v1.3.0 both syslog flags together are accepted
+TESTS|t51-host-checks-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|if [[ -n "$OPT_SYSLOG_HOST" && $OPT_NO_REMOTE_SYSLOG == true ]]; then
+REPLACE|if false; then
+
+--- M750
+DESC|v1.3.0 a reinstall over a forwarding host is refused
+TESTS|t51-host-checks-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    python3 - "${DATA_DIR}/tm.db" <<'PYSAVED' 2>/dev/null || true
+REPLACE|    true <<'PYSAVED' 2>/dev/null || true
+
+--- M751
+DESC|v1.3.0 a fresh install leaves the notice off
+TESTS|t50-consent-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    SEED_PAIRS+=("dow_enabled=true")
+REPLACE|    true
+
+--- M752
+DESC|v1.3.0 --no-consent-banner is ignored
+TESTS|t50-consent-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    SEED_PAIRS+=("dow_enabled=false")
+REPLACE|    true
+
+--- M753
+DESC|v1.3.0 a reinstall turns the notice back on
+TESTS|t50-consent-v130.sh
+TARGET|install
+EQUIV|no
+ANCHOR|elif [[ ! -e "${DATA_DIR}/tm.db" ]]; then
+REPLACE|else
+
+--- M754
+DESC|v1.3.0 --force overrides the remote-syslog block
+TESTS|t51-host-checks-v130.sh
+EQUIV|no
+ANCHOR|if [[ $SYSLOG_HARD_BLOCK == true ]]; then
+REPLACE|if [[ $SYSLOG_HARD_BLOCK == true && $FORCE != true ]]; then
+
+--- M755
+DESC|v1.3.0 the access log is in "combined" again
+TESTS|t52-nginx-v130.sh t36-nginx-limits.sh
+TARGET|site
+EQUIV|no
+ANCHOR|    access_log /var/log/nginx/topic-manager-access.log tm_dod;
+REPLACE|    access_log /var/log/nginx/topic-manager-access.log;
+
+--- M756
+DESC|v1.3.0 nginx's own 404 page is served
+TESTS|t52-nginx-v130.sh
+TARGET|site
+EQUIV|no
+ANCHOR|    error_page 403 404 @tm_not_found;
+ANCHOR|    error_page 500 502 503 504 @tm_unavailable;
+ANCHOR|
+ANCHOR|    location @tm_not_found {
+REPLACE|    error_page 500 502 503 504 @tm_unavailable;
+REPLACE|
+REPLACE|    location @tm_not_found {
+
+--- M757
+DESC|v1.3.0 /api/ inherits no 5xx page (nginx's own 502 again)
+TESTS|t52-nginx-v130.sh
+TARGET|site
+EQUIV|no
+ANCHOR|        include /etc/nginx/snippets/tm-limits-api.conf;
+ANCHOR|        error_page 429 = @tm_rate_limited;
+ANCHOR|        error_page 403 404 @tm_not_found;
+ANCHOR|        error_page 500 502 503 504 @tm_unavailable;
+REPLACE|        include /etc/nginx/snippets/tm-limits-api.conf;
+REPLACE|        error_page 429 = @tm_rate_limited;
+REPLACE|        error_page 403 404 @tm_not_found;
+
+--- M758
+DESC|v1.3.0 the 5xx page loses the security headers
+TESTS|t52-nginx-v130.sh t36-nginx-limits.sh
+TARGET|site
+EQUIV|no
+ANCHOR|        default_type application/json;
+ANCHOR|        add_header Cache-Control "no-store" always;
+ANCHOR|        include /etc/nginx/snippets/tm-security-headers.conf;
+REPLACE|        default_type application/json;
+REPLACE|        add_header Cache-Control "no-store" always;
+
+--- M759
+DESC|v1.3.0 the :80 site logs to the OS default in "combined"
+TESTS|t52-nginx-v130.sh
+TARGET|httpsite
+EQUIV|no
+ANCHOR|    access_log /var/log/nginx/topic-manager-access.log tm_dod;
+
+--- M760
+DESC|v1.3.0 the format loses $request_id
+TESTS|t52-nginx-v130.sh
+TARGET|logformat
+EQUIV|no
+ANCHOR|                  '"$http_x_forwarded_for" $request_id';
+REPLACE|                  '"$http_x_forwarded_for"';
+
+--- M761
+DESC|v1.3.0 the format loses $server_addr
+TESTS|t52-nginx-v130.sh
+TARGET|logformat
+EQUIV|no
+ANCHOR|log_format tm_dod '$time_local $server_name $server_addr $remote_addr $remote_user '
+REPLACE|log_format tm_dod '$time_local $server_name $remote_addr $remote_user '
+
+--- M762
+DESC|v1.3.0 the notice is not shown before the form
+TESTS|t50-consent-v130.sh
+TARGET|loginview
+EQUIV|no
+ANCHOR|            this.showConsent = this.consentRequired && !this.consentAccepted;
+REPLACE|            this.showConsent = false;
+
+--- M763
+DESC|v1.3.0 a sign-in is posted before the acceptance
+TESTS|t50-consent-v130.sh
+TARGET|loginview
+EQUIV|no
+ANCHOR|            if (this.consentRequired && !this.consentAccepted) { this.showConsent = true; return; }
+
+--- M764
+DESC|v1.3.0 I Agree does not post the acceptance
+TESTS|t50-consent-v130.sh
+TARGET|loginview
+EQUIV|no
+ANCHOR|                const r = await fetch('/api/auth/consent', {
+REPLACE|                const r = await Promise.resolve({ ok: true }); ({
+
+--- M765
+DESC|v1.3.0 a 403 consent_required is shown as a plain error
+TESTS|t50-consent-v130.sh
+TARGET|loginview
+EQUIV|no
+ANCHOR|                if (r.status === 403 && data.code === 'consent_required') {
+REPLACE|                if (false) {
+
+--- M766
+DESC|v1.3.0 the session end is not handed to the app
+TESTS|t50-consent-v130.sh
+TARGET|loginview
+EQUIV|no
+ANCHOR|                this.$emit('logged-in', data.user, data.timeout_minutes, data.session_ends_at);
+REPLACE|                this.$emit('logged-in', data.user, data.timeout_minutes);
+
+--- M767
+DESC|v1.3.0 custom text is one paragraph
+TESTS|t50-consent-v130.sh
+TARGET|loginview
+EQUIV|no
+ANCHOR|            return this.consentText.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+REPLACE|            return [this.consentText].filter(Boolean);
+
+--- M768
+DESC|v1.3.0 no sign-out is armed at the absolute end
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|            absoluteTimer = setTimeout(() => logout('absolute'), Math.max(0, wait));
+
+--- M769
+DESC|v1.3.0 the absolute sign-out has no lead
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|            const wait = end - Date.now() - LOGOUT_LEAD_MS;
+REPLACE|            const wait = end - Date.now();
+
+--- M770
+DESC|v1.3.0 the absolute sign-out is posted as explicit
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|            const why = ['idle', 'absolute'].includes(reason) ? reason : 'explicit';
+REPLACE|            const why = reason === 'idle' ? 'idle' : 'explicit';
+
+--- M771
+DESC|v1.3.0 the sign-in page is not told why
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|            loginNotice.value = { idle: IDLE_NOTICE, absolute: ABSOLUTE_NOTICE }[why] || '';
+REPLACE|            loginNotice.value = why === 'idle' ? IDLE_NOTICE : '';
+
+--- M772
+DESC|v1.3.0 a timer is armed with no end from the server
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|            if (!user.value || !Number.isFinite(end)) return;
+REPLACE|            if (!user.value) return;
+
+--- M773
+DESC|v1.3.0 the Audit tab loses the Outcome column
+TESTS|t48-audit-v130.sh
+TARGET|audittab
+EQUIV|no
+ANCHOR|      <thead><tr><th>Timestamp (UTC)</th><th>User</th><th>Source</th><th>Action</th><th>Outcome</th><th>Target</th><th>Detail</th><th>Cluster</th></tr></thead>
+REPLACE|      <thead><tr><th>Timestamp (UTC)</th><th>User</th><th>Source</th><th>Action</th><th>Target</th><th>Detail</th><th>Cluster</th></tr></thead>
+
+--- M774
+DESC|v1.3.0 the Audit tab loses the failure banner
+TESTS|t48-audit-v130.sh
+TARGET|audittab
+EQUIV|no
+ANCHOR|  <div v-if="writeFailure && writeFailure.current" class="host-audit-banner" role="alert">
+REPLACE|  <div v-if="false" class="host-audit-banner" role="alert">
+
+--- M775
+DESC|v1.3.0 End all sends a user
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                    body: JSON.stringify(target === null ? { all: true } : { user: target }),
+REPLACE|                    body: JSON.stringify({ user: target }),
+
+--- M776
+DESC|v1.3.0 the CSV drops a rule without checks
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    const checks = rule.checks?.length ? rule.checks : [SETTINGS_NO_CHECK];
+REPLACE|    const checks = rule.checks || [];
+
+--- M777
+DESC|v1.3.0 the CSV does not escape quotes
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    return rows.map(r => r.map(v => '"' + String(v ?? '').replaceAll('"', '""') + '"').join(',')).join('\n');
+REPLACE|    return rows.map(r => r.map(v => '"' + String(v ?? '') + '"').join(',')).join('\n');
+
+--- M778
+DESC|v1.3.0 the standard wording cannot be restored
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|            const ok = await this.saveSettings({ dow_text: useStandard ? '' : this.dowText });
+REPLACE|            const ok = await this.saveSettings({ dow_text: this.dowText });
+
+--- M779
+DESC|v1.3.0 Settings loses the failure banner
+TESTS|t48-audit-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|  <div v-if="hostPanels.capacity?.write_failure?.current" class="host-audit-banner" role="alert">
+REPLACE|  <div v-if="false" class="host-audit-banner" role="alert">
+
+--- M780
+DESC|v1.3.0 the TLS pane drops the issuer check
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        <dt v-if="hostPanels.tls.issuer_warning">Issuer check</dt><dd v-if="hostPanels.tls.issuer_warning" :data-state="hostPanels.tls.self_signed ? 'warning' : 'ok'">{{ hostPanels.tls.self_signed ? '! ' : '' }}{{ hostPanels.tls.issuer_warning }}</dd>
+
+--- M781
+DESC|v1.3.0 the gate ignores a status difference
+TESTS|t53-stig-compliance-v130.sh
+TARGET|stiggate
+EQUIV|no
+ANCHOR|keys = ('id', 'title', 'sev', 'decision', 'status', 'checks')
+REPLACE|keys = ('id', 'title', 'sev', 'decision', 'checks')
+
+--- M782
+DESC|v1.3.0 the gate does not count the rules
+TESTS|t53-stig-compliance-v130.sh
+TARGET|stiggate
+EQUIV|no
+ANCHOR|if (len(ids), n_ngx, n_srg) != (75, 32, 43):
+REPLACE|if False:
+
+--- M783
+DESC|v1.3.0 the gate allows NOT-MET on any decision
+TESTS|t53-stig-compliance-v130.sh
+TARGET|stiggate
+EQUIV|no
+ANCHOR|    if (r['status'] == 'NOT-MET') != (r['decision'] == 'No'):
+REPLACE|    if False:
+
+--- M784
+DESC|v1.3.0 the gate does not require an AO decision point
+TESTS|t53-stig-compliance-v130.sh
+TARGET|stiggate
+EQUIV|no
+ANCHOR|    if (r['decision'] == 'Other' or r['status'] in ('INHERITED', 'N-A')) and not r['ao']:
+REPLACE|    if False:
+
+--- M785
+DESC|v1.3.0 the gate does not check cited paths
+TESTS|t53-stig-compliance-v130.sh
+TARGET|stiggate
+EQUIV|no
+ANCHOR|        if not os.path.exists(os.path.join(root, path)):
+REPLACE|        if False:
+
+--- M786
+DESC|v1.3.0 the gate does not check the Totals
+TESTS|t53-stig-compliance-v130.sh
+TARGET|stiggate
+EQUIV|no
+ANCHOR|    if int(totals.get(st, -1)) != got:
+REPLACE|    if False:
+
+--- M787
+DESC|v1.3.0 the gate does not require each check to be produced
+TESTS|t53-stig-compliance-v130.sh
+TARGET|stiggate
+EQUIV|no
+ANCHOR|    if c not in helper_keys:
+REPLACE|    if False:
+
+--- M788
+DESC|v1.3.0 the gate does not require each declared check to be used
+TESTS|t53-stig-compliance-v130.sh
+TARGET|stiggate
+EQUIV|no
+ANCHOR|for c in sorted(declared - used):
+REPLACE|for c in []:
+
+--- M789
+DESC|v1.3.0 the gate does not require every field
+TESTS|t53-stig-compliance-v130.sh
+TARGET|stiggate
+EQUIV|no
+ANCHOR|        if not fields.get(f, '').strip():
+REPLACE|        if False:
+
+--- M790
+DESC|v1.3.0 the gate exits 0 on problems
+TESTS|t53-stig-compliance-v130.sh
+TARGET|stiggate
+EQUIV|no
+ANCHOR|    sys.exit(1)
+ANCHOR|st = {s: sum(r['status'] == s for r in doc_rules) for s in consts['STATUSES']}
+REPLACE|    sys.exit(0)
+REPLACE|st = {s: sum(r['status'] == s for r in doc_rules) for s in consts['STATUSES']}
+

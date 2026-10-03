@@ -47,6 +47,11 @@ declare -A TARGET_PATH=(
   [sonar]="${TM_REPO_ROOT}/tools/sonar-local.sh"
   [surfaces]="${TM_REPO_ROOT}/tools/check-version-surfaces.sh"
   [settings]="${TM_REPO_ROOT}/app/components/SettingsTab.js"
+  [mainjs]="${TM_REPO_ROOT}/app/main.js"
+  [audittab]="${TM_REPO_ROOT}/app/components/AuditTab.js"
+  [stiggate]="${TM_REPO_ROOT}/tools/check-stig-compliance.sh"
+  [logformat]="${TM_REPO_ROOT}/nginx/tm-log-format.conf"
+  [httpsite]="${TM_REPO_ROOT}/nginx/topic-manager-http.conf"
 )
 declare -A TARGET_ENV=(
   [upgrade]="TM_UPGRADE_SH"
@@ -58,6 +63,11 @@ declare -A TARGET_ENV=(
   [sonar]="TM_SONAR_LOCAL"
   [surfaces]="TM_VERSION_SURFACES"
   [settings]="TM_SETTINGS_SOURCE"
+  [mainjs]="TM_MAIN_JS"
+  [audittab]="TM_AUDITTAB_JS"
+  [stiggate]="TM_STIG_GATE"
+  [logformat]="TM_LOG_FORMAT"
+  [httpsite]="TM_HTTP_SITE"
 )
 # v1.2.0: a Python module is named TARGET|py:<module> (tm/<module>.py). The
 # harness copies the whole tm/ package into the scratch directory, mutates the

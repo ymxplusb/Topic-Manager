@@ -31,7 +31,7 @@ _nginx() {
 # _serve: start the shipped site on 127.0.0.1:${PORT}; D is its directory.
 _serve() {
     NGX="$(_nginx)"; [ -n "$NGX" ] || _tm_afail "no real nginx here"
-    D="${TM_TMP}/srv"; PORT=18443; HPORT=18080
+    D="${TM_TMP}/srv"; PORT=18443; HPORT=18081   # not 18080: t36 uses it
     mkdir -p "$D/www" "$D/log"
     printf '<!DOCTYPE html><title>tm</title>' > "$D/www/index.html"
     # nginx's workers are not root: the docroot must be reachable through the

@@ -57,7 +57,8 @@ PYEOF
 
 a_gate_goes_red() {
     _red doc_status doc "t = t.replace('- **Status:** PARTLY', '- **Status:** MET', 1)" "status differs"
-    _red rules_status rules "t = t.replace(\"'Yes', 'PARTLY'\", \"'Yes', 'MET'\", 1)" "status differs"
+    _red rules_status rules "t = t.replace('YES, PARTLY', 'YES, MET', 1)" "status differs"
+    _red rules_constant rules "t = t.replace(\"CAT_I, CAT_II = 'CAT I', 'CAT II'\", \"CAT_I, CAT_II = 'CAT I', 'CAT 2'\", 1)" "sev differs"
     _red rules_title rules "t = t.replace('NGINX must use TLS 1.2', 'NGINX must use TLS 1.3', 1)" "title differs"
     _red doc_check doc "t = t.replace('- **Live checks:** \`tls_protocols\`', '- **Live checks:** none', 1)" "checks differs"
     _red doc_drop doc "i = t.index('### NGNX-APP-000590'); j = t.index('### NGNX-APP-000720'); t = t[:i] + t[j:]" "the document has 74 rules"

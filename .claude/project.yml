@@ -100,7 +100,10 @@ surfaces:
       v1.2.0 (WO-0004): the recipe reads EVERY module, not tm/routes.py —
       tm/apply.py and tm/audit_retention.py write actions of their own, and a
       routes.py-only recipe would have undercounted by five. 21 in the DB as
-      of v1.2.0, plus AUDIT_WRITE_FAILED (syslog-only). t39 holds README to it.
+      of v1.2.0, 28 as of v1.3.0 (AUDIT_READ, AUDIT_EXPORT,
+      AUDIT_SCHEMA_MIGRATED, CONSENT_ACCEPTED, REQUEST_REFUSED,
+      SESSION_REVOKED, SESSIONS_ENDED), plus AUDIT_WRITE_FAILED
+      (syslog-only). t39 holds README to it.
       Use:
       python3 -c "import ast,glob;print(sorted({n.args[2].value for f in glob.glob('tm/*.py')
       for n in ast.walk(ast.parse(open(f).read())) if isinstance(n,ast.Call)
@@ -316,6 +319,23 @@ gates:
       rsyslog UDP sender sockets) are pinned rows. Proven RED on 7
       one-sided drifts (incl. an apostrophe in a JS cell) and 5 consistent
       edits to both copies.
+  - name: stig-compliance
+    cmd: "bash tools/check-stig-compliance.sh"
+    verified: 2026-10-02
+    note: >-
+      v1.3.0 (WO-0006, DQ3): docs/STIG-COMPLIANCE.md is the SOURCE OF TRUTH
+      for every STIG decision-board rule (75: 32 NGNX-APP + 43 SRG-APP; 64
+      Yes, 8 Other, 3 No). The gate holds tm/compliance.py RULES (read with
+      the AST, never imported) to it field for field (id, title, severity,
+      decision, status, live checks, order) and the document to its own
+      coverage and shape: every field present, NOT-MET only for (and for
+      every) rule decided No, an AO decision point on every Other/INHERITED/
+      N-A rule, the Totals table equal to the statuses, every cited
+      repository path existing, every live check declared, used, and
+      produced by its code (host checks by install/libexec/tm-apply, app
+      checks by tm/compliance.py). t53 runs it and goes RED on 13 one-sided
+      or shape-breaking edits; mutation controls M781-M790 break the gate
+      itself. Exit 0/1/3 like ppsm-consistency.
   - name: pipefail-consumers
     cmd: "bash tools/check-pipefail-consumers.sh"
     verified: 2026-09-27
@@ -874,6 +894,19 @@ hazards:
       --repo-commit <40-hex> is mandatory with --repo-url and HEAD is compared
       with it before any byte of the tree is read (t20). Signed-tag
       verification is a follow-up.
+
+  - id: audit-ts-is-compared-as-a-string
+    note: >-
+      v1.3.0 (WO-0006, DQ6). tm/audit_retention.py prunes with `ts < cutoff`
+      on TEXT. That is ordering only while EVERY row has one fixed-width
+      format: " " sorts before "T", so a column holding both the v1.2
+      "YYYY-MM-DD HH:MM:SS" and the v1.3 "YYYY-MM-DDTHH:MM:SSZ" prunes the
+      wrong rows on the cutoff's own day, silently. The rewrite is therefore
+      ONE transaction with its AUDIT_SCHEMA_MIGRATED row
+      (tm/audit.migrate_schema, run by init_db at every start, so a late
+      old-format row is caught too), and t48 proves retention on the
+      cutoff's day after it. Never write a ts in any other format; never
+      change TS_FORMAT without migrating every row in the same transaction.
 
   - id: agent-heredoc-backslashes
     note: >-

@@ -57,7 +57,8 @@ _host() {
         printf '# configuration file /etc/nginx/sites-enabled/topic-manager:\n'
         cat "$(tm_nginx_site)"
     } > "$R/dump"
-    printf '#!/bin/sh\n[ "$1" = -T ] || exit 0\n[ -f "%s/nginx.fail" ] && exit 1\ncat "%s/dump"\n' "$R" "$R" > "$RB/nginx"
+    # A configuration that fails nginx -t still dumps: the exit code is the verdict.
+    printf '#!/bin/sh\n[ "$1" = -T ] || exit 0\ncat "%s/dump"\n[ -f "%s/nginx.fail" ] && exit 1\nexit 0\n' "$R" "$R" > "$RB/nginx"
     chmod 755 "$RB/nginx"
 }
 
@@ -111,13 +112,14 @@ tm_case "host-state-the-product-does-not-own-is-a-warning-and-untouched" chown a
 
 a_product_drift_fails() {
     local k mut out
-    for mut in site_log rotated site_mode format errors tokens key tls; do
+    for mut in site_log rotated site_mode format uses errors tokens key tls; do
         _host
         case "$mut" in
             site_log) chmod 644 "$R/var/log/nginx/topic-manager-error.log"; k=site_log_modes ;;
             rotated)  : > "$R/var/log/nginx/topic-manager-access.log.1"; chmod 644 "$R/var/log/nginx/topic-manager-access.log.1"; k=site_log_modes ;;
             site_mode) chmod g+w "$R/etc/nginx/sites-available/topic-manager"; k=nginx_config_modes ;;
             format)   sed -i 's/ \$request_id//' "$R/dump"; k=nginx_log_format ;;
+            uses)     sed -i 's#topic-manager-access.log tm_dod;#topic-manager-access.log;#' "$R/dump"; k=nginx_log_format ;;
             errors)   sed -i '/error_page 500 502 503 504 @tm_unavailable;/d' "$R/dump"; k=error_pages ;;
             tokens)   sed -i 's/server_tokens       off;/server_tokens on;/' "$R/dump"; k=server_tokens ;;
             key)      chmod 640 "$R/etc/topic-manager/tls/server.key"; k=tls_key_mode ;;
@@ -181,11 +183,14 @@ a_ensure_site_logs() {
     tm_assert_eq "640 www-data adm" "$(stat -c '%a %U %G' "$d/topic-manager-error.log")" "an existing 0644 site log was not narrowed"
     tm_assert_eq "640" "$(stat -c '%a' "$d/topic-manager-access.log.1")" "a rotated copy kept its other-read bit"
     tm_assert_eq "644" "$(stat -c '%a' "$d/other.log")" "a log that is not the product's was changed"
-    rm -f "$d/topic-manager-error.log"; ln -s /etc/passwd "$d/topic-manager-error.log"
+    # The symlink points at a SCRATCH file: a mutant that follows it must not
+    # damage the host it runs on (it once chmod'ed a container's /etc/passwd).
+    : > "${TM_TMP}/victim"; chmod 644 "${TM_TMP}/victim"
+    rm -f "$d/topic-manager-error.log"; ln -s "${TM_TMP}/victim" "$d/topic-manager-error.log"
     out="$(bash -c "${blk}"$'\n'"ensure_site_logs '$d' www-data")"; rc=$?
     tm_assert_eq "1" "$rc" "a symlinked site log was accepted"
     case "$out" in *"(a symlink)"*) ;; *) _tm_afail "the refusal does not name the symlink: ${out}" ;; esac
-    tm_assert_eq "644" "$(stat -c '%a' /etc/passwd)" "ensure_site_logs followed the symlink"
+    tm_assert_eq "644 root" "$(stat -c '%a %U' "${TM_TMP}/victim")" "ensure_site_logs followed the symlink"
     out="$(bash -c "${blk}"$'\n'"host_stig_report '${TM_TMP}/no-such-helper'")"; rc=$?
     tm_assert_eq "0" "$rc" "a missing helper made the report fail rather than say so"
     case "$out" in UNKNOWN$'\t'host_checks$'\t'*"is missing, so the host STIG checks were not run") ;;
@@ -281,6 +286,13 @@ print('clean=%s' % sorted(c['key'] for c in st['checks']))
 d = sqlite3.connect(os.environ['TM_CONFIG'].replace('config.yaml', 'data/tm.db'))
 print('result_row=%s' % d.execute("SELECT source, outcome FROM audit_log WHERE action='SYSTEM_APPLY_RESULT' AND target='compliance'").fetchall())
 d.close()
+# A result that lands while the service runs, recorded by a BROWSER's status
+# poll: still the system's row, with the helper's own (failed) outcome.
+open(os.path.join(os.environ['TM_APPLY_RESULT_DIR'], 'nginx.result'), 'w').write(json.dumps({'domain': 'nginx', 'job': '00000000000000e1', 'state': 'rolled_back', 'requested_by': 'admin', 'finished_at': '2026-10-02T11:00:00+00:00', 'message': 'nginx failed', 'details': []}))
+c.get('/api/system/apply/nginx')
+d = sqlite3.connect(os.environ['TM_CONFIG'].replace('config.yaml', 'data/tm.db'))
+print('polled_row=%s' % d.execute("SELECT source, outcome FROM audit_log WHERE action='SYSTEM_APPLY_RESULT' AND target='nginx'").fetchall())
+d.close()
 os.unlink(os.path.join(os.environ['TM_APPLY_RESULT_DIR'], 'compliance.result'))
 os.makedirs(os.path.join(os.path.dirname(os.environ['TM_CONFIG']), 'data', 'apply'), exist_ok=True)
 open(os.path.join(os.path.dirname(os.environ['TM_CONFIG']), 'data', 'apply', 'compliance.last'), 'w').write(json.dumps({'job': '00000000000000d1', 'requested_at': '2026-10-02T09:59:00+00:00'}))
@@ -312,6 +324,8 @@ PYEOF
     tm_assert_eq "audit_write_state=pass" "$(grep '^audit_write_state=' <<<"$out")" "a healthy audit store is not a pass"
     tm_assert_eq "clean=['site_log_modes', 'web_account_shell']" "$(grep '^clean=' <<<"$out")" \
         "a malformed check key from the result file reached the status: ${out}"
+    tm_assert_eq "polled_row=[('system', 'failure')]" "$(grep '^polled_row=' <<<"$out")" \
+        "an apply result recorded by a poll is the poller's, or is not the helper's outcome: ${out}"
     tm_assert_eq "result_row=[('system', 'success')]" "$(grep '^result_row=' <<<"$out")" \
         "the measurement's SYSTEM_APPLY_RESULT is not the system's, with the helper's outcome"
     tm_assert_eq "after_reboot=['site_log_modes', 'web_account_shell']" "$(grep '^after_reboot=' <<<"$out")" \
@@ -334,7 +348,7 @@ print('none=%s' % h.issuer_status({'subject': '', 'issuer': ''}))
     tm_assert_eq "self=True True" "$(grep '^self=' <<<"$out")" "a self-signed certificate is not a warning naming the rule: ${out}"
     tm_assert_eq "ca=False True" "$(grep '^ca=' <<<"$out")" "a CA-issued certificate does not ask the operator to confirm the CA"
     tm_assert_eq "none={'self_signed': None, 'warning': ''}" "$(grep '^none=' <<<"$out")" "an unreadable certificate is guessed about"
-    grep -q 'hostPanels.tls.issuer_warning' "${TM_REPO_ROOT}/app/components/SettingsTab.js" || _tm_afail "the TLS pane does not show the issuer warning"
+    grep -q '<dd v-if="hostPanels.tls.issuer_warning"' "${TM_SETTINGS_SOURCE:-${TM_REPO_ROOT}/app/components/SettingsTab.js}" || _tm_afail "the TLS pane does not show the issuer warning"
 }
 tm_case "a-self-signed-certificate-is-a-warning-on-the-tls-pane" none a_issuer_warning
 
@@ -374,7 +388,8 @@ vm.runInContext(fs.readFileSync(process.argv[2], 'utf8') + '\n;globalThis.__S = 
     answer = { ok: false, status: 503, json: async () => ({ error: 'audit_unavailable' }) };
     await inst.endSessions('bob');
     assert.match(inst.sessionsMessage, /^✕ Audit logging is unavailable/);
-    answer = { ok: true, status: 200, json: async () => ({}) };
+    // GET /api/settings answers what was saved, as the server would.
+    answer = { ok: true, status: 200, json: async () => ({ dow_text: 'MY NOTICE', dow_enabled: 'true' }) };
     inst.settingsLoaded = true; inst.savedHostSettings = {}; inst.dowText = 'MY NOTICE';
     calls.length = 0;
     await inst.saveConsentText(false);

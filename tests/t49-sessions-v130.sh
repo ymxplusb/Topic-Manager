@@ -187,6 +187,11 @@ verdicts['alice'] = ('unavailable', 'down')
 d = db(); d.execute(\"UPDATE session_meta SET verified_at=?, verify_attempt_at=? WHERE id='s-a'\", ((now - datetime.timedelta(minutes=30)).isoformat(), (now - datetime.timedelta(minutes=30)).isoformat())); d.commit(); d.close()
 c.get('/api/settings')
 print('logout=%d' % c.post('/api/auth/logout', data='{}', headers=H).status_code)
+# A WRITE as the first request after the session went stale: refused at once.
+verdicts['bob'] = ('unavailable', 'down')
+b = client('bob', 's-b', verified_ago_min=20)
+r = b.put('/api/settings', data=json.dumps({'banner_text': 'w'}), headers=H)
+print('first_write=%d %s' % (r.status_code, r.get_json().get('code')))
 ")"
     tm_assert_eq "read=200 asked=1" "$(_line read "$out")" "a read was refused while the directory was down: ${out}"
     tm_assert_eq "write=503 directory_unavailable asked=1" "$(_line write "$out")" \
@@ -197,6 +202,8 @@ print('logout=%d' % c.post('/api/auth/logout', data='{}', headers=H).status_code
     tm_assert_eq "delete=503" "$(_line delete "$out")" "a topic delete was allowed while the directory was down"
     tm_assert_eq "recovered=200 asked=2" "$(_line recovered "$out")" "writes did not resume once the directory answered"
     tm_assert_eq "logout=200" "$(_line logout "$out")" "sign-out was refused during a directory outage"
+    tm_assert_eq "first_write=503 directory_unavailable" "$(_line first_write "$out")" \
+        "a write that is the first request to find the directory down was let through"
 }
 tm_case "a-directory-outage-allows-reads-and-refuses-every-write" tmapp a_directory_outage
 
@@ -322,7 +329,9 @@ console.log('armed=' + abs.length + ' ms=' + (abs[0] && abs[0].ms));
   console.log('user=' + vm.user.value);
   timers.length = 0;
   vm.onLoggedIn({ username: 'u' }, 15, '');
-  console.log('none=' + timers.filter(t => t.ms > 15 * 60 * 1000).length);
+  // Only the idle timer (15 min - lead - warning) may be armed: anything else,
+  // NaN included, is a sign-out the server never asked for.
+  console.log('none=' + timers.filter(t => !(t.ms <= 15 * 60 * 1000)).length);
 })();
 JSEOF
 )"
