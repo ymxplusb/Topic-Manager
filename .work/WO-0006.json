@@ -1923,5 +1923,17 @@
       ],
       "remote_cleanup": "192.168.202.81: every container started (tm-wo6-af2, -af2-ngx x2 (--rm), -af2-final, -af2-mut-a..h, -af2-mut2-c/d/r/c2/c3/d2/d3) removed; /tmp/tm-wo6-af2 and /tmp/tm-wo6-af2f removed; docker volumes 134 before and after; networks bridge/host/none only; 0 containers. /tmp/tm-ci-repro-2634394 pre-existed and was left."
     }
+  ],
+  "dast": [
+    {
+      "date": "2026-10-03",
+      "target": "tm-qc https://192.168.202.92/ running v1.3.0 @ c05fcbe (PRE assure-fix rounds)",
+      "tool": "ZAP 2.17.0 authenticated (svc-tm-zap, X-TM-Request), 34 seeded routes, bar High",
+      "coverage": "59 URLs, 131 attacked, 7971 requests, 0.9% 401/403",
+      "result": "High 0 / Medium 28 (CSP x14 each = REG-0001/0002) / Low 6 (Private IP = REG-0028)",
+      "evidence": "docs/releases/1.3.0/dast.json (+ dast.coverage.json)",
+      "caveat": "scanned the pre-fix build; the fix rounds' consent/401/audit-outcome changes were not DAST-scanned on a running system",
+      "limits": "tm-qc rate limits + session limit raised for the scan, restored after (10/5/300/100/20, 3 sessions)"
+    }
   ]
 }

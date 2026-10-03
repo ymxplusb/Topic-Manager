@@ -1,0 +1,22 @@
+{
+ "target": "https://192.168.202.92/",
+ "authenticated": true,
+ "active": true,
+ "urls_found": 59,
+ "urls_in_scope": 59,
+ "spider": {
+  "requests": 54,
+  "answered": 54,
+  "denied_401_403": 0,
+  "denied_pct": 0.0
+ },
+ "attack": {
+  "requests": 2000,
+  "answered": 2000,
+  "denied_401_403": 19,
+  "denied_pct": 0.9,
+  "attack_requests_total": 7971,
+  "sampled": true,
+  "urls_attacked": 131
+ }
+}
