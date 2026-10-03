@@ -341,6 +341,11 @@ d = db(); d.execute(\"UPDATE sessions SET expires_at='2000-01-01T00:00:00+00:00'
 n = rows('SELECT COUNT(*) FROM audit_log')[0][0]
 x.put('/api/settings', data=json.dumps({'banner_text': 'x'}), headers={'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site'})
 print('ghost_rows=%d' % (rows('SELECT COUNT(*) FROM audit_log')[0][0] - n))
+# ...and so is its refused write on a route that answers before require_auth
+# (a declined consent, 400): the expired session is nobody's (M656).
+n = rows('SELECT COUNT(*) FROM audit_log')[0][0]
+r = x.post('/api/auth/consent', data=json.dumps({'accepted': 'no'}), headers=H)
+print('ghost_pre_auth=%d rows=%d' % (r.status_code, rows('SELECT COUNT(*) FROM audit_log')[0][0] - n))
 # No cluster profile: our own sentence passes through; a write is a 409.
 open(os.environ['TM_CLUSTERS_DIR'] + '/clusters.yaml', 'w').write('clusters: []\\n')
 r = c.get('/api/topics')
@@ -367,6 +372,8 @@ print('nocluster_write=%d' % r.status_code)
     tm_assert_eq "listleak=502 False" "$(_line listleak "$out")" "a Kafka read error leaks the broker"
     tm_assert_eq "testleak=False" "$(_line testleak "$out")" "the cluster test leaks the broker"
     tm_assert_eq "ghost_rows=0" "$(_line ghost_rows "$out")" "an expired session's refused write reached the audit database"
+    tm_assert_eq "ghost_pre_auth=400 rows=0" "$(_line ghost_pre_auth "$out")" \
+        "an expired session's refused write (before require_auth) was recorded under its user: ${out}"
     tm_assert_eq "nocluster=502 no_cluster" "$(_line nocluster "$out")" "a missing cluster profile is reported as a Kafka failure: ${out}"
     tm_assert_eq "nocluster_text=True" "$(_line nocluster_text "$out")" "the product's own no-cluster sentence was replaced"
     tm_assert_eq "nocluster_write=409" "$(_line nocluster_write "$out")" "a write with no cluster profile is not a 409"
