@@ -594,6 +594,15 @@ async function main() {
             await finish(inst.runHostApply('nginx'));
             assert.ok(renderedFor(inst, 'nginx').every(b => b.text === ''), 'a status check is not an apply');
         }
+        {
+            // A user apply whose status settles 'idle' (no verdict recorded)
+            // is not a success and must not claim one. (M556 survived without this.)
+            const inst = await mounted(domain => ({ domain, state: 'ok' }));
+            handler = (url, options) => options.method ? json({ state: 'queued' }, 202) : json({ domain: 'syslog', state: 'idle', message: '', details: [] });
+            await finish(inst.applyToHost('syslog'));
+            assert.equal(inst.applyJobs.syslog.state, 'idle');
+            assert.equal(renderedFor(inst, 'syslog')[0].text, '', 'an apply that settles idle does not claim Applied');
+        }
         for (const state of ['failed', 'rolled_back']) {
             // A failure, from the user's apply AND loaded on page open: state,
             // message, job and every detail, and it survives a change of group.
@@ -643,7 +652,7 @@ async function main() {
             assert.match(inst.sectionMessages.time, /^✕ ntp_servers: bad server/, 'a failed save keeps its message');
         }
     } else throw new Error('Unknown scenario: ' + scenario);
-    const expected = { bindings: 93, validation: 269, errors: 14, apply: 47, timeout: 13, panels: 27, tls: 107, ppsm: 32, integration: 79, quiet: 82 };
+    const expected = { bindings: 93, validation: 269, errors: 14, apply: 47, timeout: 13, panels: 27, tls: 107, ppsm: 32, integration: 79, quiet: 84 };
     rawAssert.equal(assertions, expected[scenario], 'complete the exact scenario assertion count');
     console.log('ALL ' + assertions + ' ASSERTIONS PASSED');
 }
