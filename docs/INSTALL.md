@@ -44,7 +44,7 @@ the script has **measured** each point rather than assumed it:
 | Config | `/etc/topic-manager/config.yaml` `0640 root:topic-manager`, written from your directory settings with a fresh random `secret_key`; no environment defaults |
 | Audit DB | `/opt/topic-manager/data` `0700`, `tm.db` `0600`, both owned by `topic-manager` |
 | Clusters | `/etc/topic-manager/clusters.d/clusters.yaml` `0640 topic-manager:topic-manager`, **empty** — you add clusters in Settings |
-| Restart control | polkit rule `/etc/polkit-1/rules.d/50-topic-manager.rules` (eight unit/verb pairs over seven units: restart `topic-manager.service`, reload/restart `nginx.service`, start `topic-manager-nginx-test.service` and the four `topic-manager-apply-*.service`) and the root-side `topic-manager-nginx-test.service` |
+| Restart control | polkit rule `/etc/polkit-1/rules.d/50-topic-manager.rules` (nine unit/verb pairs over eight units: restart `topic-manager.service`, reload/restart `nginx.service`, start `topic-manager-nginx-test.service` and the five `topic-manager-apply-*.service`) and the root-side `topic-manager-nginx-test.service` |
 | Frontend | `/var/www/topic-manager` **root:root**, dirs 0755 / files 0644 (the web server reads it and cannot rewrite it); Vue 3.5.43, **SHA-256 verified** against the pin in `install/upgrade-full.sh` before it is served |
 | Python | a venv of **binary wheels only**, every package (transitive ones included) **hash-verified** against `requirements.lock`; no compiler on the host |
 
@@ -132,8 +132,16 @@ sudo bash install.sh \
     --ldap-url      ldaps://dc1.example.org:636 \
     --ldap-base-dn  "DC=example,DC=org" \
     --ldap-group    "CN=Kafka-Admins,OU=Groups,DC=example,DC=org" \
-    --server-name   topics.example.org
+    --server-name   topics.example.org \
+    --syslog-host   logs.example.org
 ```
+
+**Where the audit trail goes is not optional (v1.3.0).** The install refuses to start unless
+it is given `--syslog-host <collector>` or `--no-remote-syslog`, the explicit statement that the
+audit trail and the nginx logs stay on this host (SRG-APP-000515, NGNX-APP-001400; the STIG
+compliance page then shows it as an open item). A reinstall over a host that already forwards
+is not asked again. **The DoD notice and consent banner is on** after a fresh install, and the
+server refuses a sign-in until it has been accepted; `--no-consent-banner` installs with it off.
 
 Add `--tls-cert /path/server.crt --tls-key /path/server.key` to install your certificate, and
 `--ldap-bind-dn ...` for a service account (the password is prompted for, or taken from
@@ -159,7 +167,13 @@ it removes systemd-timesyncd**. That is the only package removal the installer e
 (checked in apt's simulated plan; anything else it would remove is refused). A STIG'd Ubuntu
 24.04 host already runs chrony.
 
-The script ends with the URL and a running service. If it stops, it says why, and nothing
+The script ends with the URL and a running service, and with the **host STIG checks**
+(v1.3.0): the release's root helper measures the host, read-only, and reports each check.
+Host state the product does not own — the web server account (`www-data`) shell, groups and
+password lock, other files under `/etc/nginx`, loaded nginx modules — is a WARN and is never
+changed; a FAIL is the product's own file (its nginx logs, its site, its TLS key) and stops the
+install. The same checks are on Settings > Support > STIG compliance, beside every rule of
+[STIG-COMPLIANCE.md](STIG-COMPLIANCE.md). If the script stops, it says why, and nothing
 half-configured is left claiming success; see TROUBLESHOOTING.md.
 
 ---
@@ -253,7 +267,8 @@ sudo install -d -m 700 -o root -g root /var/lib/topic-manager/install-src
 sudo tar xzf topic-manager-offline-<version>.tar.gz -C /var/lib/topic-manager/install-src --strip-components=1
 sudo bash /var/lib/topic-manager/install-src/install.sh \
     --ldap-url ldaps://dc1.example.org:636 --ldap-base-dn "DC=example,DC=org" \
-    --ldap-group "CN=Kafka-Admins,OU=Groups,DC=example,DC=org" --server-name topics.example.org
+    --ldap-group "CN=Kafka-Admins,OU=Groups,DC=example,DC=org" --server-name topics.example.org \
+    --syslog-host logs.example.org        # or --no-remote-syslog (v1.3.0: one of the two)
 ```
 
 With no network, `install.sh` uses the bundle's `.deb`s as a private apt **repository**: apt's
@@ -477,6 +492,9 @@ or leave it and block 25/tcp at the host firewall. `PPSM.csv` lists it as found 
 # pinned to the release's full commit id, taken out of band (release notes / tag pipeline)
 sudo bash install/upgrade-full.sh --audit-only --repo-url <your-git-url> --repo-branch v<next> --repo-commit <40-hex-sha>
 sudo bash install/upgrade-full.sh --repo-url <your-git-url> --repo-branch v<next> --repo-commit <40-hex-sha>
+# v1.3.0: a host that does not forward its audit trail yet must say where to (--syslog-host
+# <collector> [--syslog-port P --syslog-protocol udp|tcp|tls]) or that it stays
+# (--no-remote-syslog); --audit-only shows it as a BLOCK, and --force does not override it.
 
 # offline: from a bundle staged at /var/lib/topic-manager/offline-src (README.md ->
 # *Offline (air-gapped) upgrade* for the checksum and staging steps). Every step takes

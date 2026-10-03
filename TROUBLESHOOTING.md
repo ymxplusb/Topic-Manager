@@ -456,7 +456,7 @@ sudo journalctl -u polkit -n 5 --no-pager     # a fresh "Finished loading ... N 
 
 If the file is present but has no effect, look in that same journal — polkitd reports errors
 in a rules file there. Nothing in the rule can *deny* anything: it returns `YES` for its
-eight unit/verb pairs (seven units; `nginx.service` has two verbs) and `NOT_HANDLED` for everything else, so a rule that is not in force
+nine unit/verb pairs (eight units; `nginx.service` has two verbs) and `NOT_HANDLED` for everything else, so a rule that is not in force
 takes nothing else with it.
 
 To ask whether the account is authorised **without restarting anything**, check against a
@@ -1324,3 +1324,71 @@ apply from Settings (or re-run `install.sh`).
 
 The upgrade itself succeeded; the saved host setting for that domain is not in force (the
 managed files the previous release left are). The same fixes apply; then Apply to host.
+
+---
+
+## v1.3.0 — STIG decisions of 2026-10-02
+
+### `No remote syslog collector was named.` (install.sh)
+
+v1.3.0 does not finish an install with the audit trail kept silently on the host. Re-run with
+`--syslog-host <collector>` (and `--syslog-port`/`--syslog-protocol` as needed), or with
+`--no-remote-syslog` to acknowledge that it stays on the host — the compliance page then shows
+it as an open item. Nothing was changed. `--syslog-host and --no-remote-syslog contradict each
+other` means both were given.
+
+### `Refusing to upgrade: the audit trail would stay on this host without anyone saying so.` (upgrade)
+
+The same rule for an upgrade of a host whose tm.db does not already forward. `--audit-only`
+shows it as `BLOCK remote syslog`; `--force` does **not** override it. Add `--syslog-host
+<collector>` (saved through the application's own validator, then applied with the other host
+settings) or `--no-remote-syslog`. A verified backup was still taken.
+
+### `A host STIG check FAILED on Topic Manager's own files or configuration`
+
+The install (or, after deploying, the upgrade — which then rolls back) ran the root helper's
+read-only checks (`sudo python3 -I /usr/libexec/topic-manager/tm-apply compliance --report`
+shows them again) and one of the PRODUCT's own checks failed: its nginx logs readable beyond
+`www-data`/`adm`, its site or snippets writable by group/other, its TLS key not 0600 root,
+`log_format tm_dod`, `server_tokens off` or its error pages missing from what `nginx -T`
+reports. Fix the file named. A WARN is host state the product does not own (the `www-data`
+shell, groups or password lock, other files under `/etc/nginx`, a loaded nginx module): it is
+reported for the host's owner and never changed.
+
+### `The Topic Manager nginx logs could not be made private`
+
+`/var/log/nginx/topic-manager-access.log` or `-error.log` is a symlink, or its owner or mode
+could not be set to 0640 `www-data:adm`. Nothing is written through a symlink: remove it and
+re-run.
+
+### `a compliance measurement carries no settings` (Settings > Support > STIG compliance)
+
+The root helper refused a measurement request that carried settings or files. Only a request
+written by the application itself is accepted; press **Measure host now** again.
+
+### Sign-in says `Read and accept the notice before signing in.`
+
+The consent notice is on (Settings > General > DoW Consent Banner) and the server did not hold
+a fresh acceptance for this browser: it was declined, it is more than ten minutes old, or it
+was used by a sign-in already. Reload the page and accept the notice.
+
+### `The directory could not be reached to re-check your group membership, so changes are refused`
+
+Every 15 minutes a session's user is looked up again with the LDAP service account. While the
+directory cannot be reached the session can still read everything, and every change is refused
+(HTTP 503 `directory_unavailable`, recorded as `REQUEST_REFUSED`) until a re-check succeeds — it
+is retried at most once a minute. Check the directory and the service account's bind
+(`--audit-only` -> LDAP service bind). Sign-out always works.
+
+### `Your access was withdrawn` / a session ends with reason `revoked`, `absolute` or `ended`
+
+`revoked`: the 15-minute re-check found the user no longer in `required_group` (or gone from the
+directory) and ended every session of that user (`SESSION_REVOKED`). `absolute`: the session
+reached Settings > Security > Sessions > Maximum session lifetime (default 12 hours). `ended`:
+an administrator ended it (`SESSIONS_ENDED`). Sign in again.
+
+### A Kafka error says only `The Kafka cluster refused the request or did not answer.` and a reference
+
+v1.3.0 no longer sends broker names, addresses or the client library's text to the browser
+(SRG-APP-000266). The detail is in the service log under that reference:
+`journalctl -u topic-manager | grep <hex>`.

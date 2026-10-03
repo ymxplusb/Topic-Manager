@@ -94,16 +94,20 @@ chrony. rsyslog is part of Ubuntu Server; chrony REPLACES systemd-timesyncd when
 conflict). The About dialog carries the same infrastructure rows, and
 tools/check-sbom-consistency.sh holds the two copies to each other.
 
-**SQLite is not a separate package.** `sqlite3` is not installed on the target;
-3.45.1 is the library compiled into Python 3.12.3's stdlib `_sqlite3`. It moves
-when Python moves, and cannot be upgraded independently.
+**SQLite is not a separate package.** The `sqlite3` CLI is not installed on the
+target; 3.45.1 is the OS library (`libsqlite3-0`) that Python 3.12.3's stdlib
+`_sqlite3` module links. It is patched by the host's own update process
+(SRG-APP-000456, docs/STIG-COMPLIANCE.md: the product neither holds it back nor
+carries a copy of its own); an air-gapped host is patched only through its
+operator's update media.
 
 **polkit is an OS component we configure, not one we vendor.** It ships with
 Ubuntu Server 24.04. `install.sh` adds `/etc/polkit-1/rules.d/50-topic-manager.rules`,
-which authorises the `topic-manager` account for exactly seven unit/verb pairs
-(`restart topic-manager.service`, `reload`/`restart nginx.service`,
-`start topic-manager-nginx-test.service`, and since v1.2.0 `start` on the four
-`topic-manager-apply-*.service` units) and nothing else.
+which authorises the `topic-manager` account for exactly nine unit/verb pairs over
+eight units (`restart topic-manager.service`, `reload`/`restart nginx.service`,
+`start topic-manager-nginx-test.service`, since v1.2.0 `start` on the four
+`topic-manager-apply-*.service` units and since v1.3.0 on the read-only
+`topic-manager-apply-compliance.service`) and nothing else.
 
 ### Target platform
 

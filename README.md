@@ -84,8 +84,15 @@ sudo bash install.sh \
     --ldap-base-dn "DC=example,DC=org" \
     --ldap-group   "CN=Kafka-Admins,OU=Groups,DC=example,DC=org" \
     --server-name  topics.example.org \
+    --syslog-host  logs.example.org \
     [--tls-cert server.crt --tls-key server.key]
 ```
+
+v1.3.0: the install **refuses to start** unless the audit trail has somewhere to go:
+`--syslog-host <collector>` (with `--syslog-port`/`--syslog-protocol` as needed), or
+`--no-remote-syslog` to say, explicitly, that it stays on the host — the STIG
+compliance page then shows that as an open item. The DoD notice and consent banner is
+**on** after a fresh install; `--no-consent-banner` installs with it off.
 
 Run it without the `--ldap-*` flags on a terminal to be asked for each value instead;
 `--non-interactive` makes a missing value a refusal. There are **no built-in directory
@@ -106,6 +113,7 @@ The script, in order:
 - Opens 443/tcp in ufw if ufw is active — and 80/tcp only while the HTTP redirect is on (with `--no-http-redirect`, never; turning the redirect off in Settings closes it again)
 - Verifies, as the service account, that the app can write `clusters.d` and cannot write `config.yaml`
 - **Starts the service**, waits for `/api/health`, and measures `tm.db` 0600 / `data/` 0700
+- v1.3.0: creates the site's own logs (`/var/log/nginx/topic-manager-{access,error}.log`) 0640 `www-data:adm` before nginx can create them world-readable, installs the DoD access-log format (`/etc/nginx/conf.d/topic-manager-log-format.conf`), and ends with the **host STIG checks** (the root helper's `tm-apply compliance --report`, read-only): host state the product does not own — the web server account's shell, groups and password lock, other files under `/etc/nginx`, loaded nginx modules — is reported and never changed; a FAIL on the product's own files stops the install
 
 ### Step 3 — Verify, sign in, add clusters
 
@@ -530,7 +538,7 @@ the action `org.freedesktop.systemd1.manage-units`:
 | `topic-manager.service` | `restart` |
 | `nginx.service` | `reload`, `restart` |
 | `topic-manager-nginx-test.service` | `start` |
-| `topic-manager-apply-syslog.service`, `-apply-time.service`, `-apply-nginx.service`, `-apply-tls.service` (v1.2.0) | `start` |
+| `topic-manager-apply-syslog.service`, `-apply-time.service`, `-apply-nginx.service`, `-apply-tls.service` (v1.2.0), `-apply-compliance.service` (v1.3.0, read-only) | `start` |
 
 There is no `stop` and no `kill` — leaving the site down is not one of the outcomes this
 feature offers. The rule returns `YES` for those combinations and `NOT_HANDLED` for
@@ -708,6 +716,16 @@ The upgrade clones only that commit (TLS verification forced, no local transport
 host keys only) and refuses the tree if `HEAD` is anything else — a moved tag cannot substitute
 code.
 Useful flags: `--dry-run` (audit + plan, no changes), `--skip-os` (application and dependencies only), `--offline` (see below), `--force` (proceed past blockers — the backup is still taken first).
+
+**v1.3.0 — where the audit trail goes.** A host whose saved settings do not already forward
+the audit trail must name a collector (`--syslog-host <collector>`, with `--syslog-port` and
+`--syslog-protocol` as needed; it is saved through the application's validator and applied
+with the other host settings) or say that there is none (`--no-remote-syslog`, then an open
+item on the compliance page). Without either, `--audit-only` shows `BLOCK remote syslog` and
+the upgrade refuses; `--force` does not override it. `--audit-only` also reports the consent
+notice (an upgraded host keeps its setting), whether the 15-minute group re-check can run, and
+the host STIG checks (warnings only: the product's own files are fixed by the upgrade and
+checked again after it, where a failure rolls it back).
 
 **Step 6 — Follow the post-upgrade checklist** printed at the end of the run:
 
@@ -905,7 +923,8 @@ sha256sum -c topic-manager-offline-<version>.tar.gz.sha256
 sha256sum topic-manager-offline-<version>.tar.gz      # must equal the out-of-band value
 sudo install -d -m 700 -o root -g root /var/lib/topic-manager/install-src
 sudo tar xzf topic-manager-offline-<version>.tar.gz   -C /var/lib/topic-manager/install-src --strip-components=1
-sudo bash /var/lib/topic-manager/install-src/install.sh --ldap-url ... --ldap-base-dn ... --ldap-group ...
+sudo bash /var/lib/topic-manager/install-src/install.sh --ldap-url ... --ldap-base-dn ... --ldap-group ... \
+    --syslog-host <collector>             # or --no-remote-syslog (v1.3.0: one of the two)
 ```
 
 It auto-detects offline mode. This is the one fresh-install procedure: docs/INSTALL.md section
@@ -1033,8 +1052,8 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
 /etc/systemd/system/topic-manager-nginx-test.service   Root-side `nginx -t`, Type=oneshot.
                              Never enabled; started on demand by the restart control
 /etc/polkit-1/rules.d/50-topic-manager.rules   Authorises the topic-manager account for
-                             eight unit/verb pairs over seven units: restart topic-manager,
-                             reload/restart nginx, start the nginx-test unit and the four
+                             nine unit/verb pairs over eight units: restart topic-manager,
+                             reload/restart nginx, start the nginx-test unit and the five
                              apply units. Nothing else — no stop, no kill
 /etc/systemd/system/topic-manager.service.d/ unit drop-ins, if used — this is
                              where TM_SECRET_KEY and TM_LDAP_BIND_PASSWORD live
@@ -1067,13 +1086,17 @@ In `clusters.d/clusters.yaml` (normally maintained from the Cluster Builder):
 - A failed sign-in gets ONE answer whatever the reason (user unknown, wrong password, not in the group, directory error); the specific reason is in the `LOGIN_FAILED` audit row
 - Security headers on all routes: HSTS, CSP (`frame-ancestors 'none'`, `form-action 'none'`, `base-uri 'self'`), X-Content-Type-Options, Referrer-Policy
 - Server-side session store (SQLite); session tokens never leave the server in a readable form
-- Audit log with user, IP, timestamp and detail. **21 audited actions** in the database, plus one that exists only in syslog. Derived from EVERY module in `tm/*.py` with the AST (never grep — the action is the third positional argument, usually on the next line), with:
+- Audit log: every row carries its time (ISO 8601 UTC, `Z`), user, **source** (the client address, or `system`), action, **outcome** (`success`/`failure`), target, detail and cluster (v1.3.0; older rows were migrated — the sign-in rows' addresses kept, the rest `unrecorded`). **28 audited actions** in the database, plus one that exists only in syslog. Derived from EVERY module in `tm/*.py` with the AST (never grep — the action is the third positional argument, usually on the next line), with:
   `python3 -c "import ast,glob;print(sorted({n.args[2].value for f in glob.glob('tm/*.py') for n in ast.walk(ast.parse(open(f).read())) if isinstance(n,ast.Call) and getattr(n.func,'attr',getattr(n.func,'id',''))=='log_action' and len(n.args)>2 and isinstance(n.args[2],ast.Constant)}))"`
-  — topics (`CREATE`, `DELETE`, `UPDATE_CONFIG`); cluster profiles (`CLUSTER_CREATE`, `CLUSTER_UPDATE`, `CLUSTER_DELETE`, before and after); application settings (`SETTINGS_UPDATE` — display and v1.2.0 host settings show old → new values, any other key is named only); service restarts (`SERVICE_RESTART`, `SERVICE_RESTART_STEP`, `SERVICE_RESTART_REFUSED`, `SERVICE_RESTART_THROTTLED`); authentication (`LOGIN`, `LOGIN_FAILED`, `LOGIN_REFUSED`, `LOGOUT`, `SESSION_EXPIRED`); host settings, v1.2.0 (`SYSTEM_APPLY_REQUESTED`, `SYSTEM_APPLY_RESULT`, `TLS_CERT_REPLACED` — the certificate's key type and expiry, never PEM material); retention, v1.2.0 (`AUDIT_PRUNE`, `AUDIT_CAPACITY_WARNING`); and, syslog-only because the database write is what failed, `AUDIT_WRITE_FAILED` (CRIT, carrying the lost record). A `LOGOUT` row says in its detail whether the person signed out or the idle timeout did it, so the two are distinguishable in the export. SASL passwords are redacted and certificate paths reduced to basenames before anything is logged, because any authenticated user can export the log
+  — topics (`CREATE`, `DELETE`, `UPDATE_CONFIG`); cluster profiles (`CLUSTER_CREATE`, `CLUSTER_UPDATE`, `CLUSTER_DELETE`, before and after); application settings (`SETTINGS_UPDATE` — display and v1.2.0 host settings show old → new values, any other key is named only); service restarts (`SERVICE_RESTART`, `SERVICE_RESTART_STEP`, `SERVICE_RESTART_REFUSED`, `SERVICE_RESTART_THROTTLED`); authentication (`LOGIN`, `LOGIN_FAILED`, `LOGIN_REFUSED`, `LOGOUT`, `SESSION_EXPIRED`); host settings, v1.2.0 (`SYSTEM_APPLY_REQUESTED`, `SYSTEM_APPLY_RESULT`, `TLS_CERT_REPLACED` — the certificate's key type and expiry, never PEM material); retention, v1.2.0 (`AUDIT_PRUNE`, `AUDIT_CAPACITY_WARNING`); v1.3.0: reading the trail (`AUDIT_READ`, `AUDIT_EXPORT`), the one-time migration of the table (`AUDIT_SCHEMA_MIGRATED`), the consent notice (`CONSENT_ACCEPTED`, just before the user's `LOGIN`), sessions (`SESSION_REVOKED` when the group re-check removes a user, `SESSIONS_ENDED` when an administrator ends them) and a signed-in user's refused write (`REQUEST_REFUSED`; a refused topic write is recorded under its own action word with outcome `failure`); and, syslog-only because the database write is what failed, `AUDIT_WRITE_FAILED` (CRIT, carrying the lost record). A `LOGOUT` row says in its detail whether the person signed out or the idle timeout did it, so the two are distinguishable in the export. SASL passwords are redacted and certificate paths reduced to basenames before anything is logged, because any authenticated user can export the log
 - Destructive actions require name-match confirmation
 - Idle session timeout: 15 minutes (configurable as `session.timeout_minutes`); background refreshes do not count as activity
+- v1.3.0: an **absolute session lifetime** (Settings > Security > Sessions, default 12 hours) that no activity extends; **group membership re-checked every 15 minutes** with the LDAP service account — a user removed from `required_group` loses every session, and while the directory cannot be reached sessions may read but every change is refused; administrators can **end** a user's sessions or everyone else's (Settings > Security > Sessions)
+- v1.3.0: the **DoD notice and consent banner** is enforced by the server — no sign-in is accepted until it has been accepted, and each acceptance is recorded; its text can be replaced (Settings > General > DoW Consent Banner)
+- v1.3.0: a Kafka failure tells the browser one sentence and a reference; the detail is in the service log under that reference. nginx's own error pages (404, 502, ...) are the product's and name no server software
+- v1.3.0: the **STIG compliance** page (Settings > Support > STIG compliance, downloadable as CSV) lists every rule of the STIG decision board with its status from [docs/STIG-COMPLIANCE.md](docs/STIG-COMPLIANCE.md) — the source of truth — and what the host measures now; `tools/check-stig-compliance.sh` holds the page and the document together
 - Fail-closed: application refuses to start if `secret_key` is absent or still the placeholder
-- The service account holds no general privilege escalation: `NoNewPrivileges=true` (so `sudo` cannot run under the unit at all), and exactly eight systemd unit/verb pairs, over seven units, are authorised through polkit (v1.2.0 added `start` on the four apply units, whose root helper re-validates everything and runs no code the service account owns) — see [Privileges the install grants](#privileges-the-install-grants)
+- The service account holds no general privilege escalation: `NoNewPrivileges=true` (so `sudo` cannot run under the unit at all), and exactly nine systemd unit/verb pairs, over eight units, are authorised through polkit (v1.2.0 added `start` on the four apply units, v1.3.0 on the read-only compliance measurement, whose root helper re-validates everything and runs no code the service account owns) — see [Privileges the install grants](#privileges-the-install-grants)
 - The application cannot write or unlink its own `config.yaml`, and the upgrade asks the kernel to prove it as the real principal rather than reading mode bits
 - **No role separation.** Every member of `required_group` can delete any topic, rewrite the cluster list and restart the service. "Authenticated" and "fully privileged in this app" are the same thing here; the audit log records who acted, it does not constrain who may
 
