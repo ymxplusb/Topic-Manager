@@ -412,7 +412,9 @@ tm_case "config-example-required-keys-must-have-values" none c_example_required_
 # recorded on the v1.1.0 code BEFORE the refactor, so any observable change to
 # the sign-in path fails here.
 d_signin_sequence_is_unchanged() {
-    PYTHONPATH="$TM_REPO_ROOT" PYTHONDONTWRITEBYTECODE=1 \
+    # tm_py_root, not the repo (WO-0006 af2): with the repo pinned here a
+    # mutated tm/auth.py (tests/mutate.sh, TM_PY_ROOT) never reached this case.
+    PYTHONPATH="$(tm_py_root)" PYTHONDONTWRITEBYTECODE=1 \
         "$PY" "${TM_TESTS_DIR}/lib/auth_probe.py" > "${TM_TMP}/got" 2>&1
     local rc=$?
     tr -d '\r' < "${TM_TESTS_DIR}/lib/auth_probe.expected" > "${TM_TMP}/want"

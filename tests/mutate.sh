@@ -52,6 +52,10 @@ declare -A TARGET_PATH=(
   [stiggate]="${TM_REPO_ROOT}/tools/check-stig-compliance.sh"
   [logformat]="${TM_REPO_ROOT}/nginx/tm-log-format.conf"
   [httpsite]="${TM_REPO_ROOT}/nginx/topic-manager-http.conf"
+  [ciyml]="${TM_REPO_ROOT}/.gitlab-ci.yml"
+  [shellparse]="${TM_REPO_ROOT}/tools/check-shell-parse.sh"
+  [readme]="${TM_REPO_ROOT}/README.md"
+  [installreadme]="${TM_REPO_ROOT}/install/README.md"
 )
 declare -A TARGET_ENV=(
   [upgrade]="TM_UPGRADE_SH"
@@ -68,6 +72,10 @@ declare -A TARGET_ENV=(
   [stiggate]="TM_STIG_GATE"
   [logformat]="TM_LOG_FORMAT"
   [httpsite]="TM_HTTP_SITE"
+  [ciyml]="TM_CI_YML"
+  [shellparse]="TM_SHELL_PARSE"
+  [readme]="TM_README"
+  [installreadme]="TM_INSTALL_README"
 )
 # v1.2.0: a Python module is named TARGET|py:<module> (tm/<module>.py). The
 # harness copies the whole tm/ package into the scratch directory, mutates the
@@ -129,7 +137,9 @@ trap '[ -n "${TM_KEEP:-}" ] || rm -rf "$SCRATCH"' EXIT
 _sha() { sha256sum "$1" 2>/dev/null | cut -d" " -f1; }
 declare -A SHA_BEFORE=()
 for k in "${!TARGET_PATH[@]}"; do
-    [ -f "${TARGET_PATH[$k]}" ] || { echo "no target at ${TARGET_PATH[$k]}" >&2; exit 2; }
+    # .gitlab-ci.yml is export-ignored, so an archive (--remote) has none: its
+    # controls then ABORT (an anchor that matched nothing), never pass.
+    [ -f "${TARGET_PATH[$k]}" ] || [ "$k" = ciyml ] || { echo "no target at ${TARGET_PATH[$k]}" >&2; exit 2; }
     SHA_BEFORE[$k]="$(_sha "${TARGET_PATH[$k]}")"
 done
 

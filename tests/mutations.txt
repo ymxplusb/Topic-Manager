@@ -7058,3 +7058,230 @@ TARGET|py:audit
 EQUIV|no
 ANCHOR|    out['syslog_delivered'] = sent if isinstance(sent, bool) else None
 REPLACE|    out['syslog_delivered'] = True
+
+# ─── v1.3.0 assure-fix-2 (WO-0006) ───────────────────────────────────────────
+--- M831
+DESC|v1.3.0 af2 the consent gate does not compare the acceptance with the notice in force
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if consent is not None and consent['notice'] != _notice_label(text):
+REPLACE|    if False:
+
+--- M832
+DESC|v1.3.0 af2 the consume transaction uses the token whatever notice it was issued for
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|                                         _notice_label(text) if consent_on else None):
+REPLACE|                                         None):
+
+--- M833
+DESC|v1.3.0 af2 consume_consent_token ignores the notice it is given
+TESTS|t50-consent-v130.sh
+TARGET|py:models
+EQUIV|no
+ANCHOR|    if notice is not None:
+REPLACE|    if False:
+
+--- M834
+DESC|v1.3.0 af2 a consent token is issued while the notice is off
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|        if not enabled:
+REPLACE|        if False:
+
+--- M835
+DESC|v1.3.0 af2 a notice turned on during the sign-in is not re-read in its transaction
+TESTS|t50-consent-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    if not consent_on and not consent:
+REPLACE|    if not consent:
+
+--- M836
+DESC|v1.3.0 af2 a failed audit read is recorded as a success
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|                     best_effort=True, outcome='failure')
+ANCHOR|    return jsonify({'error': 'The audit trail could not be read. An administrator must '
+REPLACE|                     best_effort=True, outcome='success')
+REPLACE|    return jsonify({'error': 'The audit trail could not be read. An administrator must '
+
+--- M837
+DESC|v1.3.0 af2 AUDIT_READ is written BEFORE the read again
+TESTS|t48-audit-v130.sh t43-web-tier-round4.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    try:
+ANCHOR|        data = audit.get_audit_log(cfg, page, per_page)
+REPLACE|    audit.log_action(cfg, session['user']['username'], 'AUDIT_READ', 'audit_log', detail, '')
+REPLACE|    try:
+REPLACE|        data = audit.get_audit_log(cfg, page, per_page)
+
+--- M838
+DESC|v1.3.0 af2 AUDIT_EXPORT is written BEFORE the export again
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    try:
+ANCHOR|        csv_data = audit.export_audit_csv(cfg)
+REPLACE|    audit.log_action(cfg, session['user']['username'], 'AUDIT_EXPORT', 'audit_log', 'CSV export of %d row(s)' % audit.count_rows(cfg), '')
+REPLACE|    try:
+REPLACE|        csv_data = audit.export_audit_csv(cfg)
+
+--- M839
+DESC|v1.3.0 af2 a failed audit read is not recorded at all (the error propagates)
+TESTS|t48-audit-v130.sh
+TARGET|py:routes
+EQUIV|no
+ANCHOR|    except Exception as exc:
+ANCHOR|        return _audit_read_failed(cfg, 'AUDIT_READ', detail, exc)
+REPLACE|    except ZeroDivisionError as exc:
+REPLACE|        return _audit_read_failed(cfg, 'AUDIT_READ', detail, exc)
+
+--- M840
+DESC|v1.3.0 af2 the sign-in server has no connect timeout
+TESTS|t49-sessions-v130.sh t20-directory-config.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|    server = Server(ldap_url, get_info=ALL, tls=tls, use_ssl=True,
+ANCHOR|                    connect_timeout=SIGN_IN_CONNECT_TIMEOUT_S)
+REPLACE|    server = Server(ldap_url, get_info=ALL, tls=tls, use_ssl=True)
+
+--- M841
+DESC|v1.3.0 af2 the service-account sign-in bind has no receive timeout
+TESTS|t49-sessions-v130.sh t20-directory-config.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|                                   auth_cfg['ldap_bind_password'], SIGN_IN_RECEIVE_TIMEOUT_S)
+REPLACE|                                   auth_cfg['ldap_bind_password'])
+
+--- M842
+DESC|v1.3.0 af2 the direct sign-in bind has no receive timeout
+TESTS|t49-sessions-v130.sh t20-directory-config.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|        ok, err, conn = _ldap_bind(server, upn, password, SIGN_IN_RECEIVE_TIMEOUT_S)
+REPLACE|        ok, err, conn = _ldap_bind(server, upn, password)
+
+--- M843
+DESC|v1.3.0 af2 the user-password bind has no receive timeout
+TESTS|t49-sessions-v130.sh t20-directory-config.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|    ok, err, user_conn = _ldap_bind(server, upn, password, SIGN_IN_RECEIVE_TIMEOUT_S)
+REPLACE|    ok, err, user_conn = _ldap_bind(server, upn, password)
+
+--- M844
+DESC|v1.3.0 af2 the sign-in receive bound is ten times longer
+TESTS|t49-sessions-v130.sh t20-directory-config.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|SIGN_IN_RECEIVE_TIMEOUT_S = 10
+REPLACE|SIGN_IN_RECEIVE_TIMEOUT_S = 100
+
+--- M845
+DESC|v1.3.0 af2 the connect bound is changed
+TESTS|t49-sessions-v130.sh t20-directory-config.sh
+TARGET|py:auth
+EQUIV|no
+ANCHOR|SIGN_IN_CONNECT_TIMEOUT_S = 5
+REPLACE|SIGN_IN_CONNECT_TIMEOUT_S = 50
+
+--- M846
+DESC|v1.3.0 af2 a 401 from any session generation ends the current one
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|    if (r?.status === 401 && tmSessionEnded && watched && generation === tmSessionGeneration) {
+REPLACE|    if (r?.status === 401 && tmSessionEnded && watched) {
+
+--- M847
+DESC|v1.3.0 af2 whoami's 401 is ignored again
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|    const watched = !input.startsWith('/api/auth/') || input.startsWith('/api/auth/whoami');
+REPLACE|    const watched = !input.startsWith('/api/auth/');
+
+--- M848
+DESC|v1.3.0 af2 a sign-in does not begin a new session generation
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|            tmSessionGeneration += 1;
+REPLACE|            tmSessionGeneration += 0;
+
+--- M849
+DESC|v1.3.0 af2 a request is tagged with the generation current when it ANSWERS, not when it was sent
+TESTS|t49-sessions-v130.sh
+TARGET|mainjs
+EQUIV|no
+ANCHOR|            return send(input, init).then(r => tmWatchSession(input, r, generation));
+REPLACE|            return send(input, init).then(r => tmWatchSession(input, r, tmSessionGeneration));
+
+--- M850
+DESC|v1.3.0 af2 CI installs requirements.txt unhashed again
+TESTS|t25-requirements-lock.sh
+TARGET|ciyml
+EQUIV|no
+ANCHOR|  TEST_SETUP: "apt-get update -qq && apt-get install -y -qq --no-install-recommends sudo nodejs jq curl nginx && pip install --quiet --require-hashes --only-binary :all: -r requirements.lock"
+REPLACE|  TEST_SETUP: "apt-get update -qq && apt-get install -y -qq --no-install-recommends sudo nodejs jq curl nginx && pip install --quiet -r requirements.txt"
+
+--- M851
+DESC|v1.3.0 af2 CI installs the lock without hash checks
+TESTS|t25-requirements-lock.sh
+TARGET|ciyml
+EQUIV|no
+ANCHOR|  TEST_SETUP: "apt-get update -qq && apt-get install -y -qq --no-install-recommends sudo nodejs jq curl nginx && pip install --quiet --require-hashes --only-binary :all: -r requirements.lock"
+REPLACE|  TEST_SETUP: "apt-get update -qq && apt-get install -y -qq --no-install-recommends sudo nodejs jq curl nginx && pip install --quiet --only-binary :all: -r requirements.lock"
+
+--- M852
+DESC|v1.3.0 af2 the shell-parse check reports no unpaired quote
+TESTS|t54-shell-parse-v130.sh
+TARGET|shellparse
+EQUIV|no
+ANCHOR|            if q:
+REPLACE|            if False:
+
+--- M853
+DESC|v1.3.0 af2 the shell-parse check flags heredocs outside a command substitution too
+TESTS|t54-shell-parse-v130.sh
+TARGET|shellparse
+EQUIV|no
+ANCHOR|            if inside:
+REPLACE|            if True:
+
+--- M854
+DESC|v1.3.0 af2 the shell-parse check does not see a $( opened on an earlier line
+TESTS|t54-shell-parse-v130.sh
+TARGET|shellparse
+EQUIV|no
+ANCHOR|            elif line.startswith('$(', i):
+ANCHOR|                stack.append('('); i += 1
+REPLACE|            elif line.startswith('$(', i):
+REPLACE|                i += 1
+
+--- M855
+DESC|v1.3.0 af2 README no longer empties offline-src before a newer bundle
+TESTS|t39-docs-v120.sh
+TARGET|readme
+EQUIV|no
+ANCHOR|sudo find /var/lib/topic-manager/offline-src -mindepth 1 -delete
+
+--- M856
+DESC|v1.3.0 af2 install/README no longer empties offline-src before a newer bundle
+TESTS|t39-docs-v120.sh
+TARGET|installreadme
+EQUIV|no
+ANCHOR|sudo find /var/lib/topic-manager/offline-src -mindepth 1 -delete
+
+--- M857
+DESC|v1.3.0 af2 README no longer shows a script signing in
+TESTS|t39-docs-v120.sh
+TARGET|readme
+EQUIV|no
+ANCHOR|    curl -sS -c "$J" -b "$J" -H "$H" -H "$T" -d @/root/tm-login.json "$U/api/auth/login"   # {"username": ..., "password": ...}
