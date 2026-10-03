@@ -3249,7 +3249,10 @@ record_baseline "${BACKUP_DIR}/manifest/permissions.after"
 # =============================================================================
 phase "Upgrade complete"
 # =============================================================================
-trap - EXIT
+# The upgrade is done: from here a non-zero exit must NOT roll it back, so
+# _on_exit is disarmed — but the run still ends with its verdict (REG-0031:
+# `trap - EXIT` here dropped the RESULT line from every successful upgrade).
+trap 'result_line "$?"' EXIT   # verdict only: no rollback past this point
 umask "$ORIG_UMASK"
 [[ -n "$TMP_EXEC_DIR" ]] && rm -rf "$TMP_EXEC_DIR"
 rm -f "$AUDIT_REPORT"

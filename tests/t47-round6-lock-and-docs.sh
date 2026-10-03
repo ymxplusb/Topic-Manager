@@ -12,7 +12,10 @@
 #   * the docs: every count of the polkit rule's unit/verb pairs is DERIVED
 #     from the rule; README's ufw line matches INSTALL; the upgrade is run
 #     detached; the PPSM names both resolved stubs; the lock and the restore
-#     verdict are in TROUBLESHOOTING.
+#     verdict are in TROUBLESHOOTING;
+#   * v1.2.1 (REG-0031): the full upgrade's SUCCESS path ends with
+#     "RESULT: exit 0" too, online and --offline, and a failure after it has
+#     completed reports its own code without rolling the upgrade back.
 #
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 # =============================================================================
@@ -325,5 +328,57 @@ d_result_line() {
     grep -qF "result_line() { echo \"RESULT: exit \$1\"; }" "$UP" || _tm_afail "the script's line is not the one the docs give"
 }
 tm_case "a-detached-run-ends-with-its-exit-code-and-the-docs-say-so" none d_result_line
+
+# ─── v1.2.1 (REG-0031): the SUCCESS path ends with its verdict too ──────────
+# The case above drives _on_exit; the full upgrade's success path disarmed it
+# with `trap - EXIT`, so a successful run (online and --offline, prod .90 and
+# tm-qc) never printed RESULT. This runs the REAL tail of the script, from
+# "Upgrade complete" to its final exit, behind the real traps.
+_success_tail() {   # _success_tail <out-script>
+    {
+        echo 'set -euo pipefail'
+        echo 'RED=""; GREEN=""; YELLOW=""; BOLD=""; NC=""'
+        echo 'info() { :; }; warn() { :; }; success() { :; }; phase() { echo "== $* =="; }'
+        echo 'rollback() { echo "ROLLED BACK"; }'
+        echo 'rm() { if [ "${FAIL_AT:-}" = tmpexec ] && [ "${2:-}" = "$TMP_EXEC_DIR" ]; then return 7; fi; command rm "$@"; }'
+        echo 'ORIG_UMASK=022; TMP_EXEC_DIR="${T}/exec"; AUDIT_REPORT="${T}/audit.txt"'
+        echo 'INSTALLED_VER=1.2.0; TARGET_VERSION=1.2.1; BACKUP_DIR="${T}/bk"; BACKUP_TAR="${T}/bk.tar"; LOG_FILE="${T}/log"'
+        echo 'TLS_RESULT=kept; EXTRA_N=0; DB_RESULT=kept; DROPIN_BACKUP_NAME=dropin; RESTORED_N=3; REAPPLY_FAILED=""'
+        echo 'SELF=/root/tm/install/upgrade-full.sh; TIMESTAMP=20261002-000000; WORK_DIR="${T}/work"'
+        tm_extract_line "$UP" '^result_line\(\) \{'
+        tm_extract_func "$UP" _on_exit
+        echo 'trap _on_exit EXIT'
+        tm_extract_between "$UP" '^phase "Upgrade complete"' '^exit 0$'
+    } > "$1"
+}
+d_success_ends_with_result() {
+    local out rc mode
+    mkdir -p "${TM_TMP}/bin"
+    printf '#!/bin/sh\nexit 1\n' > "${TM_TMP}/bin/systemctl"; chmod 755 "${TM_TMP}/bin/systemctl"
+    _success_tail "${TM_TMP}/tail.sh"
+    for mode in online offline; do
+        mkdir -p "${TM_TMP}/work" "${TM_TMP}/exec"
+        rc=0
+        out="$(T="$TM_TMP" PATH="${TM_TMP}/bin:${PATH}" bash -c 'WORK_DIR_OWNED=$1; . "$2"' _ \
+            "$([ "$mode" = online ] && echo true || echo false)" "${TM_TMP}/tail.sh" 2>&1)" || rc=$?
+        tm_assert_rc 0 "$rc" "the ${mode} success path did not exit 0: ${out}"
+        grep -q 'Rollback:  sudo bash /root/tm/install/upgrade-full.sh --restore 20261002-000000' <<<"$out" \
+            || _tm_afail "the ${mode} success tail did not run (no completion banner): ${out}"
+        tm_assert_eq "RESULT: exit 0" "$(tail -n 1 <<<"$out")" "REG-0031: a successful ${mode} upgrade does not end with RESULT: exit 0"
+        grep -q 'ROLLED BACK' <<<"$out" && _tm_afail "a successful ${mode} upgrade ran the rollback: ${out}"
+        [ "$mode" = online ] && { [ -e "${TM_TMP}/work" ] && _tm_afail "the online run kept the working tree it owned"; }
+        [ "$mode" = offline ] && { grep -q 'Offline source left in place' <<<"$out" || _tm_afail "the offline tail did not run to its end: ${out}"; }
+    done
+    # A failure after the upgrade completed: its own code as the last line,
+    # and NO rollback of an upgrade that finished.
+    mkdir -p "${TM_TMP}/work" "${TM_TMP}/exec"
+    rc=0
+    out="$(T="$TM_TMP" FAIL_AT=tmpexec PATH="${TM_TMP}/bin:${PATH}" bash -c 'WORK_DIR_OWNED=true; . "$1"' _ "${TM_TMP}/tail.sh" 2>&1)" || rc=$?
+    tm_assert_rc 7 "$rc" "a failure after completion did not keep its exit code: ${out}"
+    tm_assert_eq "RESULT: exit 7" "$(tail -n 1 <<<"$out")" "a failure after completion does not end with its RESULT line"
+    grep -q 'ROLLED BACK' <<<"$out" && _tm_afail "a failure after the upgrade completed rolled it back: ${out}"
+    true
+}
+tm_case "a-successful-full-upgrade-ends-with-result-exit-0" none d_success_ends_with_result
 
 tm_finish
