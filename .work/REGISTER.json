@@ -540,6 +540,15 @@
       "finding": "t30's renderer is not Vue (ignores :class etc.); the .host-status:empty collapse has never been seen in a browser",
       "where": "tests/t30",
       "renumbered_from": "REG-0038"
+    },
+    {
+      "id": "REG-0052",
+      "severity": "Low",
+      "status": "open",
+      "source": "prod deploy v1.3.0 on .90, 2026-10-04",
+      "finding": "Audit records arrive in Graylog DevNet TWICE: the product's rsyslog drop-in forwards topic-manager-audit/apply + tm_nginx_* to 192.168.202.12:5555, and the host's pre-existing /etc/rsyslog.d/61-graylog-multi.conf forwards *.* to the same input. Probe TMDEPLOYPROBE1791076694 found 2x.",
+      "where": "rsyslog drop-in written by tm-apply syslog apply",
+      "closes_when": "the product's forward ends with `stop` (or detects an existing catch-all to the same target) and a test asserts single delivery"
     }
   ]
 }

@@ -1706,6 +1706,12 @@
       "meaning": "passed",
       "verdict": "v1.3.0 (768cf77) annotated tag = main = release/v1.3.0; pipeline 307 success (test with hash-locked CI install + tag fetch, scan, deps, audit, publish, guides with DAST evidence); Sonar OK; release v1.3.0 published 2026-10-04T00:57Z. Staged on prod .90 at /root/tm-v1.3.0; Graylog DevNet udp/5555 reachable.",
       "at": "2026-10-04T00:57:54Z"
+    },
+    "deploy": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Prod .90 1.2.1 -> 1.3.0 2026-10-04 ~01:17Z (online, deploy key, v1.3.0 @ 768cf77) on James's /deploy, with --syslog-host 192.168.202.12 --syslog-port 5555 --syslog-protocol udp. audit exit 1 (6 expected warnings: consent off kept, no LDAP service bind, 4 fixed by the upgrade) -> snapshot pre-v1.3.0-upgrade-20261004 -> backup 20261004-011629 -> full upgrade 'Upgrade complete' RESULT: exit 0. Verified on host: 1.3.0 version/health; services/socket/timer active; sock 0660, 0 on 5001; server.key 0600; site logs 0640 www-data:adm; tm_dod log_format live; audit migration (80 rows, all ts Z, pre-1.3.0 rows mapped unknown 62 / success 14 / failure 4, AUDIT_SCHEMA_MIGRATED); compliance --report 11 PASS 2 INFO; Graylog DevNet received the probe (twice - REG). No reboot needed; journal clean. Snapshots pre-v1.2.0/1.2.1/1.3.0 kept pending James's UI check.",
+      "at": "2026-10-04T01:19:05Z"
     }
   },
   "builder": {
