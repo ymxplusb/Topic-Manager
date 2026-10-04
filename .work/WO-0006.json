@@ -1700,6 +1700,12 @@
       "meaning": "passed",
       "verdict": "v1.3.0 @ b35d004 (code 43c9bc9): no HIGH open. Wave 1: adversary x2 (VM Codex partial, then Daybreak Blue COMPLETE: no write/injection/symlink path in the root helper compliance mode, polkit pair or install gates), sec-review x2 (Claude + Daybreak Blue COMPLETE), authenticated DAST of tm-qc @ c05fcbe (High 0; Mediums REG-0001/0002; Lows REG-0028; scanned pre-fix - REG). Fix rounds assure-fix-1/2/3: F1-F5, both-engines consent-notice binding, audit read/export after-the-fact, LDAP timeouts, CI hash-locked install, late-401 race, bash-3.2 parse gate, docs D1-D6+2, env-neutral DAST exemption (my evidence commit had tripped it). Wave 2 gatekeeper (Daybreak COMPLETE): every gate proven able to fail; the one blocker (env-neutral) fixed in assure-fix-3 and verified by the full suite at HEAD (552/0/0, 14 gates, sonar-local 0 new) + mutation controls. Real host tm-qc: offline upgrades PASS, REG-0036 closed, STIG 207/10 no new. Registered: REG-0035..0047 (REG-0041 needs James's policy call). James's rulings recorded throughout.",
       "at": "2026-10-03T20:47:05Z"
+    },
+    "ship": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "v1.3.0 (768cf77) annotated tag = main = release/v1.3.0; pipeline 307 success (test with hash-locked CI install + tag fetch, scan, deps, audit, publish, guides with DAST evidence); Sonar OK; release v1.3.0 published 2026-10-04T00:57Z. Staged on prod .90 at /root/tm-v1.3.0; Graylog DevNet udp/5555 reachable.",
+      "at": "2026-10-04T00:57:54Z"
     }
   },
   "builder": {
