@@ -4,7 +4,7 @@
   "project": "Topic Manager",
   "release": "minor",
   "opened": "2026-10-02",
-  "status": "assuring",
+  "status": "done",
   "depends_on": "Baseline release/v1.2.0 @ b869f63 (= v1.2.0, LIVE on prod). v1.2.1 (release/v1.2.1, WO-0005, other worktree ../topic-manager-v121, HEAD f4d5530 at scout time) changes app/components/SettingsTab.js (108 lines), install/upgrade-full.sh, README.md and every version surface. v1.3.0 MUST branch from v1.2.1 after it merges, and every line number in this work order (measured at b869f63) must be re-anchored. Do not touch ../topic-manager-v121.",
   "input": {
     "board": "/private/tmp/claude-501/-Users-jamesrodman/610dd79a-e964-4efc-884b-2ca03e2e29cf/scratchpad/board/board-decisions.json (75 rules: F5 NGINX STIG V1R1 32 + Database SRG V4R5 narrowed to SQLite 43; 64 Yes / 8 Other / 3 No). Only one comment from James: NGNX-APP-000180.",
@@ -1712,6 +1712,12 @@
       "meaning": "passed",
       "verdict": "Prod .90 1.2.1 -> 1.3.0 2026-10-04 ~01:17Z (online, deploy key, v1.3.0 @ 768cf77) on James's /deploy, with --syslog-host 192.168.202.12 --syslog-port 5555 --syslog-protocol udp. audit exit 1 (6 expected warnings: consent off kept, no LDAP service bind, 4 fixed by the upgrade) -> snapshot pre-v1.3.0-upgrade-20261004 -> backup 20261004-011629 -> full upgrade 'Upgrade complete' RESULT: exit 0. Verified on host: 1.3.0 version/health; services/socket/timer active; sock 0660, 0 on 5001; server.key 0600; site logs 0640 www-data:adm; tm_dod log_format live; audit migration (80 rows, all ts Z, pre-1.3.0 rows mapped unknown 62 / success 14 / failure 4, AUDIT_SCHEMA_MIGRATED); compliance --report 11 PASS 2 INFO; Graylog DevNet received the probe (twice - REG). No reboot needed; journal clean. Snapshots pre-v1.2.0/1.2.1/1.3.0 kept pending James's UI check.",
       "at": "2026-10-04T01:19:05Z"
+    },
+    "wrap": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "WO-0006 done: v1.3.0 live on prod .90, James confirmed UI, snapshots removed. OpenProject #163 Closed with evidence. Lessons approved by James: Codex lane map, DAST evidence vs env-neutral, register ids across branches, don't revert tm-qc past the password rotation. Session file session-2026-10-03; index line both copies; claude repo 0cd05b5. Open: register REG-0035..0052 (minus 0041 accepted); next v1.4.0 PIV/PKI.",
+      "at": "2026-10-04T03:01:02Z"
     }
   },
   "builder": {

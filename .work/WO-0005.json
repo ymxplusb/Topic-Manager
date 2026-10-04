@@ -4,7 +4,7 @@
   "project": "Topic Manager",
   "release": "patch",
   "opened": "2026-10-02",
-  "status": "assuring",
+  "status": "done",
   "depends_on": "v1.2.0 (tag 2c4a267, LIVE on prod .90). Branch release/v1.2.1 from b869f63 (release/v1.2.0 records head) in worktree /Users/jamesrodman/Scripts/topic-manager-v121.",
   "scout": {
     "method": "NO independent scout pass. Scope and consumers were set by the coordinator's brief (James's ask + REG-0031's recorded root cause) and confirmed by the builder reading every touched site; recorded so the assure lane knows the scoping check was not independent.",
@@ -123,7 +123,14 @@
       "meaning": "passed",
       "verdict": "Prod .90 1.2.0 -> 1.2.1 2026-10-03 ~03:56Z (online, deploy key, v1.2.1 @ 7f03951) on James's standing deploy procedure. audit exit 0 (clear) -> snapshot pre-v1.2.1-upgrade-20261003 -> backup 20261003-035449 RESULT exit 0 -> full upgrade 'Upgrade complete' + RESULT: exit 0 (REG-0031 proven live). Verified: 1.2.1 version/health, services + socket active, sock 0660, 0 on 5001, TLS1.1 refused, 14 assets ?v=1201 all 200, journal clean. Rebooted (kernel 142->146), healthy in 20s, reboot flag clear. Snapshots pre-v1.2.0 + pre-v1.2.1 kept until James's UI check.",
       "at": "2026-10-03T03:57:29Z"
+    },
+    "wrap": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "WO-0005 done: v1.2.1 live on prod .90 (superseded by v1.3.0 2026-10-04). No ticket (patch on James's direct instruction; not backfilled). Recorded in session-2026-10-03; claude repo 0cd05b5.",
+      "at": "2026-10-04T03:01:02Z"
     }
   },
-  "register_note": "REG-0035..0038 recorded by the v1.2.1 gate were renumbered REG-0048..0051 when merged into v1.3.0 (v1.3.0 had already used 0035..0047)."
+  "register_note": "REG-0035..0038 recorded by the v1.2.1 gate were renumbered REG-0048..0051 when merged into v1.3.0 (v1.3.0 had already used 0035..0047).",
+  "openproject_note": "No OpenProject ticket was opened for this patch (builder-scoped from James's direct instruction); not backfilled."
 }
