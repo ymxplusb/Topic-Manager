@@ -430,13 +430,14 @@
     {
       "id": "REG-0041",
       "severity": "Medium",
-      "status": "open",
+      "status": "accepted",
       "date": "2026-10-03",
       "source": "WO-0006 assure-fix-2 (builder, 2026-10-03); POLICY QUESTION FOR JAMES",
       "finding": "A saved syslog_enabled=true satisfies the upgrade's remote-syslog preflight gate (no --syslog-host/--no-remote-syslog needed), but if the post-upgrade re-apply of that saved syslog setting fails, the upgrade only warns and completes: the gate accepted a forwarding that is then not in force.",
       "where": "install/upgrade-full.sh:2516 (preflight), install/upgrade-full.sh:3439 (re-apply warns)",
       "why": "Policy question, not a defect to fix in a closeout round: should a failed re-apply of the saved forwarding fail (and roll back) the upgrade, or stay a warning plus an open item on the compliance page?",
-      "closes_when": "James rules; the chosen behaviour is implemented and tested"
+      "closes_when": "James rules; the chosen behaviour is implemented and tested",
+      "ruling": "James 2026-10-03: keep - visible in the summary and on the compliance page"
     },
     {
       "id": "REG-0042",

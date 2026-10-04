@@ -1668,6 +1668,18 @@
       "id": "build-open-q4",
       "question": "server.key tightened to 0600 on upgrade",
       "ruling": "Yes, same as install"
+    },
+    {
+      "by": "James",
+      "date": "2026-10-03",
+      "id": "prod-remote-syslog",
+      "ruling": "Production .90 forwards to Graylog DevNet: --syslog-host 192.168.202.12 --syslog-port 5555 --syslog-protocol udp (the input every Linux host already uses; Graylog DevNet has no TLS syslog input, so transport is plaintext UDP on the internal network - TLS input on Graylog is a later item)."
+    },
+    {
+      "by": "James",
+      "date": "2026-10-03",
+      "id": "REG-0041",
+      "ruling": "KEEP: a saved syslog_enabled=true satisfies the upgrade's syslog gate; a failed re-apply stays visible (summary 'NOT re-applied' + compliance page). Close REG-0041 as accepted."
     }
   ],
   "stages": {
