@@ -93,5 +93,37 @@
     ],
     "status": "ready for assure"
   },
-  "stages": {}
+  "stages": {
+    "decide": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "PATCH on James's direct instruction 2026-10-02 (screenshot: 'the green text on every tab. We don't need that context.') + REG-0031 from the register; one defensible approach, no panel (process scaled to the change, feedback-app-before-middleware). James confirmed no extra UI changes ('that was me just recheck').",
+      "at": "2026-10-03T03:43:20Z"
+    },
+    "build": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Builder: quiet apply results (a2e2fbb, 48fefec), REG-0031 RESULT line on every exit path (07264b0), cascade 1.2.1 (f4d5530). No amendments. Linux strict 496/0/0, mutation 95/95.",
+      "at": "2026-10-03T03:43:20Z"
+    },
+    "assure": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Gatekeeper SHIP YES on the no-HIGH bar @ 24ab487: 14 gates pass, each falsified; strict 496/0/0; sonar-local 0 new vs v1.2.0 (no volumes left); UI behaviour falsified 6 ways; REG-0031 falsified; Daybreak Blue lane COMPLETE. Register: 3 Medium + 1 Low test-coverage items (REG-0035..0038). Render proof deferred to prod check (UI change is a removal of text).",
+      "at": "2026-10-03T03:43:20Z"
+    },
+    "ship": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "v1.2.1 (7f03951) annotated tag = main; pipeline 306 success; Sonar OK; release v1.2.1 published 2026-10-03T03:53Z.",
+      "at": "2026-10-03T03:54:31Z"
+    },
+    "deploy": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Prod .90 1.2.0 -> 1.2.1 2026-10-03 ~03:56Z (online, deploy key, v1.2.1 @ 7f03951) on James's standing deploy procedure. audit exit 0 (clear) -> snapshot pre-v1.2.1-upgrade-20261003 -> backup 20261003-035449 RESULT exit 0 -> full upgrade 'Upgrade complete' + RESULT: exit 0 (REG-0031 proven live). Verified: 1.2.1 version/health, services + socket active, sock 0660, 0 on 5001, TLS1.1 refused, 14 assets ?v=1201 all 200, journal clean. Rebooted (kernel 142->146), healthy in 20s, reboot flag clear. Snapshots pre-v1.2.0 + pre-v1.2.1 kept until James's UI check.",
+      "at": "2026-10-03T03:57:29Z"
+    }
+  },
+  "register_note": "REG-0035..0038 recorded by the v1.2.1 gate were renumbered REG-0048..0051 when merged into v1.3.0 (v1.3.0 had already used 0035..0047)."
 }

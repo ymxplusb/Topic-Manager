@@ -504,6 +504,42 @@
       "where": "docs/releases/1.3.0/dast.json (target tm-qc, v1.3.0 @ c05fcbe); WO-0006 dast[0].caveat",
       "why": "A rescan needs a fresh throwaway QC build of the final candidate; out of this round's scope.",
       "closes_when": "an authenticated active scan of a build containing those changes (next release's /assure), or the /deploy passive scan of the canary/prod recorded as dast-canary.json, shows no new High/Medium on those routes"
+    },
+    {
+      "id": "REG-0048",
+      "severity": "Medium",
+      "status": "open",
+      "source": "gatekeeper v1.2.1 @ 24ab487, 2026-10-02",
+      "finding": "t30 checks the user-apply success only on nginx and failures only on syslog; hiding TLS's Applied line or TLS's failure details stays green (shipped blocks verified correct by reading)",
+      "where": "tests/t30",
+      "renumbered_from": "REG-0035"
+    },
+    {
+      "id": "REG-0049",
+      "severity": "Medium",
+      "status": "open",
+      "source": "gatekeeper v1.2.1 @ 24ab487, 2026-10-02",
+      "finding": "t47 only checks the end of upgrade-full.sh; `trap - EXIT` added before the --backup-only exit stays green",
+      "where": "tests/t47",
+      "renumbered_from": "REG-0036"
+    },
+    {
+      "id": "REG-0050",
+      "severity": "Medium",
+      "status": "open",
+      "source": "gatekeeper v1.2.1 @ 24ab487, 2026-10-02",
+      "finding": "a rollback trap re-armed just before the final exit 0 stays green",
+      "where": "tests/t47",
+      "renumbered_from": "REG-0037"
+    },
+    {
+      "id": "REG-0051",
+      "severity": "Low",
+      "status": "open",
+      "source": "gatekeeper v1.2.1 @ 24ab487, 2026-10-02",
+      "finding": "t30's renderer is not Vue (ignores :class etc.); the .host-status:empty collapse has never been seen in a browser",
+      "where": "tests/t30",
+      "renumbered_from": "REG-0038"
     }
   ]
 }
