@@ -127,6 +127,12 @@
       "meaning": "passed",
       "verdict": "Gatekeeper SHIP YES @ cf62e67: 15/15 gates exit 0, each falsified (run 1 RED on stale t25 anchor -> fixed); sca green (Werkzeug 3.1.9), sonar-local 0 new vs v1.3.0 after James-approved .81 volume prune; clean-room 1.0.6 -> 1.3.1 offline on fresh tm-upgtest PASS first try, no workaround, rollback leaves no 1.3.x artifact. Register REG-0056..0063 (MED/LOW). Not re-run: adversary/sec-review/DAST (dependency + installer-only delta).",
       "at": "2026-10-09T20:44:22Z"
+    },
+    "ship": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "v1.3.1 (abf0de4) annotated tag = main; pipeline 337 success (version/prepare/test/build/scan x3/publish/guides); release v1.3.1 published 2026-10-09T20:55Z with 4 guides.",
+      "at": "2026-10-09T20:56:06Z"
     }
   },
   "register_note": "REG-0053 (pre-1.0.6 hosts have no shipped list), REG-0054 (1.0.x files a v1.3.0 rollback already overwrote are recorded as found), REG-0055 (sca RED: Werkzeug 3.1.8 GHSA-g6x2-hccm-hh4m, out of this patch's scope).",
