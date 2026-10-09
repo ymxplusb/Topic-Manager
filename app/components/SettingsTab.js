@@ -143,13 +143,10 @@ function settingsJobUpdate(domain, data) {
 }
 
 // ── STIG compliance (v1.3.0, DQ3) ─────────────────────────────────────────────
-// The page lists every rule GET /api/compliance returns: its documented status
-// (docs/STIG-COMPLIANCE.md is the source of truth) and its live checks. The
-// CSV is built from the same document, so the download and the page agree.
-const SETTINGS_CHECK_GLYPHS = { pass: '✓', warn: '!', fail: '✕', info: 'i', unknown: '?' };
-function settingsCheckGlyph(status) {
-    return Object.hasOwn(SETTINGS_CHECK_GLYPHS, status) ? SETTINGS_CHECK_GLYPHS[status] : '?';
-}
+// GET /api/compliance returns every rule: its documented status
+// (docs/STIG-COMPLIANCE.md is the source of truth) and its live checks. Since
+// v1.3.2 the page shows only a one-line summary; the rules themselves are the
+// CSV download, built from that same document.
 
 const SETTINGS_NO_CHECK = { key: '', where: '', status: '', detail: '' };
 function settingsComplianceRows(rule) {
@@ -519,9 +516,6 @@ const SettingsTab = {
         },
         measureCompliance() {
             return this.runHostApply('compliance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-        },
-        checkGlyph(status) {
-            return settingsCheckGlyph(status);
         },
         downloadCompliance() {
             if (!this.compliance) return;
@@ -1327,20 +1321,6 @@ const SettingsTab = {
     <p v-if="!compliance" class="host-note">{{ complianceLoading ? 'Loading compliance status…' : 'Compliance status unavailable.' }}</p>
     <div v-if="compliance">
       <p class="host-note">Host last measured: {{ compliance.host.measured_at || 'never (press Measure host now)' }}. Open items: {{ compliance.open_items.length ? compliance.open_items.join(', ') : 'none' }}.</p>
-      <table class="dt compliance-table">
-        <thead><tr><th>Rule</th><th>Decision</th><th>Status</th><th>Live checks</th></tr></thead>
-        <tbody>
-          <tr v-for="r in compliance.rules" :key="r.id">
-            <td :title="r.title"><code>{{ r.id }}</code> <span class="hint">{{ r.sev }}</span></td>
-            <td>{{ r.decision }}</td>
-            <td>{{ r.status }}</td>
-            <td>
-              <span v-if="!r.checks.length" class="hint">none (see the document)</span>
-              <div v-for="c in r.checks" :key="c.key" :data-state="c.status === 'pass' ? 'ok' : (c.status === 'fail' ? 'failed' : 'warning')">{{ checkGlyph(c.status) }} {{ c.key }}: {{ c.detail }}</div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
     </div>
   </div>
 

@@ -18,6 +18,8 @@
 #   page       GET /api/compliance carries every rule, its status and the
 #              application's own live checks
 #   issuer     a self-signed server certificate is a warning (NGNX-APP-001900)
+#   settings   (v1.3.2) the Settings section is the one-line summary and the
+#              Download CSV: it fetches the document but never lists the rules
 #
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 # =============================================================================
@@ -461,6 +463,37 @@ vm.runInContext(fs.readFileSync(process.argv[2], 'utf8') + '\n;globalThis.__S = 
     const inst = Object.assign({}, S.data());
     for (const [k, f] of Object.entries(S.methods)) inst[k] = f.bind(inst);
     inst.compliance = doc; inst.downloadCompliance(); assert.ok(csv && csv.startsWith('"Rule"'), 'the download is not the CSV');
+    // v1.3.2 (WO-0008, James 2026-10-09): the page still fetches the document
+    // the CSV is built from, on mount and on Refresh, and the download is
+    // exactly that document's CSV.
+    assert.match(S.mounted.toString(), /this\.loadCompliance\(\)/, 'the compliance document is not fetched when Settings opens');
+    answer = { ok: true, status: 200, json: async () => doc };
+    inst.compliance = null; calls.length = 0; csv = null;
+    await inst.loadCompliance();
+    assert.deepEqual(calls.map(c => [c[0], c[1]]), [['/api/compliance', 'GET']], 'Refresh does not fetch /api/compliance');
+    assert.equal(inst.compliance, doc, 'the fetched compliance document is not kept for the download');
+    inst.downloadCompliance();
+    assert.equal(csv, sandbox.__csv(doc), 'the download is not the CSV of the fetched document');
+    // v1.3.2: the section is the summary line and the buttons; it never lists
+    // the rules on the page (the rules are the CSV).
+    const from = S.template.indexOf('<!-- STIG compliance'), to = S.template.indexOf('<!-- About -->');
+    assert.ok(from >= 0 && to > from, 'the STIG compliance section is not found in the template');
+    const sec = S.template.slice(from, to);
+    assert.ok(sec.includes('<div class="ssec-title">STIG compliance</div>'), 'the section title is gone');
+    assert.doesNotMatch(sec, /<table|<tr[\s>]|<td[\s>]|compliance\.rules|\.checks\b/, 'the compliance section lists the rules on the page');
+    assert.ok(sec.includes('<button class="btn btn-sm" @click="downloadCompliance" :disabled="!compliance">⬇ Download CSV</button>'), 'the Download CSV button is gone');
+    assert.ok(sec.includes('@click="measureCompliance"') && sec.includes('>Measure host now</button>'), 'Measure host now is gone');
+    assert.ok(sec.includes('@click="loadCompliance"') && sec.includes('>Refresh</button>'), 'Refresh is gone');
+    assert.ok(sec.includes(':data-state="applyViews.compliance.state"'), 'the measurement status block is gone');
+    assert.ok(sec.includes('v-if="complianceError"'), 'the compliance error line is gone');
+    const summary = sec.match(/<p class="host-note">(Host last measured:[^<]*)<\/p>/);
+    assert.ok(summary, 'the one-line summary is gone');
+    const render = (t, compliance) => t.replace(/\{\{([\s\S]*?)\}\}/g, (_, e) => String(new Function('compliance', 'return (' + e + ')')(compliance)));
+    assert.equal(render(summary[1], { host: { measured_at: '2026-10-02T10:00:00+00:00' }, open_items: ['consent_notice', 'session_cap'] }),
+                 'Host last measured: 2026-10-02T10:00:00+00:00. Open items: consent_notice, session_cap.');
+    assert.equal(render(summary[1], { host: { measured_at: null }, open_items: [] }), 'Host last measured: never (press Measure host now). Open items: none.');
+    answer = { ok: true, status: 200, json: async () => ({ ok: true, ended: 2, sessions: [] }) };
+    calls.length = 0;
     await inst.endSessions('bob');
     await inst.endSessions(null);
     const ends = calls.filter(c => c[0] === '/api/sessions/end');
