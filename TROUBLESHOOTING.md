@@ -101,7 +101,21 @@ denies, so ask the kernel as the real principal:
 
 ```bash
 sudo -u www-data test -r /var/www/topic-manager/index.html && echo OK || echo DENIED
-sudo chmod -R u+rwX,go+rX /var/www/topic-manager
+sudo -u www-data test -r /var/www/topic-manager/lib/vue.global.prod.js && echo OK || echo DENIED
+```
+
+Since v1.3.1 the upgrade sets the served tree's modes from the release itself in Phase 10
+(root-owned, 0755/0644, or 0750/0640 through the web account's group where the tree is not
+world-readable), so a file mode left by an earlier install — v1.0.x's online install left
+`lib/vue.global.prod.js` at 0600 — no longer reaches Phase 12, and there is nothing to chmod
+before upgrading. If it still says DENIED after an upgrade, the file mode is not the cause:
+check traversal on the parent directories (`namei -l /var/www/topic-manager/index.html`), an
+ACL (`getfacl`) or an AppArmor/SELinux denial (`journalctl -k | grep -i denied`). On a host
+the upgrade has not touched (a 1.3.0 upgrade that rolled back, or an install made by hand):
+```bash
+sudo chown -R root:root /var/www/topic-manager
+sudo find /var/www/topic-manager -type d -exec chmod 0755 {} +
+sudo find /var/www/topic-manager -type f -exec chmod 0644 {} +
 ```
 
 ### `topic-manager cannot read config.yaml` / `cannot execute the venv` / `cannot write data`
@@ -430,7 +444,7 @@ by the sandbox — and that message is polkit's.
 
 ```bash
 # 1. Is the rule file even there?
-ls -l /etc/polkit-1/rules.d/50-topic-manager.rules
+sudo ls -l /etc/polkit-1/rules.d/50-topic-manager.rules   # sudo: rules.d is not world-readable
 
 # 2. Did polkitd load it? The count includes this file.
 sudo journalctl -u polkit -n 20 --no-pager
@@ -1081,7 +1095,7 @@ sudo -u topic-manager test -w /etc/topic-manager/config.yaml && echo "WRITABLE �
 systemctl show topic-manager --property=ReadWritePaths
 
 # The restart control's authorisation
-ls -l /etc/polkit-1/rules.d/50-topic-manager.rules
+sudo ls -l /etc/polkit-1/rules.d/50-topic-manager.rules   # sudo: rules.d is not world-readable
 sudo journalctl -u polkit -n 5 --no-pager
 pkaction --action-id org.freedesktop.systemd1.manage-units --verbose
 systemctl cat topic-manager-nginx-test.service >/dev/null && echo "test unit installed"
@@ -1134,7 +1148,7 @@ The three final states mean exactly this:
 
 The polkit rule predates v1.2.0 (it does not list the four apply units) or polkitd is not
 running. Re-run the upgrade (it installs the rule), or check:
-`grep -c apply /etc/polkit-1/rules.d/50-topic-manager.rules` (expect 5 or more) and
+`sudo grep -c apply /etc/polkit-1/rules.d/50-topic-manager.rules` (expect 5 or more) and
 `sudo journalctl -u polkit -n 5`.
 
 ### `no result was written for this request N s after it was made`

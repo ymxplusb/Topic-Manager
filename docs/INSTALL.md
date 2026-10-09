@@ -510,6 +510,11 @@ or leave it and block 25/tcp at the host firewall. `PPSM.csv` lists it as found 
 
 ## 12. Upgrading later
 
+**From a 1.0.x host** (it reports version `1.0.6`): read README.md → *Upgrading from a 1.0.x
+host* first. Since v1.3.1 the upgrade gives the served tree the release's modes (a 1.0.x
+online install left Vue 0600) and rolls a failed run back by the shipped 1.0.x list; nothing
+needs to be changed by hand beforehand.
+
 **v1.3.0 — say where the audit trail goes.** Unless the host's saved settings already forward
 it, `--audit-only` and the upgrade each need ONE of:
 
@@ -547,7 +552,8 @@ sudo bash /var/lib/topic-manager/offline-src/install.sh --packages-only
 **Run the upgrade (and a `--restore`) detached, with a log file**, so a dropped SSH session
 cannot kill it mid-phase:
 ```bash
-sudo -v                       # enter the password now: a backgrounded sudo cannot ask for it
+sudo -n true 2>/dev/null || sudo -v   # a password now, if sudo needs one: a backgrounded sudo
+                                      # cannot ask. NOPASSWD (or no terminal): nothing to enter
 sudo setsid nohup bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline \
     --syslog-host <collector> > ~/tm-upgrade.out 2>&1 < /dev/null &      # or --no-remote-syslog
 tail -f ~/tm-upgrade.out      # Ctrl-C ends only the tail

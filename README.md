@@ -624,8 +624,48 @@ What it does, in order:
 | 5    | Fetch the target source — online from the git URL you give with `--repo-url` (there is no default), or offline from the staged bundle — and read every Python pin from its `requirements.txt`; the script keeps no pins of its own |
 | 6    | OS packages (`apt full-upgrade`), unless `--skip-os` |
 | 7–9  | Replace venv, backend, frontend, nginx config and unit, and install the polkit rule and the `topic-manager-nginx-test` unit. Vue is verified by SHA-256 before it is allowed to serve |
-| 10   | Restore `config.yaml`, the audit database, TLS material, the systemd drop-in, the cluster store (`clusters.d/` and `cluster-certs/`) and the recorded ownership and modes verbatim — a deliberately narrowed permission is never widened back to a script default. The store is restored *before* the migration runs. The one deliberate exception to "verbatim": `data/` and `tm.db` are set to **0700 / 0600** after the replay, because a v1.0.x baseline records 0644 for the audit database |
+| 10   | Restore `config.yaml`, the audit database, TLS material, the systemd drop-in, the cluster store (`clusters.d/` and `cluster-certs/`) and the recorded ownership and modes verbatim — a deliberately narrowed permission is never widened back to a script default. The store is restored *before* the migration runs. The deliberate exceptions to "verbatim": `data/` and `tm.db` are set to **0700 / 0600** after the replay, because a v1.0.x baseline records 0644 for the audit database; and (v1.3.1) the served tree `/var/www/topic-manager`, every file of which is the release's, takes the release's modes — root-owned, 0755/0644, or 0750/0640 through the web account's group where the tree was not world-readable — whatever the old tree's files had |
 | 11–12| Config migration — the `clusters:` block moves out of `config.yaml` — and `nginx.conf`'s `ssl_protocols` set to `TLSv1.2 TLSv1.3` (backed up, `nginx -t`, put back on failure); then the permission boundary is **measured** as the `topic-manager` principal (it must be able to write `clusters.d`, and must not be able to write `config.yaml` or its directory; either failure fails the upgrade), then start and verify: health, reported version, effective access, and the security headers on every route class |
+
+### Upgrading from a 1.0.x host
+
+A host installed by v1.0.x (the v1.0.6 to v1.0.11 releases all report version `1.0.6`)
+differs from a v1.1+ host in two ways. Since **v1.3.1** the upgrade handles both itself — do
+not chmod or delete anything beforehand:
+
+- **Its Vue bundle is 0600.** v1.0.x's online `install.sh` fetched
+  `lib/vue.global.prod.js` through a temporary file and kept that file's 0600; it was served
+  only because `www-data` owned it. The upgrade makes the served tree root-owned, and up to
+  v1.3.0 it put the recorded 0600 back, so `www-data` could not read Vue, the Phase 12
+  effective-access check failed and the upgrade rolled itself back. Now every file under
+  `/var/www/topic-manager` (all of it is the release's) takes the release's modes:
+  `root:root` 0755/0644, or 0750/0640 through the web account's group when the tree was not
+  world-readable. Every other recorded path keeps exactly the mode it had.
+- **It has no install manifest.** v1.0.x and v1.1.x recorded nothing of what they laid down
+  outside their own trees. The upgrade carries the list those releases shipped (the same eight
+  units, rules, nginx files and links from v1.0.6 to v1.1.1), so a failed upgrade's rollback
+  retires every unit, socket, timer, polkit rule and helper the newer release added, and puts
+  back the 1.0.x unit, site and rule from the restore point.
+
+What to check:
+
+- **The version the host reports** (`curl -sk https://localhost/api/health`) is `1.0.6`,
+  `1.1.0` or `1.1.1`. A host reporting an older 1.0.x version has no shipped list here: the
+  upgrade still runs, but a rollback to its restore point retires nothing and ends RESTORE
+  INCOMPLETE with the list.
+- **After an earlier attempt that rolled back** (v1.3.0 left the newer release's units on a
+  1.0.x host), revert the vCSA snapshot taken before that attempt if you have it. If not,
+  `--backup-only` now says `... names release 1.3.0, not the installed v1.0.6` and does not
+  adopt the leftover manifest, and a rollback to that restore point retires what it names; but
+  a 1.0.x file the earlier attempt overwrote and could not put back
+  (`topic-manager-nginx-test.service`, the polkit rule) is recorded as it is now. Compare with:
+  ```bash
+  systemctl list-unit-files 'topic-manager*'    # 1.0.x: topic-manager.service, topic-manager-nginx-test.service only
+  sudo ls -l /usr/libexec/topic-manager         # 1.0.x: No such file or directory
+  ```
+- **The restore point**: `--backup-only` prints `Baseline recorded (N paths)`, and
+  `sudo head -1 /var/backups/topic-manager/<TIMESTAMP>/manifest/installed-files.manifest`
+  reads `# derived: v1.0.6 wrote no install manifest; ...`.
 
 ### What the upgrade needs, and what it will ask you
 
@@ -772,7 +812,7 @@ sudo -u topic-manager test -w /etc/topic-manager && echo "WRITABLE — WRONG" ||
 sudo -u topic-manager test -w /etc/topic-manager/clusters.d && echo "writable (correct)"
 
 # The restart control's authorisation and its config-test unit
-ls -l /etc/polkit-1/rules.d/50-topic-manager.rules
+sudo ls -l /etc/polkit-1/rules.d/50-topic-manager.rules   # sudo: rules.d is not world-readable
 sudo journalctl -u polkit -n 5 --no-pager      # "Finished loading, compiling and executing N rules"
 systemctl cat topic-manager-nginx-test.service >/dev/null && echo "test unit installed"
 ```
@@ -890,7 +930,8 @@ when it has to wait for the package lock — and a dropped SSH session (a networ
 going to sleep, a session timeout) hangs up the shell running it, which kills the script
 mid-phase. Start it so that a disconnect cannot reach it, and read its output from a file:
 ```bash
-sudo -v                       # enter the password now: a backgrounded sudo cannot ask for it
+sudo -n true 2>/dev/null || sudo -v   # a password now, if sudo needs one: a backgrounded sudo
+                                      # cannot ask. NOPASSWD (or no terminal): nothing to enter
 sudo setsid nohup bash /var/lib/topic-manager/offline-src/install/upgrade-full.sh --offline \
     --syslog-host <collector> > ~/tm-upgrade.out 2>&1 < /dev/null &      # or --no-remote-syslog
 tail -f ~/tm-upgrade.out      # Ctrl-C ends only the tail; the upgrade carries on
