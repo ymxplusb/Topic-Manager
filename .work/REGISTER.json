@@ -549,6 +549,33 @@
       "finding": "Audit records arrive in Graylog DevNet TWICE: the product's rsyslog drop-in forwards topic-manager-audit/apply + tm_nginx_* to 192.168.202.12:5555, and the host's pre-existing /etc/rsyslog.d/61-graylog-multi.conf forwards *.* to the same input. Probe TMDEPLOYPROBE1791076694 found 2x.",
       "where": "rsyslog drop-in written by tm-apply syslog apply",
       "closes_when": "the product's forward ends with `stop` (or detects an existing catch-all to the same target) and a test asserts single delivery"
+    },
+    {
+      "id": "REG-0053",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0007 builder (v1.3.1), 2026-10-09",
+      "finding": "Hosts reporting tm/VERSION 1.0.0, 1.0.2, 1.0.3, 1.0.4 or 1.0.5 (releases v1.0.0-v1.0.5, which have no git tags) still have no shipped list: a rollback to their restore point retires nothing and ends RESTORE INCOMPLETE with the list (the pre-v1.3.1 behaviour for 1.0.6). Their release commits lay down subsets of LEGACY_ARTEFACTS (1.0.0: unit, wants link, site, sites-enabled link; +logrotate from 1.0.2; +header snippet 1.0.3; +nginx-test unit and polkit rule 1.0.4/1.0.5), and tm/VERSION 1.0.0 is reported by 1.0.0, 1.0.1 and the 1.0.2 release commit 29671b1.",
+      "where": "install/upgrade-full.sh LEGACY_VERSIONS/LEGACY_ARTEFACTS, legacy_artefacts; t45 l_legacy_list_is_the_tags",
+      "closes_when": "per-version shipped lists for 1.0.0-1.0.5, each re-derived by t45 from a named, immutable reference (tag the release commits, or pin their 40-hex ids), and a rollback case per list; or a decision that pre-1.0.6 hosts are out of support"
+    },
+    {
+      "id": "REG-0054",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0007 builder (v1.3.1), 2026-10-09",
+      "finding": "On a 1.0.x host where a v1.3.0 upgrade already failed and rolled back, v1.3.0's rollback put back the unit, site, snippet and logrotate file from its legacy copies but NOT topic-manager-nginx-test.service or the polkit rule (it kept no copy of either). A v1.3.1 restore point on that host records those two as found (the 1.3.0 bytes) because nothing holds the 1.0.x bytes, so a later rollback puts the 1.3.0 versions back. The rest of the leftovers (socket, apply/audit units, helper tree, log format) are retired. README 'Upgrading from a 1.0.x host' says to revert the snapshot taken before that attempt.",
+      "where": "backup_owned_artefacts (derived record: 'as found on this host')",
+      "closes_when": "the 1.0.x bytes of those two files can be reconstructed from the release (e.g. the tag's file, with the installer's edits) and compared, or the throwaway re-test confirms the snapshot-revert guidance is enough and the entry is accepted"
+    },
+    {
+      "id": "REG-0055",
+      "severity": "Medium",
+      "status": "open",
+      "source": "WO-0007 builder final gate (v1.3.1 @ 6d701a0), 2026-10-09",
+      "finding": "Declared gate sca is RED: Werkzeug 3.1.8 (requirements.txt and requirements.lock) carries GHSA-g6x2-hccm-hh4m / CVE-2026-102598, MODERATE (CVSS 4.0 AV:N/AC:L/AT:P ... VA:L), CWE-67: safe_join() accepts Windows special device names; fixed in 3.1.9. GitHub-reviewed 2026-10-05, after v1.3.0 shipped, so v1.3.0 is affected too. The product runs on Ubuntu only, where the device-name class does not apply, but the gate does not judge exploitability and a tag would ship a pin with a known advisory.",
+      "where": "requirements.txt, requirements.lock (+ SBOM.md, NOTICES.md, AboutModal.js dependency table, by the sbom-consistency gate)",
+      "closes_when": "Werkzeug pinned at 3.1.9 (or later) with the lock regenerated online, SBOM/NOTICES/AboutModal moved, sca exit 0 — in v1.3.1 if James widens its scope, otherwise the next release; or James accepts it for v1.3.1 with the reason recorded"
     }
   ]
 }
