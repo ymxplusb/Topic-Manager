@@ -121,6 +121,11 @@ f_symlink_is_refused() {
     ln -s "${TM_TMP}/real" "${TM_TMP}/fe-link"
     _fn "${TM_TMP}/fe-link"
     tm_assert_ne 0 "$RC" "a served tree that is itself a symlink was accepted"
+    # ... and said as what it is: the find below would also stop on it, but
+    # calling the tree's own link "a symlink inside the served tree" sends
+    # the operator looking in the wrong place (M877 survived without this).
+    tm_assert_grep "fe-link is a symlink; refusing to re-own the frontend through it" "${TM_TMP}/out" \
+        "a symlinked served tree is not named as such"
     tm_assert_mode 600 "${TM_TMP}/real/f" "a mode was changed through the symlinked tree"
 }
 tm_case "a-symlink-in-the-served-tree-is-refused" modes,symlinks f_symlink_is_refused
