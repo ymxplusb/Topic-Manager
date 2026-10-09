@@ -172,8 +172,9 @@ The script ends with the URL and a running service, and with the **host STIG che
 Host state the product does not own — the web server account (`www-data`) shell, groups and
 password lock, other files under `/etc/nginx`, loaded nginx modules — is a WARN and is never
 changed; a FAIL is the product's own file (its nginx logs, its site, its TLS key) and stops the
-install. The same checks are on Settings > Support > STIG compliance, beside every rule of
-[STIG-COMPLIANCE.md](STIG-COMPLIANCE.md). If the script stops, it says why, and nothing
+install. The same checks are in Settings > Support > STIG compliance → Download CSV, beside
+every rule of [STIG-COMPLIANCE.md](STIG-COMPLIANCE.md); the page itself shows when the host was
+last measured and the open items. If the script stops, it says why, and nothing
 half-configured is left claiming success; see TROUBLESHOOTING.md.
 
 ---
@@ -415,7 +416,8 @@ systemctl cat topic-manager-apply-compliance.service --no-pager | grep -E '^(Exe
 ```
 
 Then **Settings → Support → STIG compliance → Measure host now** runs the same checks through
-that unit and shows every rule with its live result; the same document is served by the
+that unit; the page then shows when the host was measured and the open items, and
+**Download CSV** gives every rule with its live result. The same document is served by the
 compliance API (README.md → *Compliance*).
 
 ---

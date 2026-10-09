@@ -1387,7 +1387,8 @@ can be changed by an account other than root, so a log in it could be swapped fo
 between the check and the change; nothing was touched. Put it back to the package's
 ownership (`sudo chown root:adm /var/log/nginx && sudo chmod 755 /var/log/nginx`) and re-run.
 
-On the compliance page, `site_log_modes` WARN `/etc/logrotate.d/nginx does not recreate the logs
+In the compliance CSV (Settings > Support > STIG compliance → Download CSV; the page lists
+`site_log_modes` under Open items), `site_log_modes` WARN `/etc/logrotate.d/nginx does not recreate the logs
 it rotates as "create 0640 www-data adm"` means the OS's nginx logrotate stanza was changed:
 the next rotation would give the logs another owner or mode. Restore its `create 0640 www-data
 adm` line (it is the nginx package's file; the product does not change it).

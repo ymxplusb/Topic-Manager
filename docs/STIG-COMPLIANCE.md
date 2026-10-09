@@ -4,10 +4,12 @@
 of the STIG decision board: the F5 NGINX STIG V1R1 (32 rules) and the Database SRG V4R5 narrowed
 to the SQLite audit database (43 rules), 75 in all - 64 decided Yes, 8 Other and 3 No by the owner.
 
-Settings > Support > STIG compliance is the same list, live: each rule with its status from this
-document and, where a rule has a live check, what the host and the application measure now (the
-root apply helper measures the host, read-only; "Measure host now" re-runs it). The page downloads
-as CSV. `tools/check-stig-compliance.sh` holds the page's rule list (tm/compliance.py RULES) to
+Settings > Support > STIG compliance serves the same list, live, as a CSV download: each rule
+with its status from this document and, where a rule has a live check, what the host and the
+application measure now (the root apply helper measures the host, read-only; "Measure host now"
+re-runs it). Since v1.3.2 the page itself shows only a one-line summary - when the host was last
+measured and the open items - and not the rules. `tools/check-stig-compliance.sh` holds the
+page's rule list (tm/compliance.py RULES) to
 this document - every id, title, severity, decision, status and live check - the way the PPSM gate
 holds the two PPSM copies together; tests/t53 proves it goes red on a one-sided edit.
 
