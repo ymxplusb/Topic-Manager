@@ -75,6 +75,9 @@ mkdir -p "$PY_PKG_DIR" "$APT_PKG_DIR" "$LIB_DIR"
 # any more (round 2): the old unrestricted `pip download` retry took whatever
 # resolved for THIS machine — sdists, other platforms, other versions — and it
 # was silently hiding that cryptography 50 has no manylinux2014 wheel.
+# v1.3.3 (REG-0068): the lock carries pip itself (venv tooling), so its wheel
+# is downloaded here like every other, and the pin check below requires it:
+# the installers upgrade the venv's pip from THIS bundle before anything else.
 REQ_FILE="${SCRIPT_DIR}/requirements.txt"
 LOCK_FILE="${SCRIPT_DIR}/requirements.lock"
 [[ -f "$REQ_FILE" ]]  || die "${REQ_FILE} not found — it is the source of every Python pin."

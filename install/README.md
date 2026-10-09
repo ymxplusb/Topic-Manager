@@ -34,6 +34,13 @@ tree and installs exactly those versions with `pip --no-index --find-links`. Nei
 keeps a second copy of a version number. If they ever disagree again, the failure appears on
 the air-gapped host, which is the one place it cannot be fixed.
 
+**v1.3.3 — pip is one of those pins.** `requirements.txt` pins the venv's own `pip`
+("venv tooling") and `requirements.lock` carries its hash, so the bundle carries its wheel.
+Both installers upgrade the new venv's pip to that wheel (`--require-hashes`, from the
+bundle offline, PyPI online) **before** installing the application packages, and then require
+the venv to hold **exactly** the locked set — no extra package, none missing, no other
+version — or the run fails (the upgrade rolls back).
+
 The Vue version and hash live in `install/upgrade-full.sh` — the script that verifies the
 file on the target — and `prepare-offline.sh` reads them from there.
 

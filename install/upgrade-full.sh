@@ -288,6 +288,126 @@ host_stig_report() {   # host_stig_report <helper>
     python3 -I "$1" compliance --report
 }
 # <<< v1.3.0 host STIG checks
+
+# >>> v1.3.3 venv tooling and drift — byte-identical in install.sh and install/upgrade-full.sh (t55)
+# REG-0068 (James 2026-10-09): `python3 -m venv` seeds the venv with pip
+# itself — 24.0 from Ubuntu 24.04's ensurepip, six advisories — and nothing
+# pinned, hashed, scanned or upgraded it: it was in no requirements file, so
+# the SCA gate never saw it, and apt never touches a venv. The standard is
+# now: EVERY package in the app's venv is pinned and hash-locked in
+# requirements.lock (pip included, under "venv tooling"), the venv's pip is
+# upgraded to that entry FIRST, from the same source as every other wheel
+# (PyPI online, the bundle offline), and after the install the venv must
+# hold EXACTLY the locked set — nothing extra, nothing missing, no other
+# version — or the run fails (and an upgrade rolls back).
+#
+# lock_entry <lock> <normalised name> — the lock's entry for one package
+# (its "name==version \" line and every continuation line), on stdout. The
+# lock has passed tools/check-requirements-lock.sh, whose layout rule puts
+# every entry whole at column 0 (the same reason upgrade-full.sh's pin grep
+# may read column 0). Exit 1 unless exactly ONE entry carries the name.
+lock_entry() {   # lock_entry <lock> <normalised name>
+    local lock="$1" want="$2" line key inside=false n=0
+    [[ -f "$lock" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        if [[ $inside == true ]]; then
+            printf '%s\n' "$line"
+            [[ "$line" == *[\\] ]] || inside=false
+            continue
+        fi
+        [[ "$line" =~ ^([A-Za-z0-9._-]+)== ]] || continue
+        key="${BASH_REMATCH[1],,}"; key="${key//_/-}"; key="${key//./-}"
+        [[ "$key" == "$want" ]] || continue
+        n=$((n+1))
+        printf '%s\n' "$line"
+        [[ "$line" == *[\\] ]] && inside=true
+    done < "$lock"
+    [[ $n -eq 1 ]]
+}
+
+# venv_bootstrap_pip <venv> <lock> [pip source option...] — upgrade the venv's
+# OWN pip to the lock's pip entry, hash-verified, binary only, before any
+# application package is installed: the app set is then installed by the
+# locked pip, not by whatever ensurepip seeded. The source options are the
+# ones the rest of the install uses (none online; --no-index --find-links
+# <bundle> offline). Then the venv's pip must REPORT the locked version.
+# 0 on success; 1 with the reason on stdout.
+venv_bootstrap_pip() {   # venv_bootstrap_pip <venv> <lock> [pip source option...]
+    local venv="$1" lock="$2" tmp want got rc=0
+    shift 2
+    tmp="$(mktemp -d)" || { echo "mktemp -d failed"; return 1; }
+    if ! lock_entry "$lock" pip > "${tmp}/pip.lock"; then
+        rm -rf -- "$tmp"
+        echo "${lock} does not carry exactly one pip entry (venv tooling): it is not a v1.3.3 lock"
+        return 1
+    fi
+    want="$(sed -n '1s/^[^=]*==\([^[:space:]]*\).*$/\1/p' "${tmp}/pip.lock")"
+    "${venv}/bin/python3" -m pip install --disable-pip-version-check --quiet \
+        --require-hashes --only-binary :all: "$@" -r "${tmp}/pip.lock" || rc=$?
+    rm -rf -- "$tmp"
+    [[ $rc -eq 0 ]] || { echo "pip install of the locked pip==${want} failed (exit ${rc}; a hash mismatch is refused, not retried)"; return 1; }
+    got="$("${venv}/bin/python3" -m pip --version 2>/dev/null)" || got=""
+    got="${got#pip }"; got="${got%% *}"
+    [[ -n "$want" && "$got" == "$want" ]] || { echo "the venv's pip reports '${got:-nothing}', not the locked ${want:-?}"; return 1; }
+    echo "$got"
+}
+
+# venv_drift <venv> <lock> — does the venv hold EXACTLY the locked set? Read by
+# the SYSTEM python3 from the venv's site-packages metadata (nothing in the
+# venv is executed, so no .pth file runs as root). One line per difference:
+#   DIFFERENT <name>: <installed> installed, the lock pins <version>
+#   EXTRA <name>: <installed> installed, not in the lock
+#   MISSING <name>: not installed, the lock pins <version>
+#   DUPLICATE <name>: installed twice (<v1>, <v2>)
+# Exit 0 (one "<n> packages, exactly the lock" line), 1 on any difference,
+# 3 when it cannot say (no lock, no site-packages) — never a pass it did not
+# earn.
+venv_drift() {   # venv_drift <venv> <lock>
+    python3 -I - "$1" "$2" <<'PYVENV'
+import glob, os, re, sys
+from importlib import metadata
+venv, lock = sys.argv[1], sys.argv[2]
+def norm(n):
+    return re.sub(r"[-_.]+", "-", n).lower()
+try:
+    with open(lock, encoding="ascii") as f:
+        text = f.read()
+except (OSError, UnicodeError) as e:
+    print("cannot read %s: %s" % (lock, e)); sys.exit(3)
+locked = {}
+for line in text.splitlines():
+    m = re.match(r"^([A-Za-z0-9._-]+)==([^\s\\]+)", line)
+    if m:
+        locked[norm(m.group(1))] = m.group(2)
+if not locked:
+    print("%s pins nothing" % lock); sys.exit(3)
+sites = glob.glob(os.path.join(venv, "lib", "python3*", "site-packages"))
+if len(sites) != 1:
+    print("%s: expected one lib/python3*/site-packages, found %d" % (venv, len(sites))); sys.exit(3)
+have, probs = {}, []
+for d in metadata.distributions(path=sites):
+    name, ver = d.metadata["Name"], d.version
+    if not name or not ver:
+        probs.append("UNREADABLE %s: a distribution with no name or version" % (name or "?"))
+        continue
+    have.setdefault(norm(name), []).append(ver)
+for n in sorted(set(have) | set(locked)):
+    vs, want = have.get(n, []), locked.get(n)
+    if len(vs) > 1:
+        probs.append("DUPLICATE %s: installed twice (%s)" % (n, ", ".join(sorted(vs))))
+    elif not vs:
+        probs.append("MISSING %s: not installed, the lock pins %s" % (n, want))
+    elif want is None:
+        probs.append("EXTRA %s: %s installed, not in the lock" % (n, vs[0]))
+    elif vs[0] != want:
+        probs.append("DIFFERENT %s: %s installed, the lock pins %s" % (n, vs[0], want))
+if probs:
+    print("\n".join(probs)); sys.exit(1)
+print("%d packages, exactly the lock" % len(locked))
+PYVENV
+}
+# <<< v1.3.3 venv tooling and drift
 # Where a retired unit's RuntimeDirectory= lives (remove_retired_runtime).
 OWNED_RUNTIME_DIR="/run"
 # Where systemd keeps a persistent timer's last-trigger stamp. It outlives the
@@ -2134,6 +2254,31 @@ if [[ -f "${APP_HOME}/data/tm.db" ]]; then
 fi
 
 echo
+echo "  ── venv packages (v1.3.3: exactly the lock, pip included)"
+# The INSTALLED venv against the lock of the release this script belongs to.
+# A WARN, not a block: Phase 8 rebuilds the venv from that lock and then holds
+# it to exactly that set — so this is what the upgrade is about to change (on
+# a v1.3.2 or older host, at least the venv's pip: ensurepip's 24.0).
+AUDIT_LOCK="$(dirname "$SELF")/../requirements.lock"
+if [[ ! -d "$VENV" ]]; then
+    row WARN "venv packages" "no venv at ${VENV}: nothing to compare (the upgrade creates it)"
+elif [[ ! -f "$AUDIT_LOCK" ]]; then
+    row WARN "venv packages" "NOT compared: no requirements.lock beside this script (${AUDIT_LOCK}); Phase 8 still checks the new venv"
+else
+    VENV_AUDIT_RC=0
+    VENV_AUDIT="$(venv_drift "$VENV" "$AUDIT_LOCK")" || VENV_AUDIT_RC=$?
+    case "$VENV_AUDIT_RC" in
+        0) row PASS "venv packages" "${VENV_AUDIT}" ;;
+        1) while IFS= read -r _l; do
+               [[ -n "$_l" ]] || continue
+               _k="${_l%%:*}"
+               row WARN "venv ${_k#* }" "${_l#*: } (${_k%% *}) — this upgrade rebuilds the venv from the lock and re-checks it"
+           done <<<"$VENV_AUDIT" ;;
+        *) row WARN "venv packages" "NOT compared: ${VENV_AUDIT//$'\n'/; }" ;;
+    esac
+fi
+
+echo
 echo "  ── recorded permission baseline"
 info "Current ownership and modes on the paths this upgrade touches:"
 for p in "${BASELINE_PATHS[@]}"; do
@@ -2647,7 +2792,9 @@ if [[ $DRY_RUN == true ]]; then
     echo "  backup      -> ${BACKUP_DIR} (+ ${BACKUP_TAR})"
     echo "  perms       -> recorded now, re-applied verbatim after deploy"
     echo "  os patch    -> $([[ $SKIP_OS == true ]] && echo 'SKIPPED' || echo 'apt full-upgrade')"
-    echo "  python deps -> exactly the pins in the target tree's requirements.txt."
+    echo "  python deps -> exactly the pins in the target tree's requirements.txt;"
+    echo "                 the venv's pip first (venv tooling), then the lock, then"
+    echo "                 the venv held to exactly the locked set."
     echo "                 Not listed here: --dry-run stops before Phase 5 fetches"
     echo "                 the source, and this script no longer keeps a second copy"
     echo "                 of the versions to recite from."
@@ -2882,7 +3029,9 @@ info "Upgrade path: ${INSTALLED_VER} → ${TARGET_VERSION}"
 # running install. A malformed or incomplete requirements.txt must stop the run
 # while the host is still untouched.
 load_pins "${WORK_DIR}/requirements.txt"
-require_pins flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka
+# pip is the venv-tooling stage of Phase 8 (v1.3.3): upgraded first, from the lock.
+require_pins pip flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka
+PIN_PIP="${PINS[pip]}"
 PIN_FLASK="${PINS[flask]}"
 PIN_WERKZEUG="${PINS[werkzeug]}"
 PIN_GUNICORN="${PINS[gunicorn]}"
@@ -2892,6 +3041,7 @@ PIN_CRYPTOGRAPHY="${PINS[cryptography]}"
 PIN_CONFLUENT_KAFKA="${PINS[confluent-kafka]}"
 info "Python pins from requirements.txt: Flask ${PIN_FLASK}, Werkzeug ${PIN_WERKZEUG}, gunicorn ${PIN_GUNICORN},"
 info "  ldap3 ${PIN_LDAP3}, PyYAML ${PIN_PYYAML}, cryptography ${PIN_CRYPTOGRAPHY}, confluent-kafka ${PIN_CONFLUENT_KAFKA}"
+info "  venv tooling: pip ${PIN_PIP}"
 success "Source fetched"
 
 # =============================================================================
@@ -2945,30 +3095,47 @@ python3 -m venv "$VENV"
 ls "${VENV}/lib/python"*"/site-packages/" >/dev/null 2>&1 || fail "venv creation failed."
 
 # ROUND 2: ONE hash-locked install of requirements.lock — every package,
-# transitive ones included, verified by SHA-256; binary wheels only; no pip
-# self-upgrade (an unhashed download of the installer itself, and a hard
-# failure offline). The three separately-staged installs, with the Kafka
-# client allowed to soft-fail, are gone: with --require-hashes a stage must
-# carry its own dependencies, and a hash failure is never something to carry
-# on past. require_pins (Phase 5) still holds requirements.txt to its
-# consumers, and the lock is held to requirements.txt here.
+# transitive ones included, verified by SHA-256; binary wheels only. The three
+# separately-staged installs, with the Kafka client allowed to soft-fail, are
+# gone: with --require-hashes a stage must carry its own dependencies, and a
+# hash failure is never something to carry on past. require_pins (Phase 5)
+# still holds requirements.txt to its consumers, and the lock is held to
+# requirements.txt here.
+# v1.3.3 (REG-0068): two stages, in this order. (1) venv tooling: the venv's
+# own pip, seeded by ensurepip (24.0 on Ubuntu 24.04, six advisories), is
+# upgraded to the lock's pip entry — hash-verified, from the same source as
+# every other wheel. Until v1.3.2 pip was deliberately NOT self-upgraded,
+# because the only upgrade on offer was an unhashed download that failed
+# offline; it is now a locked, bundled wheel like the rest. (2) the whole
+# lock, by that pip. Then the venv must hold EXACTLY the locked set.
 LOCK_FILE="${WORK_DIR}/requirements.lock"
 [[ -f "$LOCK_FILE" ]] || fail "${LOCK_FILE} not found — the source tree has no hash lock."
-for _pin in flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka; do
+for _pin in pip flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka; do
     grep -qiE "^${_pin//-/[-_.]}==${PINS[$_pin]//./[.]}[[:space:]]" "$LOCK_FILE" \
         || fail "requirements.lock does not pin ${_pin}==${PINS[$_pin]} as requirements.txt does."
 done
-PIP_ARGS=(--require-hashes --only-binary :all:)
+PIP_SRC_ARGS=()
 if [[ $ONLINE != true ]]; then
     PY_PKG_DIR="${WORK_DIR}/install/packages/python"
     [[ -d "$PY_PKG_DIR" ]] || fail "Offline install needs ${PY_PKG_DIR} (run prepare-offline.sh)."
-    PIP_ARGS+=(--no-index --find-links="$PY_PKG_DIR")
+    PIP_SRC_ARGS=(--no-index --find-links="$PY_PKG_DIR")
 fi
+PIP_ARGS=(--require-hashes --only-binary :all: "${PIP_SRC_ARGS[@]}")
+info "Upgrading the venv's pip to the locked ${PIN_PIP} (hash-verified) ..."
+PIP_OUT="$(venv_bootstrap_pip "$VENV" "$LOCK_FILE" "${PIP_SRC_ARGS[@]}")" \
+    || fail "The venv's pip could not be upgraded to the locked version: ${PIP_OUT}"
+success "venv tooling: pip ${PIP_OUT} (hash-verified)"
 info "Installing the hash-locked dependency set ..."
 "${VENV}/bin/pip" install "${PIP_ARGS[@]}" --quiet -r "$LOCK_FILE" \
     || fail "pip install from requirements.lock failed (a hash mismatch is refused, not retried)."
 success "Flask ${PIN_FLASK} / Werkzeug ${PIN_WERKZEUG} / gunicorn ${PIN_GUNICORN} / ldap3 ${PIN_LDAP3}"
 success "PyYAML ${PIN_PYYAML} / cryptography ${PIN_CRYPTOGRAPHY} / confluent-kafka ${PIN_CONFLUENT_KAFKA} (all hash-verified)"
+# The post-check: exactly the locked set, pip included. A difference fails the
+# run here, and the EXIT trap rolls the host back to the restore point.
+VENV_DRIFT="$(venv_drift "$VENV" "$LOCK_FILE")" \
+    || fail "The venv does not hold exactly the locked set (requirements.lock):
+${VENV_DRIFT}"
+success "venv: ${VENV_DRIFT}"
 
 "${VENV}/bin/python3" -c "import flask, werkzeug, gunicorn, ldap3, yaml, cryptography, confluent_kafka" \
     || fail "Package import check failed."

@@ -12,6 +12,11 @@
 # gate set could not see the hazard class the release existed to fix. This is
 # that missing gate.
 #
+# v1.3.3 (REG-0068): that includes the venv's own pip. It was ensurepip's
+# unpinned 24.0 (six advisories) and in no requirements file, so this gate
+# never saw it; it is now a direct pin ("venv tooling") and a lock entry, and
+# the installers hold the installed venv to exactly the lock.
+#
 # Usage:  bash tools/sca-check.sh            # gate mode, exits 1 on any vuln
 #         bash tools/sca-check.sh --report   # list findings, always exits 0
 #
