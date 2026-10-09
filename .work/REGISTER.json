@@ -650,6 +650,46 @@
       "finding": "The rollback section does not say that --restore discards audit rows written after the restore point (the two post-upgrade sign-in rows were lost on the test host).",
       "where": "README.md rollback; docs/INSTALL.md §12",
       "closes_when": "docs state it, or --restore preserves/merges post-restore-point audit rows"
+    },
+    {
+      "id": "REG-0064",
+      "severity": "Medium",
+      "status": "open",
+      "source": "gatekeeper WO-0008 (v1.3.2) at ea6411a, 2026-10-09: Daybreak Blue hypothesis, reproduced on a copy in a fresh python:3.12-bookworm container",
+      "finding": "t51's v1.3.2 'settings' assertion is a text denylist over the template slice (/<table|<tr[\\s>]|<td[\\s>]|compliance\\.rules|\\.checks\\b/), not a render. A rules list written as <ul><li v-for=\"r in compliance['rules']\" :key=\"r.id\">{{ r.id }} {{ r.status }}</li></ul> after the summary line passes t51 13/13 (strict exit 0) although Vue renders every rule. The real regression (the v1.3.1 table put back) IS caught: t51 red, full strict 558/1, exit 1.",
+      "where": "tests/t51-host-checks-v130.sh:479-483",
+      "closes_when": "t51 renders the section with unique rule markers and asserts they are absent (or the denylist covers bracket access/any v-for over compliance), with a mutation control for the bracket form",
+      "date": "2026-10-09"
+    },
+    {
+      "id": "REG-0065",
+      "severity": "Low",
+      "status": "open",
+      "source": "gatekeeper WO-0008 (v1.3.2) at ea6411a, 2026-10-09: Daybreak Blue hypothesis, reproduced on a copy in a fresh python:3.12-bookworm container",
+      "finding": "t51 checks the mount-time fetch textually: assert.match(S.mounted.toString(), /this\\.loadCompliance\\(\\)/). Changing SettingsTab.js:877 to 'if (false) this.loadCompliance();' keeps t51 13/13 green. (Functional impact may be masked: runHostApply('compliance') on mount also reloads at :692.)",
+      "where": "tests/t51-host-checks-v130.sh:469",
+      "closes_when": "t51 invokes mounted() with stubs and observes GET /api/compliance",
+      "date": "2026-10-09"
+    },
+    {
+      "id": "REG-0066",
+      "severity": "Medium",
+      "status": "open",
+      "source": "gatekeeper WO-0008 (v1.3.2) at ea6411a, 2026-10-09: Daybreak Blue hypothesis, reproduced on a copy in a fresh python:3.12-bookworm container",
+      "finding": "check-version-surfaces.sh stays green (exit 0, 'every surface says 1.3.2') on three stale-1.3.1 states: (a) AboutModal.js rendered line changed to 'Version 1.3.1' while version:'unknown' remains (only the sentinel is checked, the semver-literal ban covers app/main.js only); (b) a CSS url(\"...?v=1301\") in app/styles/main.css (token inventory reads index.html + app/**/*.js only); (c) a second, stale '# Jarvis Topic Manager v1.3.1' line in README (first match wins, no uniqueness). None of these exists at ea6411a.",
+      "where": "tools/check-version-surfaces.sh:47-70, 183-188, 223-232",
+      "closes_when": "semver-literal ban extended to every app/ JS template, CSS url() tokens inventoried, fixed surfaces require exactly one match; t22 controls for all three",
+      "date": "2026-10-09"
+    },
+    {
+      "id": "REG-0067",
+      "severity": "Low",
+      "status": "open",
+      "source": "gatekeeper WO-0008 (v1.3.2) at ea6411a, 2026-10-09: Daybreak Blue hypothesis, reproduced on a copy in a fresh python:3.12-bookworm container",
+      "finding": "tests/run.sh's collection floor is derived from the tree it runs: with every tests/t*.sh deleted except t00 and t01, 'bash tests/run.sh --strict' reports 28 passed, 0 failed, exit 0. Deleting t51 (or one of its tm_case lines) would equally go unnoticed. Mutation controls (M913-M926 for this change) are not part of any declared gate; run by hand here: 14 run, 14 killed, exit 0.",
+      "where": "tests/run.sh:46-60, 146-148; .claude/project.yml gates; .gitlab-ci.yml:44",
+      "closes_when": "an independent pinned inventory (file list + per-file case count, updated deliberately) is enforced by --strict, and/or the release's named mutation range becomes a declared gate",
+      "date": "2026-10-09"
     }
   ]
 }

@@ -7,7 +7,7 @@
     "version": "1.3.2"
   },
   "opened": "2026-10-09",
-  "status": "assuring",
+  "status": "shipping",
   "depends_on": [
     "WO-0007"
   ],
@@ -38,6 +38,12 @@
       "meaning": "passed",
       "verdict": "Builder: compliance rules table removed from SettingsTab (261b17e, + dead checkGlyph helpers), docs (e0274e7), cascade 1.3.2/?v=1302 (06c137b), mutations M913-M926 14/14 caught (f24ecbe); Linux strict all-pass. Amendment: TROUBLESHOOTING.md one paragraph. render-proof VISIBLE @ 75e6540: section shows summary + 3 buttons, 0 table/rows, CSV 83 lines = API (75 rules/80 checks + footer), 14 assets ?v=1302, rest of Settings renders.",
       "at": "2026-10-09T22:31:49Z"
+    },
+    "assure": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Gatekeeper SHIP YES @ ea6411a: 15/15 gates exit 0, each falsified; strict 559/0/0; table-restored and stale-token controls red. Codex/Claude split on REG-0064/0065 (High vs Med) ruled by James: ship, log as Medium. Register REG-0064..0067. Not run: adversary/sec-review/DAST (UI removal only).",
+      "at": "2026-10-09T23:00:53Z"
     }
   },
   "builder": {
@@ -86,5 +92,11 @@
       "finding": "M926 would have SURVIVED the pre-existing assertion (download only checked startsWith '\"Rule\"'); closed by asserting the download equals settingsComplianceCsv(doc)."
     },
     "reg": "none needed"
+  },
+  "assure": {
+    "gatekeeper": "ea6411a: 15/15 gates exit 0, each falsified (sonar-local reuses v1.3.1 proof); strict 559/0/0; table restored -> t51 red; stale ?v=1301 -> version-surfaces red; M913-M926 14/14.",
+    "split": "Codex rated REG-0064 (t51 checks template text only) and REG-0065 (loadCompliance mount check) HIGH; Claude rated MED (head correct, render-proof 0 rows, real regression caught). James 2026-10-09: 'Ship now, log as Medium'.",
+    "registered": "REG-0064..0067",
+    "not_run": "adversary/sec-review/DAST (UI removal only; no route/data/auth change)"
   }
 }
