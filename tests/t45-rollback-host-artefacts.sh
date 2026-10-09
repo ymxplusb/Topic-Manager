@@ -26,11 +26,16 @@
 #     same names NOT in the record stay, running and enabled;
 #   * a product file edited since it was installed is kept aside, not lost;
 #   * an interrupted upgrade (.pending only) is still retired by record;
-#   * a restore point with no manifest: v1.1.x by its shipped list; any other
-#     version retires NOTHING and is RESTORE INCOMPLETE with the list (N3);
+#   * a restore point with no manifest: v1.0.6 to v1.1.1 by their shipped
+#     list; any other version retires NOTHING and is RESTORE INCOMPLETE with
+#     the list (N3);
+#   * v1.3.1 (throwaway test 2026-10-09): a failed upgrade from a 1.0.6 host
+#     rolls back clean, by record, with THIS tree as the newer release; and a
+#     restore point taken on a host a newer release's failed run left its
+#     manifest and units on does not adopt them;
 #   * the manifest is written from host_artefacts, which reads the tree the
 #     release installs from; both scripts carry one identical copy;
-#   * the v1.1.x list is re-derived from the v1.1.0 and v1.1.1 TAGS, and this
+#   * the shipped list is re-derived from the v1.0.6..v1.1.1 TAGS, and this
 #     tree's install/cp/ln destinations are held to the manifest lists;
 #   * the restore's verdict: the restored VERSION, and every problem, decide it
 #     (gatekeeper round 5, c and d).
@@ -66,7 +71,7 @@ _prog() {
         echo 'SERVICE=topic-manager'
         {
             _block "${BLOCK_SRC:-$UP}"
-            tm_extract_between "$UP" '^LEGACY_V11X_VERSIONS=' '^[[:space:]]+"file /etc/logrotate.d/topic-manager"\)$'
+            tm_extract_between "$UP" '^LEGACY_VERSIONS=' '^[[:space:]]+"file /etc/logrotate.d/topic-manager"\)$'
         } | sed -e "s#/etc/#${R}/etc/#g" -e "s#/usr/libexec/#${R}/usr/libexec/#g" -e "s#/var/lib/topic-manager/#${R}/var/lib/topic-manager/#g"
         echo 'DROPIN_DIR="'"${R}"'/etc/systemd/system/topic-manager.service.d"'
         echo 'OWNED_RUNTIME_DIR="'"${R}"'/run"'
@@ -75,7 +80,7 @@ _prog() {
         echo 'RETIRED_UNITS=(); RETIRED_RUNTIME=(); RESTORE_PROBLEMS=(); SET_ASIDE=()'
         local f
         for f in socket_unit_paths unit_runtime_dirs retire_unit remove_retired_runtime location_inventory \
-                 legacy_artefacts same_artefact backup_owned_artefacts restore_point_copy set_aside_if_changed \
+                 legacy_artefacts manifest_release same_artefact backup_owned_artefacts restore_point_copy set_aside_if_changed \
                  restore_owned_artefacts restore_socket_unit; do
             tm_extract_func "$UP" "$f" | sed -e "s#/etc/#${R}/etc/#g"
         done
@@ -582,6 +587,123 @@ r_problems_are_reported() {
 }
 tm_case "a-unit-that-cannot-be-retired-or-a-missing-copy-is-a-restore-problem" linux,symlinks r_problems_are_reported
 
+# ─── v1.3.1: a 1.0.x host (throwaway test, 2026-10-09) ───────────────────────
+# _upgrade_this <root> — what THIS tree's upgrade lays over the host: every
+# unit, rule and helper file of the real tree, the http-level log format, and
+# its manifest written by the real write_install_manifest. The real units name
+# /run/topic-manager/gunicorn.sock, which the fake root does not relocate:
+# retire_unit only removes a SOCKET there, and the container has none.
+_upgrade_this() {
+    local R="$1"
+    _upgrade_120 "$R" "$TM_REPO_ROOT"
+    mkdir -p "$R/etc/nginx/conf.d"
+    cp "$TM_REPO_ROOT/nginx/tm-log-format.conf" "$R/etc/nginx/conf.d/topic-manager-log-format.conf"
+    _prog "$R" write_install_manifest "$TM_REPO_ROOT"
+    tm_assert_rc 0 "$RC" "write_install_manifest failed: $(cat "${TM_TMP}/out")"
+}
+
+# _assert_back_on_106 <root> — nothing this tree installs is left, and the
+# host carries exactly what the 1.0.6 fixture had.
+_assert_back_on_106() {
+    local R="$1" U="$1/etc/systemd/system" f u
+    grep -q '^PROBLEM|' "${TM_TMP}/out" && _tm_afail "THROWAWAY P2: the rollback to 1.0.6 is RESTORE INCOMPLETE: $(grep '^PROBLEM|' "${TM_TMP}/out")"
+    for f in "$TM_REPO_ROOT"/systemd/*; do
+        u="${f##*/}"
+        case "$u" in topic-manager.service|topic-manager-nginx-test.service) continue ;; esac
+        tm_assert_nofile "$U/$u" "THROWAWAY P2: the newer release's ${u} survived the rollback to 1.0.6"
+        grep -qx "systemctl disable --now ${u}" "${TM_TMP}/calls" || _tm_afail "THROWAWAY P2: ${u} was not disabled --now"
+    done
+    [ -L "$U/sockets.target.wants/topic-manager.socket" ] && _tm_afail "THROWAWAY P2: topic-manager.socket is still enabled"
+    [ -L "$U/timers.target.wants/topic-manager-audit-prune.timer" ] && _tm_afail "the audit prune timer is still enabled"
+    tm_assert_nofile "$R/usr/libexec/topic-manager" "THROWAWAY P2: the root helper tree survived the rollback to 1.0.6"
+    tm_assert_nofile "$R/etc/nginx/conf.d/topic-manager-log-format.conf" "the newer release's log format survived"
+    tm_assert_grep "polkit v1.1: restart only" "$R/etc/polkit-1/rules.d/50-topic-manager.rules" "THROWAWAY P2: the polkit rule still grants the newer release's units"
+    tm_assert_grep "127.0.0.1:5001" "$U/topic-manager.service" "the 1.0.6 service unit was not put back"
+    tm_assert_grep "nginx-test v1.1" "$U/topic-manager-nginx-test.service" "the 1.0.6 nginx-test unit was not put back"
+    tm_assert_grep "v1.1 site" "$R/etc/nginx/sites-available/topic-manager" "the 1.0.6 site was not put back"
+    [ -L "$U/multi-user.target.wants/topic-manager.service" ] || _tm_afail "the service lost its enablement link"
+    tm_assert_nofile "$R/var/lib/topic-manager/installed-files.manifest" "the newer release's manifest outlived a rollback to a release that kept none"
+    tm_assert_nofile "$R/var/lib/topic-manager/installed-files.manifest.pending" "the pending record outlived the rollback"
+    tm_assert_file "$U/other.service" "a foreign unit was removed"
+}
+
+p2_failed_run_from_106_rolls_back_clean() {
+    # The 1.0.6 host as an online 1.0.6 install leaves it (the same eight
+    # artefacts as 1.1.x: t45 l_legacy... proves the lists equal), its restore
+    # point taken by THIS script's Phase 4, then THIS tree's upgrade, then the
+    # automatic rollback (restore_from_backup's order).
+    R="${TM_TMP}/root"; BD="${TM_TMP}/bd"; U="${R}/etc/systemd/system"
+    mkdir -p "$BD/manifest" "$BD/system"; : > "${TM_TMP}/calls"; : > "${TM_TMP}/out"
+    printf 'topic_manager_version=1.0.6\n' > "$BD/manifest/state.env"
+    _host_111 "$R"
+    _prog "$R" backup_owned_artefacts "$BD" 1.0.6
+    tm_assert_rc 0 "$RC" "Phase 4 failed on a 1.0.6 host: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "# derived: v1.0.6 wrote no install manifest" "$BD/manifest/installed-files.manifest" \
+        "THROWAWAY P2: a 1.0.6 restore point carries no record of what 1.0.6 shipped"
+    _upgrade_this "$R"
+    : > "${TM_TMP}/calls"; : > "${TM_TMP}/out"
+    _prog "$R" rollback "$BD"
+    tm_assert_rc 0 "$RC" "the rollback failed: $(cat "${TM_TMP}/out")"
+    _assert_back_on_106 "$R"
+}
+tm_case "a-failed-upgrade-from-1.0.6-rolls-back-clean-by-record" linux,symlinks p2_failed_run_from_106_rolls_back_clean
+
+p2_stray_manifest_is_not_adopted() {
+    # The host after run 1 of the throwaway test: 1.0.6 code, with THIS
+    # tree's units, helper and manifest left behind by a rollback that could
+    # not retire them. Run 2's Phase 4 must not take that manifest as 1.0.6's
+    # record — and a rollback to its restore point retires the leftovers.
+    R="${TM_TMP}/root"; BD="${TM_TMP}/bd"; U="${R}/etc/systemd/system"
+    mkdir -p "$BD/manifest" "$BD/system"; : > "${TM_TMP}/calls"; : > "${TM_TMP}/out"
+    printf 'topic_manager_version=1.0.6\n' > "$BD/manifest/state.env"
+    _host_111 "$R"
+    cp -a "$R/etc/polkit-1/rules.d/50-topic-manager.rules" "${TM_TMP}/rule.106"
+    cp -a "$U/topic-manager-nginx-test.service" "${TM_TMP}/test.106"
+    cp -a "$U/topic-manager.service" "${TM_TMP}/svc.106"
+    _upgrade_this "$R"
+    # What run 1's restore did put back (its legacy copies and the 1.0.6 rule
+    # an operator re-installed by hand); the rest stays as the newer release left it.
+    cp -a "${TM_TMP}/rule.106" "$R/etc/polkit-1/rules.d/50-topic-manager.rules"
+    cp -a "${TM_TMP}/test.106" "$U/topic-manager-nginx-test.service"
+    cp -a "${TM_TMP}/svc.106" "$U/topic-manager.service"
+    printf 'server { # v1.1 site }\n' > "$R/etc/nginx/sites-available/topic-manager"
+    tm_assert_grep "release $(cat "$TM_REPO_ROOT/VERSION"):" "$R/var/lib/topic-manager/installed-files.manifest" "precondition: the leftover manifest names this tree's release"
+    _prog "$R" backup_owned_artefacts "$BD" 1.0.6
+    tm_assert_rc 0 "$RC" "Phase 4 failed: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "# derived: v1.0.6" "$BD/manifest/installed-files.manifest" \
+        "THROWAWAY P2: the restore point adopted the newer release's leftover manifest as 1.0.6's record"
+    grep -Eq 'topic-manager\.socket|topic-manager-apply|topic-manager-audit|/usr/libexec/|log-format' "$BD/manifest/installed-files.manifest" \
+        && _tm_afail "THROWAWAY P2: the restore point records the newer release's leftovers as 1.0.6's: $(grep -E 'socket|apply|audit|libexec|log-format' "$BD/manifest/installed-files.manifest")"
+    tm_assert_grep "names release $(cat "$TM_REPO_ROOT/VERSION"), not the installed v1.0.6:" "${TM_TMP}/out" "the operator is not told the leftover manifest was refused"
+    # ... and so a later --restore to it retires them.
+    : > "${TM_TMP}/calls"; : > "${TM_TMP}/out"
+    _prog "$R" rollback "$BD"
+    tm_assert_rc 0 "$RC" "the rollback failed: $(cat "${TM_TMP}/out")"
+    _assert_back_on_106 "$R"
+
+    # A host whose version has no shipped list: the leftover manifest is not
+    # adopted either — no record at all, and the operator is told.
+    rm -rf "${TM_TMP}/bd2"; mkdir -p "${TM_TMP}/bd2/manifest" "${TM_TMP}/bd2/system"; : > "${TM_TMP}/out"
+    _upgrade_this "$R"
+    _prog "$R" backup_owned_artefacts "${TM_TMP}/bd2" 1.0.3
+    tm_assert_rc 0 "$RC" "Phase 4 failed: $(cat "${TM_TMP}/out")"
+    tm_assert_nofile "${TM_TMP}/bd2/manifest/installed-files.manifest" "a newer release's manifest was adopted for a release with no shipped list"
+    tm_assert_grep "not the installed v1.0.3:" "${TM_TMP}/out" "the refusal is not said"
+    # The installed release's OWN manifest is still adopted as it is.
+    rm -rf "${TM_TMP}/bd3"; mkdir -p "${TM_TMP}/bd3/manifest" "${TM_TMP}/bd3/system"; : > "${TM_TMP}/out"
+    _prog "$R" backup_owned_artefacts "${TM_TMP}/bd3" "$(cat "$TM_REPO_ROOT/VERSION")"
+    cmp -s "${TM_TMP}/bd3/manifest/installed-files.manifest" "$R/var/lib/topic-manager/installed-files.manifest" \
+        || _tm_afail "the installed release's own manifest was not adopted as it is"
+    tm_assert_nogrep "not adopted" "${TM_TMP}/out" "the installed release's own manifest was refused"
+    # Neither side knows its version: "unknown" == "unknown" is not a match.
+    sed -i '1s/release [^ :]*:/release unknown:/' "$R/var/lib/topic-manager/installed-files.manifest"
+    rm -rf "${TM_TMP}/bd4"; mkdir -p "${TM_TMP}/bd4/manifest" "${TM_TMP}/bd4/system"; : > "${TM_TMP}/out"
+    _prog "$R" backup_owned_artefacts "${TM_TMP}/bd4" unknown
+    tm_assert_nofile "${TM_TMP}/bd4/manifest/installed-files.manifest" "a manifest of an unknown release was adopted for an unknown installed version"
+    tm_assert_grep "not adopted" "${TM_TMP}/out" "the refusal of an unknown release's manifest is not said"
+}
+tm_case "a-restore-point-never-adopts-a-newer-releases-leftover-manifest" linux,symlinks p2_stray_manifest_is_not_adopted
+
 # ─── the restore's verdict (gatekeeper round 5, c and d) ─────────────────────
 _verdict() {   # _verdict <health-json> <state.env line or ''> [problem]
     local BD="${TM_TMP}/vbd"; rm -rf "$BD"; mkdir -p "$BD/manifest"
@@ -839,24 +961,35 @@ PY
 }
 
 l_legacy_list_is_the_tags() {
-    # LEGACY_V11X_ARTEFACTS is DATA taken from the v1.1.0 and v1.1.1 tags:
-    # re-derived here from each tag's install.sh and upgrade Phase 9.
-    local tag want got
-    want="$(tm_extract_between "$UP" '^LEGACY_V11X_ARTEFACTS=' '^[[:space:]]+"file /etc/logrotate.d/topic-manager"\)$' \
+    # LEGACY_ARTEFACTS is DATA taken from the tags of every release that wrote
+    # no install manifest and that a host can report: re-derived here from
+    # each tag's install.sh and upgrade Phase 9. LEGACY_VERSIONS is the set of
+    # tm/VERSION values those tags carry (v1.0.6..v1.0.11 all say 1.0.6).
+    local tag want got vers=""
+    want="$(tm_extract_between "$UP" '^LEGACY_ARTEFACTS=' '^[[:space:]]+"file /etc/logrotate.d/topic-manager"\)$' \
             | grep -oE '"(file|link) /[^"]+"' | tr -d '"' | sort)"
     tm_assert_nonempty "$want" "no legacy list extracted"
-    for tag in v1.1.0 v1.1.1; do
+    for tag in v1.0.6 v1.0.7 v1.0.8 v1.0.9 v1.0.10 v1.0.11 v1.1.0 v1.1.1; do
         { git -C "$TM_REPO_ROOT" show "${tag}:install.sh"
           git -C "$TM_REPO_ROOT" show "${tag}:install/upgrade-full.sh" \
             | awk '/^phase "Phase 9 /{p=1} /^phase "Phase 10 /{p=0} p'
         } > "${TM_TMP}/${tag}.sh" || tm_die "cannot read ${tag}"
         [ "$(git -C "$TM_REPO_ROOT" show "${tag}:VERSION" | tr -d '[:space:]')" = "${tag#v}" ] || tm_die "${tag} is not release ${tag#v}"
+        grep -q 'installed-files.manifest' "${TM_TMP}/${tag}.sh" \
+            && _tm_afail "${tag} writes an install manifest, so it does not belong in the shipped list"
         got="$(_dests "${TM_TMP}/${tag}.sh" "git -C ${TM_REPO_ROOT} show ${tag}:" | sort)"
-        tm_assert_eq "$want" "$got" "LEGACY_V11X_ARTEFACTS is not what ${tag} installs"
+        tm_assert_eq "$want" "$got" "LEGACY_ARTEFACTS is not what ${tag} installs"
+        vers="${vers} $(git -C "$TM_REPO_ROOT" show "${tag}:tm/VERSION" | tr -d '[:space:]')"
     done
-    grep -q '^LEGACY_V11X_VERSIONS=(1.1.0 1.1.1)$' "$UP" || _tm_afail "the legacy list is applied to versions it was not derived from"
+    vers="$(tr ' ' '\n' <<<"$vers" | sed '/^$/d' | sort -uV | tr '\n' ' ')"
+    grep -qx "LEGACY_VERSIONS=(${vers% })" "$UP" \
+        || _tm_afail "LEGACY_VERSIONS is not the set of versions those tags report (${vers% }): $(grep '^LEGACY_VERSIONS=' "$UP")"
+    # The first release that writes a manifest is not in it.
+    git -C "$TM_REPO_ROOT" show "v1.2.0:install/upgrade-full.sh" > "${TM_TMP}/v120.sh" || tm_die "cannot read v1.2.0"
+    grep -q 'installed-files.manifest' "${TM_TMP}/v120.sh" \
+        || tm_die "v1.2.0 writes no manifest: the boundary this case assumes moved"
 }
-tm_case "the-v11x-shipped-list-is-re-derived-from-the-tags" gittags l_legacy_list_is_the_tags
+tm_case "the-shipped-list-is-re-derived-from-the-v106-to-v111-tags" gittags l_legacy_list_is_the_tags
 
 l_this_tree_is_recorded() {
     # Every host path install.sh or the upgrade's Phase 9 installs is in the

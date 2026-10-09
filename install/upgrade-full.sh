@@ -301,22 +301,28 @@ TIMER_STAMP_DIR="/var/lib/systemd/timers"
 RETIRED_UNITS=(); RETIRED_RUNTIME=(); RESTORE_PROBLEMS=()
 SET_ASIDE=()   # product files a restore retired that were not as installed
 
-# What v1.1.0 and v1.1.1 laid down outside their own trees: the releases that
-# wrote no install manifest. DATA, read from those tags' install.sh and
-# install/upgrade-full.sh Phase 9 (t45 re-derives it from both tags and fails
-# on any difference) — never inferred from what a file on the host says. A
-# host with no manifest is judged by it ONLY when it runs one of these
-# versions; any other version with no manifest has no record, and a rollback
-# to it retires nothing and says so (restore_owned_artefacts).
-LEGACY_V11X_VERSIONS=(1.1.0 1.1.1)
-LEGACY_V11X_ARTEFACTS=("file /etc/systemd/system/topic-manager.service"
-                       "file /etc/systemd/system/topic-manager-nginx-test.service"
-                       "link /etc/systemd/system/multi-user.target.wants/topic-manager.service"
-                       "file /etc/polkit-1/rules.d/50-topic-manager.rules"
-                       "file /etc/nginx/snippets/tm-security-headers.conf"
-                       "file /etc/nginx/sites-available/topic-manager"
-                       "link /etc/nginx/sites-enabled/topic-manager"
-                       "file /etc/logrotate.d/topic-manager")
+# What the releases that wrote no install manifest laid down outside their
+# own trees: v1.0.6 to v1.1.1. DATA, read from the v1.0.6..v1.0.11, v1.1.0 and
+# v1.1.1 tags' install.sh and install/upgrade-full.sh Phase 9 (t45 re-derives
+# it from every one of those tags and fails on any difference) — never
+# inferred from what a file on the host says. LEGACY_VERSIONS is the set of
+# tm/VERSION values those tags carry, which is what a host REPORTS: the
+# v1.0.6..v1.0.11 tags all carry tm/VERSION 1.0.6 (contract hazard
+# tm-version-drift-under-ci-tags). v1.3.1 added 1.0.6: without it a rollback
+# to a 1.0.x restore point retired nothing, and a failed upgrade from 1.0.6
+# left the newer release's units enabled (throwaway test, 2026-10-09). A host
+# with no manifest is judged by it ONLY when it runs one of these versions;
+# any other version with no manifest has no record, and a rollback to it
+# retires nothing and says so (restore_owned_artefacts).
+LEGACY_VERSIONS=(1.0.6 1.1.0 1.1.1)
+LEGACY_ARTEFACTS=("file /etc/systemd/system/topic-manager.service"
+                  "file /etc/systemd/system/topic-manager-nginx-test.service"
+                  "link /etc/systemd/system/multi-user.target.wants/topic-manager.service"
+                  "file /etc/polkit-1/rules.d/50-topic-manager.rules"
+                  "file /etc/nginx/snippets/tm-security-headers.conf"
+                  "file /etc/nginx/sites-available/topic-manager"
+                  "link /etc/nginx/sites-enabled/topic-manager"
+                  "file /etc/logrotate.d/topic-manager")
 
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_ROOT="/var/backups/topic-manager"
@@ -1233,13 +1239,13 @@ location_inventory() {
 }
 
 # legacy_artefacts <version> — "<kind> <path>" for a release that wrote no
-# install manifest, from LEGACY_V11X_ARTEFACTS; non-zero for any version that
+# install manifest, from LEGACY_ARTEFACTS; non-zero for any version that
 # list does not cover.
 legacy_artefacts() {   # legacy_artefacts <version>
     local v
-    for v in "${LEGACY_V11X_VERSIONS[@]}"; do
+    for v in "${LEGACY_VERSIONS[@]}"; do
         if [[ "$1" == "$v" ]]; then
-            printf '%s\n' "${LEGACY_V11X_ARTEFACTS[@]}"
+            printf '%s\n' "${LEGACY_ARTEFACTS[@]}"
             return 0
         fi
     done
@@ -1257,21 +1263,40 @@ same_artefact() {   # same_artefact <a> <b>
     fi
 }
 
+# manifest_release <manifest> — the release a manifest's header names
+# (write_install_manifest's first line), or nothing.
+manifest_release() {   # manifest_release <manifest>
+    sed -n '1s/^# topic-manager install manifest, release \([^ :]*\): .*/\1/p' -- "$1" 2>/dev/null || true
+}
+
 # backup_owned_artefacts <backup-dir> <installed-version> — Phase 4. The
 # restore point's record of what is the product's: the host's install manifest
-# as it is; on a host with none, a manifest DERIVED from the shipped list of
-# the installed release (legacy_artefacts: v1.1.x), marked "# derived"; for
-# any other version none at all, and a rollback to this point will retire
-# nothing (it says so now, and again then). Then a byte-exact copy of every
-# recorded artefact, and the location inventory.
+# as it is, ONLY when it is the installed release's own (its header names the
+# installed version); otherwise a manifest DERIVED from the shipped list of
+# the installed release (legacy_artefacts: v1.0.6 to v1.1.1), marked
+# "# derived"; for any other version none at all, and a rollback to this
+# point will retire nothing (it says so now, and again then). Then a
+# byte-exact copy of every recorded artefact, and the location inventory.
+# v1.3.1: a manifest a NEWER release left behind (an upgrade that failed and
+# whose rollback could not retire it) is never adopted. It used to be copied
+# as the installed release's record, so the newer release's units became
+# "what this release shipped" and every later --restore to that point kept
+# them (throwaway test, 2026-10-09).
 backup_owned_artefacts() {   # backup_owned_artefacts <backup-dir> <installed-version>
-    local BD="$1" v="${2:-unknown}" rec="${1}/manifest/installed-files.manifest" kind p h d
+    local BD="$1" v="${2:-unknown}" rec="${1}/manifest/installed-files.manifest" kind p h d mr=""
     location_inventory > "${BD}/manifest/host-locations.list"
     if [[ -f "$INSTALL_MANIFEST" ]]; then
+        mr="$(manifest_release "$INSTALL_MANIFEST")"
+        if [[ "$mr" != "$v" || "$v" == unknown ]]; then
+            warn "${INSTALL_MANIFEST} names release ${mr:-unknown}, not the installed v${v}: it is"
+            warn "  not adopted as v${v}'s record (an upgrade that did not finish leaves one behind)."
+        fi
+    fi
+    if [[ "$mr" == "$v" && "$v" != unknown ]]; then   # mr is empty when there is no manifest
         cp -- "$INSTALL_MANIFEST" "$rec"
     elif legacy_artefacts "$v" >/dev/null; then
         {
-            printf '# derived: v%s wrote no install manifest; its shipped list (LEGACY_V11X_ARTEFACTS) as found on this host\n' "$v"
+            printf '# derived: v%s wrote no install manifest; its shipped list (LEGACY_ARTEFACTS) as found on this host\n' "$v"
             while read -r kind p; do
                 if [[ "$kind" == link && -L "$p" ]]; then
                     printf 'link %s\n' "$p"

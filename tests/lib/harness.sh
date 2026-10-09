@@ -327,11 +327,13 @@ tm_unmet() {
             # The root helper, memfd and AF_UNIX syslog datagrams (v1.2.0).
             linux) tm_probe_linux || out="${out}${out:+, }Linux (fcntl, pwd, memfd_create, AF_UNIX)" ;;
             # The released tags a case takes its reference data from (t45
-            # re-derives the v1.1.x shipped file list from v1.1.0 and v1.1.1).
-            # A tarball of the tree (git archive) has no history at all.
-            gittags) { command -v git && git -C "$TM_REPO_ROOT" rev-parse -q --verify 'v1.1.0^{commit}' \
-                         && git -C "$TM_REPO_ROOT" rev-parse -q --verify 'v1.1.1^{commit}'; } >/dev/null 2>&1 \
-                       || out="${out}${out:+, }the git tags v1.1.0 and v1.1.1 (a clone with its tags, not an archive)" ;;
+            # re-derives the shipped file list of the releases that wrote no
+            # install manifest from v1.0.6..v1.1.1, and checks v1.2.0 wrote
+            # one). A tarball of the tree (git archive) has no history at all.
+            # A subshell, so the loop's exit leaves only it.
+            gittags) ( command -v git && for _t in v1.0.6 v1.0.7 v1.0.8 v1.0.9 v1.0.10 v1.0.11 v1.1.0 v1.1.1 v1.2.0; do
+                           git -C "$TM_REPO_ROOT" rev-parse -q --verify "${_t}^{commit}" || exit 1; done ) >/dev/null 2>&1 \
+                       || out="${out}${out:+, }the git tags v1.0.6..v1.0.11, v1.1.0, v1.1.1 and v1.2.0 (a clone with its tags, not an archive)" ;;
             # A real openssl on PATH (the TLS validation is the host CLI's).
             openssl) command -v openssl >/dev/null 2>&1 || out="${out}${out:+, }openssl" ;;
             *)     tm_die "unknown requirement '${r}'" ;;
