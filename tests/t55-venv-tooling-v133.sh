@@ -76,9 +76,18 @@ l_lock_carries_pip() {
     local ent; ent="$(grep -A1 '^pip==26\.2\.1 \\$' "$lock")"
     [[ "$ent" == *"--hash=sha256:71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e" ]] \
         || _tm_afail "the lock's pip entry does not carry the hash of pip-26.2.1-py3-none-any.whl: ${ent}"
-    # The upgrade claims it: a pin no Phase 8 stage claims stops the run.
-    grep -qx 'require_pins pip flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka' "$(tm_upgrade_sh)" \
-        || _tm_afail "the upgrade's require_pins does not claim pip"
+    # The upgrade claims it: a pin no Phase 8 stage claims stops the run at
+    # Phase 5. Its REAL load_pins + require_pins line, on the real file.
+    {
+        echo 'set -euo pipefail'; echo 'fail() { echo "[FAIL] $*"; exit 1; }'
+        tm_extract_func "$(tm_upgrade_sh)" load_pins; tm_extract_func "$(tm_upgrade_sh)" require_pins
+        echo 'declare -A PINS; load_pins "$1"'
+        tm_extract_line "$(tm_upgrade_sh)" '^require_pins [a-z -]+$'
+        echo 'echo "CLAIMED pip=${PINS[pip]}"'
+    } > "${TM_TMP}/rp.sh"
+    RC=0; bash "${TM_TMP}/rp.sh" "$req" > "${TM_TMP}/out" 2>&1 || RC=$?
+    tm_assert_rc 0 "$RC" "the upgrade refuses the real requirements.txt: $(cat "${TM_TMP}/out")"
+    tm_assert_eq "CLAIMED pip=26.2.1" "$(cat "${TM_TMP}/out")" "the upgrade does not claim and read the pip pin"
 }
 tm_case "requirements-and-the-lock-carry-pip-with-its-hash" none l_lock_carries_pip
 
@@ -337,6 +346,12 @@ d_drift() {
     # Names compare as pip compares them (PyYAML / pyyaml, confluent_kafka).
     _dist "$SP" cffi 2.1.1; rm -rf "$SP"/PyYAML-*; _dist "$SP" pyyaml 6.0.3; _drift "$V" "$L"
     tm_assert_rc 0 "$RC" "a differently-spelt name was read as drift: $(cat "${TM_TMP}/out")"
+    # A distribution whose metadata names nothing: a finding, never skipped.
+    mkdir -p "$SP/ghost-1.0.dist-info"; printf 'Metadata-Version: 2.1\n' > "$SP/ghost-1.0.dist-info/METADATA"
+    _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "a distribution with no name passed"
+    tm_assert_eq "UNREADABLE ?: a distribution with no name or version" "$(cat "${TM_TMP}/out")" "the unreadable line"
+    rm -rf "$SP/ghost-1.0.dist-info"
     # Cannot say: no lock, a lock that pins nothing, no site-packages. Exit 3.
     _drift "$V" "${TM_TMP}/nope.lock"; tm_assert_rc 3 "$RC" "a missing lock was not 'cannot say'"
     printf '# nothing\n' > "${TM_TMP}/empty.lock"; _drift "$V" "${TM_TMP}/empty.lock"; tm_assert_rc 3 "$RC" "an empty lock was not 'cannot say'"
@@ -369,6 +384,11 @@ a_audit_warns() {
         || _tm_afail "pip 24.0 was not a WARN naming both versions: $(cat "${TM_TMP}/rows")"
     grep -q '^PASS|' "${TM_TMP}/rows" && _tm_afail "a drifted venv was also reported as a PASS"
     grep -q '^BLOCK|' "${TM_TMP}/rows" && _tm_afail "venv drift blocked the upgrade that fixes it"
+    # A lock that pins nothing: the drift check cannot say (exit 3) — a WARN.
+    printf '# nothing\n' > "${TM_TMP}/rel/requirements.lock"
+    _audit "$V" "$D"
+    grep -q '^WARN|venv packages|NOT compared: .*pins nothing$' "${TM_TMP}/rows" \
+        || _tm_afail "a drift check that could not say was not a WARN: $(cat "${TM_TMP}/rows")"
     # No lock beside the script: said, never a silent pass.
     _audit "$V" "${TM_TMP}/nolock/install"
     grep -q '^WARN|venv packages|NOT compared: no requirements.lock beside this script' "${TM_TMP}/rows" \

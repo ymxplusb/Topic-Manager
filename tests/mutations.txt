@@ -7775,3 +7775,346 @@ TARGET|settings
 EQUIV|no
 ANCHOR|            a.href = URL.createObjectURL(new Blob([settingsComplianceCsv(this.compliance)], { type: 'text/csv' }));
 REPLACE|            a.href = URL.createObjectURL(new Blob([settingsComplianceCsv({ ...this.compliance, rules: this.compliance.rules.slice(1) })], { type: 'text/csv' }));
+
+# ─── v1.3.3 (WO-0009, REG-0068): the venv's pip and the venv drift check (t55, t25) ───
+# Mechanical over every changed node: each comparison flipped, each guard
+# neutralised, each returned value discarded, each stage removed. The shared
+# block is mutated in install.sh (t55's behavioural cases drive install.sh's
+# copy); the byte-identity case also goes red on each, so a control counts
+# only when a BEHAVIOURAL case is among its red cases (read the report).
+--- M927
+DESC|v1.3.3 lock_entry: the missing-lock guard is neutralised
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ -f "$lock" ]] || return 1
+REPLACE|    true
+
+--- M928
+DESC|v1.3.3 lock_entry: a continuation never ends (the next entries are printed too)
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            [[ "$line" == *[\\] ]] || inside=false
+REPLACE|            [[ "$line" == *[\\] ]] || true
+
+--- M929
+DESC|v1.3.3 lock_entry: the entry-shape guard is neutralised
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        [[ "$line" =~ ^([A-Za-z0-9._-]+)== ]] || continue
+REPLACE|        [[ "$line" =~ ^([A-Za-z0-9._-]+)== ]] || true
+
+--- M930
+DESC|v1.3.3 lock_entry: the name is not lower-cased (Pip== is not pip)
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        key="${BASH_REMATCH[1],,}"; key="${key//_/-}"; key="${key//./-}"
+REPLACE|        key="${BASH_REMATCH[1]}"; key="${key//_/-}"; key="${key//./-}"
+
+--- M931
+DESC|v1.3.3 lock_entry: the name comparison is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        [[ "$key" == "$want" ]] || continue
+REPLACE|        [[ "$key" != "$want" ]] || continue
+
+--- M932
+DESC|v1.3.3 lock_entry: the entry's hash lines are dropped (first line only)
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        [[ "$line" == *[\\] ]] && inside=true
+
+--- M933
+DESC|v1.3.3 lock_entry: two pip entries are accepted
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ $n -eq 1 ]]
+REPLACE|    [[ $n -ge 1 ]]
+
+--- M934
+DESC|v1.3.3 bootstrap: a lock with no pip entry is not refused
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if ! lock_entry "$lock" pip > "${tmp}/pip.lock"; then
+REPLACE|    if ! lock_entry "$lock" pip > "${tmp}/pip.lock" && false; then
+
+--- M935
+DESC|v1.3.3 bootstrap: the install's source options are dropped (offline would reach for PyPI)
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        --require-hashes --only-binary :all: "$@" -r "${tmp}/pip.lock" || rc=$?
+REPLACE|        --require-hashes --only-binary :all: -r "${tmp}/pip.lock" || rc=$?
+
+--- M936
+DESC|v1.3.3 bootstrap: pip is installed without --require-hashes
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        --require-hashes --only-binary :all: "$@" -r "${tmp}/pip.lock" || rc=$?
+REPLACE|        --only-binary :all: "$@" -r "${tmp}/pip.lock" || rc=$?
+
+--- M937
+DESC|v1.3.3 bootstrap: a failed pip install is discarded
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        --require-hashes --only-binary :all: "$@" -r "${tmp}/pip.lock" || rc=$?
+REPLACE|        --require-hashes --only-binary :all: "$@" -r "${tmp}/pip.lock" || true
+
+--- M938
+DESC|v1.3.3 bootstrap: the install exit-status test is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ $rc -eq 0 ]] || { echo "pip install of the locked pip==${want} failed (exit ${rc}; a hash mismatch is refused, not retried)"; return 1; }
+REPLACE|    [[ $rc -ne 0 ]] || { echo "pip install of the locked pip==${want} failed (exit ${rc}; a hash mismatch is refused, not retried)"; return 1; }
+
+--- M939
+DESC|v1.3.3 bootstrap: the reported version is not required to be the locked one (&& -> ||)
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    [[ -n "$want" && "$got" == "$want" ]] || { echo "the venv's pip reports '${got:-nothing}', not the locked ${want:-?}"; return 1; }
+REPLACE|    [[ -n "$want" || "$got" == "$want" ]] || { echo "the venv's pip reports '${got:-nothing}', not the locked ${want:-?}"; return 1; }
+
+--- M940
+DESC|v1.3.3 bootstrap: the version is not cut out of `pip --version`
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    got="${got#pip }"; got="${got%% *}"
+REPLACE|    got="${got#pip }"
+
+--- M941
+DESC|v1.3.3 bootstrap: the installed version is not returned
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    echo "$got"
+REPLACE|    echo ""
+
+--- M942
+DESC|v1.3.3 drift: a lock that pins nothing is not "cannot say"
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    print("%s pins nothing" % lock); sys.exit(3)
+REPLACE|    pass
+
+--- M943
+DESC|v1.3.3 drift: no site-packages is not "cannot say" (!= 1 -> > 1)
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|if len(sites) != 1:
+REPLACE|if len(sites) > 1:
+
+--- M944
+DESC|v1.3.3 drift: the unreadable-distribution guard is neutralised
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if not name or not ver:
+REPLACE|    if False:
+
+--- M945
+DESC|v1.3.3 drift: a duplicate install is not seen (> 1 -> > 2)
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if len(vs) > 1:
+REPLACE|    if len(vs) > 2:
+
+--- M946
+DESC|v1.3.3 drift: the extra-package test is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    elif want is None:
+REPLACE|    elif want is not None:
+
+--- M947
+DESC|v1.3.3 drift: the version comparison is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    elif vs[0] != want:
+REPLACE|    elif vs[0] == want:
+
+--- M948
+DESC|v1.3.3 drift: differences are printed but the exit is 0
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    print("\n".join(probs)); sys.exit(1)
+REPLACE|    print("\n".join(probs)); sys.exit(0)
+
+--- M949
+DESC|v1.3.3 drift: names are not normalised (PyYAML is not pyyaml)
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    return re.sub(r"[-_.]+", "-", n).lower()
+REPLACE|    return n
+
+--- M950
+DESC|v1.3.3 drift: an unreadable lock exits 0
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    print("cannot read %s: %s" % (lock, e)); sys.exit(3)
+REPLACE|    print("cannot read %s: %s" % (lock, e)); sys.exit(0)
+
+--- M951
+DESC|v1.3.3 drift: the missing-package branch is neutralised
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    elif not vs:
+REPLACE|    elif False:
+
+--- M952
+DESC|v1.3.3 install.sh: the venv is not cleared (a reinstall keeps old packages)
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|"$PYTHON" -m venv --clear "$VENV"
+REPLACE|"$PYTHON" -m venv "$VENV"
+
+--- M953
+DESC|v1.3.3 install.sh: the pip stage is skipped (the lock install upgrades pip mid-run instead)
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|PIP_OUT="$(venv_bootstrap_pip "$VENV" "$LOCK_FILE" "${PIP_SRC_ARGS[@]}")" \
+REPLACE|PIP_OUT="26.2.1" \
+
+--- M954
+DESC|v1.3.3 install.sh: offline, the source options are empty (pip and the lock reach for PyPI)
+TESTS|t55-venv-tooling-v133.sh t25-requirements-lock.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    PIP_SRC_ARGS=(--no-index --find-links="$PY_PKG_DIR")
+REPLACE|    PIP_SRC_ARGS=()
+
+--- M955
+DESC|v1.3.3 install.sh: the drift check is skipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|VENV_DRIFT="$(venv_drift "$VENV" "$LOCK_FILE")" \
+REPLACE|VENV_DRIFT="16 packages, exactly the lock" \
+
+--- M956
+DESC|v1.3.3 upgrade: require_pins does not claim pip (the upgrade refuses its own requirements.txt)
+TESTS|t55-venv-tooling-v133.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|require_pins pip flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka
+REPLACE|require_pins flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka
+
+--- M957
+DESC|v1.3.3 upgrade: the pip stage is skipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|PIP_OUT="$(venv_bootstrap_pip "$VENV" "$LOCK_FILE" "${PIP_SRC_ARGS[@]}")" \
+REPLACE|PIP_OUT="26.2.1" \
+
+--- M958
+DESC|v1.3.3 upgrade: offline, the source options are empty
+TESTS|t55-venv-tooling-v133.sh t25-requirements-lock.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|    PIP_SRC_ARGS=(--no-index --find-links="$PY_PKG_DIR")
+REPLACE|    PIP_SRC_ARGS=()
+
+--- M959
+DESC|v1.3.3 upgrade: the drift post-check is skipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|VENV_DRIFT="$(venv_drift "$VENV" "$LOCK_FILE")" \
+REPLACE|VENV_DRIFT="16 packages, exactly the lock" \
+
+--- M960
+DESC|v1.3.3 audit: a venv that matches the lock is a WARN
+TESTS|t55-venv-tooling-v133.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|        0) row PASS "venv packages" "${VENV_AUDIT}" ;;
+REPLACE|        0) row WARN "venv packages" "${VENV_AUDIT}" ;;
+
+--- M961
+DESC|v1.3.3 audit: each drift line is a PASS
+TESTS|t55-venv-tooling-v133.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|               row WARN "venv ${_k#* }" "${_l#*: } (${_k%% *}) — this upgrade rebuilds the venv from the lock and re-checks it"
+REPLACE|               row PASS "venv ${_k#* }" "${_l#*: } (${_k%% *}) — this upgrade rebuilds the venv from the lock and re-checks it"
+
+--- M962
+DESC|v1.3.3 audit: the missing-lock test is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|elif [[ ! -f "$AUDIT_LOCK" ]]; then
+REPLACE|elif [[ -f "$AUDIT_LOCK" ]]; then
+
+--- M963
+DESC|v1.3.3 audit: the drift check's exit status is discarded
+TESTS|t55-venv-tooling-v133.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|    VENV_AUDIT="$(venv_drift "$VENV" "$AUDIT_LOCK")" || VENV_AUDIT_RC=$?
+REPLACE|    VENV_AUDIT="$(venv_drift "$VENV" "$AUDIT_LOCK")" || true
+
+--- M964
+DESC|v1.3.3 audit: "cannot say" is a PASS
+TESTS|t55-venv-tooling-v133.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|        *) row WARN "venv packages" "NOT compared: ${VENV_AUDIT//$'\n'/; }" ;;
+REPLACE|        *) row PASS "venv packages" "NOT compared: ${VENV_AUDIT//$'\n'/; }" ;;
+
+--- M965
+DESC|v1.3.3 audit: the no-venv test is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|upgrade
+EQUIV|no
+ANCHOR|if [[ ! -d "$VENV" ]]; then
+REPLACE|if [[ -d "$VENV" ]]; then
+
+--- M966
+DESC|v1.3.3 generator: a resolution that lost a direct pin is written
+TESTS|t55-venv-tooling-v133.sh
+TARGET|genlock
+EQUIV|no
+ANCHOR|    if lost:
+REPLACE|    if not lost:
+
+--- M967
+DESC|v1.3.3 generator: the direct-pin comparison is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|genlock
+EQUIV|no
+ANCHOR|    lost = ['%s==%s' % nv for nv in sorted(direct_pins().items()) if got.get(nv[0]) != nv[1]]
+REPLACE|    lost = ['%s==%s' % nv for nv in sorted(direct_pins().items()) if got.get(nv[0]) == nv[1]]
+
+--- M968
+DESC|v1.3.3 generator: direct_pins returns nothing (no pin is ever "lost")
+TESTS|t55-venv-tooling-v133.sh
+TARGET|genlock
+EQUIV|no
+ANCHOR|            pins[lockparse.norm(m.group(1))] = m.group(2)
+ANCHOR|    return pins
+REPLACE|            pins[lockparse.norm(m.group(1))] = m.group(2)
+REPLACE|    return {}
