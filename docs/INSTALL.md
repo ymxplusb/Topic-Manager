@@ -1,6 +1,6 @@
 # Jarvis Topic Manager — Installation Guide
 
-**Version:** 1.3.2
+**Version:** 1.3.3
 **Applies to:** a FRESH install on a clean Ubuntu Server 24.04 LTS host — including a
 STIG-hardened host with FIPS mode enabled — online or air-gapped.
 
@@ -511,6 +511,12 @@ or leave it and block 25/tcp at the host firewall. `PPSM.csv` lists it as found 
 ---
 
 ## 12. Upgrading later
+
+**v1.3.3 — the venv's pip is replaced.** The upgrade (and a fresh install) upgrades the
+venv's pip to the locked 26.2.1 before anything else and then holds the venv to exactly
+`requirements.lock`; a difference fails the run (the upgrade rolls back). `--audit-only` on an
+older host shows `WARN venv pip  24.0 installed, the lock pins 26.2.1 (DIFFERENT)` — expected.
+See README.md → *Upgrading to 1.3.3*.
 
 **From a 1.0.x host** (it reports version `1.0.6`): read README.md → *Upgrading from a 1.0.x
 host* first. Since v1.3.1 the upgrade gives the served tree the release's modes (a 1.0.x

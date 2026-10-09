@@ -197,6 +197,15 @@ Informational. Since v1.1.0 the audit database is private to the service account
 narrows it in Phase 10 **after** replaying the recorded baseline (which, on a v1.0.x host,
 records 0644), and Phase 12 measures the result.
 
+### `venv pip  24.0 installed, the lock pins 26.2.1 (DIFFERENT) — this upgrade rebuilds the venv from the lock and re-checks it` (WARN)
+Expected on every host installed before v1.3.3: `python3 -m venv` seeded the venv with Ubuntu
+24.04's pip 24.0, which nothing pinned or upgraded. The upgrade rebuilds the venv, upgrades its
+pip to the locked version first, and then requires the venv to hold exactly the locked set. Other
+`venv <package>` rows (`EXTRA`, `MISSING`, `DIFFERENT`) mean the installed venv is not what the
+release being installed pins — also put right by the upgrade. Something installed by hand into
+the venv shows up here as `EXTRA`. `venv packages  NOT compared: no requirements.lock beside this
+script` means the script was copied without its tree; Phase 8 still checks the new venv.
+
 ### `nginx.conf ssl_protocols  TLSv1 TLSv1.1 TLSv1.2 TLSv1.3 — this upgrade removes TLSv1/TLSv1.1` (WARN)
 Informational: stock Ubuntu enables TLS 1.0/1.1 at the http level. Phase 11 rewrites the line —
 see *nginx.conf management* below.
@@ -268,6 +277,24 @@ sudo rm -rf /opt/topic-manager/venv
 ```
 Then re-run the upgrade — do not hand-build the venv; the script installs into it from the
 source tree's `requirements.txt`.
+
+### `The venv's pip could not be upgraded to the locked version: ...`
+v1.3.3: the first install into the new venv is pip itself, from the lock's `pip` entry with
+`--require-hashes`, from PyPI online or the bundle's `install/packages/python` offline. The
+reason follows the colon: `does not carry exactly one pip entry` (a source tree from before
+v1.3.3, or a hand-edited lock), `pip install of the locked pip==X failed` (pip's own error is
+above it: no network, a missing wheel in the bundle, or a hash mismatch), or `the venv's pip
+reports 'Y', not the locked X`. The run rolls back. Rebuild the bundle with this release's
+`prepare-offline.sh`; never edit the lock by hand.
+
+### `The venv does not hold exactly the locked set (requirements.lock):`
+v1.3.3: after the install the venv must hold exactly the packages and versions in
+`requirements.lock` (pip included). Each following line names one difference: `EXTRA <name>`
+(installed, not locked), `MISSING <name>`, `DIFFERENT <name>: <installed> installed, the lock
+pins <version>`, `DUPLICATE <name>`. The upgrade rolls back; install.sh stops. A venv built
+from the lock should hold exactly it, so treat any line here as a finding: something else
+installed into the venv during the run, or the lock and the wheels disagree. Keep the lines
+and report them; do not install or remove packages by hand to make it pass.
 
 ### `pip install of the web stack failed` / `of ldap3/PyYAML/cryptography failed`
 ```bash
@@ -917,6 +944,8 @@ Sign in again.
 | `The package lock is STILL held after 600s: <lock>, held by PID N (<name>)` / `The package lock is held by another process (named above)` | Nothing was installed or changed. Let the named process finish (`ps -fp N`; for unattended-upgrades, `journalctl -u unattended-upgrades -n 20`), or stop it — `sudo systemctl stop unattended-upgrades apt-daily.service apt-daily-upgrade.service` — then run the same command again. `TM_DPKG_LOCK_WAIT_S=<seconds>` waits longer. `dpkg --audit` is not the check here: a held lock leaves nothing half-installed |
 | `Offline package install failed (apt exit N) while applying the plan printed above` | If apt's output above says `Could not get lock /var/lib/dpkg/lock-frontend`, another package manager took the lock after the wait: nothing was applied — see the row above. Otherwise resolution succeeded but dpkg failed while installing, so **part of the plan may be applied**. Run `sudo dpkg --audit` and read dpkg's output above; fix the cause and re-run `install.sh` |
 | `pip install from requirements.lock failed (a hash mismatch is refused, not retried)` | A wheel did not match its SHA-256 in `requirements.lock` — a tampered mirror, a corrupted bundle, or a bundle built from a different release. Rebuild the bundle; never edit the lock by hand |
+| `The venv's pip could not be upgraded to the locked version: ...` | v1.3.3: pip itself is installed first, from the lock's `pip` entry. See *The run fails partway through* for each reason after the colon. Nothing past the venv was installed |
+| `The venv does not hold exactly the locked set (requirements.lock):` | v1.3.3: the venv holds a package the lock does not pin, lacks one, or holds another version (named on the following lines). The install starts from an empty venv (`--clear`), so re-run it |
 | `Cannot check /etc/topic-manager/config.yaml before changing anything` | Neither the existing venv nor `python3` can import PyYAML. `sudo apt install python3-yaml` and re-run; nothing was changed |
 | `--tls-cert and --tls-key are not a matching certificate/key pair` | The two files are not a pair, or one could not be read. Compare `openssl x509 -noout -pubkey -in <crt>` with `openssl pkey -pubout -in <key>` |
 | `nginx -t failed:` | nginx's own output follows. A fresh install always has a certificate now, so this is a real fault |
@@ -950,7 +979,10 @@ The JS cache-bust tokens change with every release. `Ctrl+Shift+R`.
 
 ### Check what is installed against what was pinned
 The upgrade installs exactly the pins in the source tree's `requirements.txt` and prints the
-full `pip freeze` at the end of the run. To compare a live host:
+full `pip freeze` at the end of the run. Since v1.3.3 it also checks the venv against
+`requirements.lock` itself — exactly the locked set, pip included — and fails (rolling back)
+on any difference; `--audit-only` reports the same comparison for the installed venv. Note
+that `pip freeze` leaves pip out; `pip list --format=freeze` does not. To compare a live host:
 
 ```bash
 sudo /opt/topic-manager/venv/bin/pip freeze > /tmp/live.txt

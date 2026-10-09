@@ -1,4 +1,4 @@
-# Jarvis Topic Manager v1.3.2
+# Jarvis Topic Manager v1.3.3
 
 **Standalone Kafka topic administration frontend for the Jarvis ecosystem.**
 
@@ -121,7 +121,7 @@ The script, in order:
 curl -sk https://localhost/api/health
 ```
 
-should return `{"status":"ok","version":"1.3.2"}`. Open `https://<server-name>/`, sign in as a
+should return `{"status":"ok","version":"1.3.3"}`. Open `https://<server-name>/`, sign in as a
 member of the required group, and add your Kafka clusters in **Settings → General → Cluster
 Profiles** — a new install starts with none.
 
@@ -626,6 +626,16 @@ What it does, in order:
 | 7–9  | Replace venv, backend, frontend, nginx config and unit, and install the polkit rule and the `topic-manager-nginx-test` unit. Vue is verified by SHA-256 before it is allowed to serve |
 | 10   | Restore `config.yaml`, the audit database, TLS material, the systemd drop-in, the cluster store (`clusters.d/` and `cluster-certs/`) and the recorded ownership and modes verbatim — a deliberately narrowed permission is never widened back to a script default. The store is restored *before* the migration runs. The deliberate exceptions to "verbatim": `data/` and `tm.db` are set to **0700 / 0600** after the replay, because a v1.0.x baseline records 0644 for the audit database; and (v1.3.1) the served tree `/var/www/topic-manager`, every file of which is the release's, takes the release's modes — root-owned, 0755/0644, or 0750/0640 through the web account's group where the tree was not world-readable — whatever the old tree's files had |
 | 11–12| Config migration — the `clusters:` block moves out of `config.yaml` — and `nginx.conf`'s `ssl_protocols` set to `TLSv1.2 TLSv1.3` (backed up, `nginx -t`, put back on failure); then the permission boundary is **measured** as the `topic-manager` principal (it must be able to write `clusters.d`, and must not be able to write `config.yaml` or its directory; either failure fails the upgrade), then start and verify: health, reported version, effective access, and the security headers on every route class |
+
+### Upgrading to 1.3.3 — the venv's pip is replaced
+
+1.3.3 upgrades the venv's **pip** (Ubuntu's ensurepip 24.0, six advisories) to the locked
+26.2.1, before any application package, and then requires the venv to hold exactly the packages
+and versions in `requirements.lock` — pip included — or the upgrade rolls back. On a 1.3.2 or
+older host `--audit-only` therefore shows `WARN venv pip  24.0 installed, the lock pins 26.2.1
+(DIFFERENT)`: that is a change this release makes on purpose, so proceed. A `venv` row naming
+any other package means something was installed into the venv by hand; the upgrade removes it.
+Offline, the bundle carries the pip wheel; build it with this release's `prepare-offline.sh`.
 
 ### Upgrading from a 1.0.x host
 

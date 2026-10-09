@@ -1,10 +1,10 @@
 # Jarvis Topic Manager — Software Bill of Materials (SBOM)
 
-**Version:** 1.3.2
+**Version:** 1.3.3
 **Date:** 2026-10-09
 **Format:** CycloneDX-compatible markdown
 **Copyright:** (c) 2025–2026 James Rodman. All Rights Reserved.
-**SBOM Serial:** urn:topic-manager:sbom:1.3.2
+**SBOM Serial:** urn:topic-manager:sbom:1.3.3
 
 > The backend table below is generated from `requirements.txt`, which is the single source
 > of truth for every Python pin: `install/upgrade-full.sh` installs exactly these versions on
@@ -184,9 +184,12 @@ TLS session, no key agreement) and remains a known limitation as described above
 
 ## Vulnerability status
 
-Every pin above was checked against OSV.dev on **2026-09-26** (`tools/sca-check.sh`: 8 clean,
-0 vulnerable) and carries no known advisory. Every Python pin was also re-measured on PyPI
-that day and is the latest stable release; Vue 3.5.43 is the latest on npm. Superseded pins and why they moved:
+Every pin above was checked against OSV.dev on **2026-10-09** (`tools/sca-check.sh`: 17 clean,
+0 vulnerable — the 8 direct pins including pip, the 8 transitive lock entries, Vue; 16 of 16
+lock entries checked) and carries no known advisory. The same run with pip 24.0 put back in the
+lock is RED (`pip 24.0 VULNERABLE`, six GHSA / six PYSEC ids, exit 1). pip 26.2.1 was the latest release on
+PyPI that day; the other Python pins were last re-measured as the latest stable releases on
+2026-09-26, and Vue 3.5.43 as the latest on npm (not re-measured for 1.3.3). Superseded pins and why they moved:
 
 | Component | Was | Now | Reason |
 |---|---|---|---|
