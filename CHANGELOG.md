@@ -5,6 +5,53 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
+## [1.3.1] — 2026-10-09
+
+A patch release: an upgrade from a 1.0.x host succeeds by the documentation, with no
+workaround, and a failed upgrade rolls back clean. No dependency, schema or configuration
+change; upgrade as usual. Found by a throwaway test: v1.0.6 installed online by its own README,
+then upgraded offline to 1.3.0 by the 1.3.0 documentation.
+
+### Fixed
+
+- **An upgrade from a host installed online by v1.0.x failed and rolled back.** v1.0.x's
+  online `install.sh` left `lib/vue.global.prod.js` at 0600 (a temporary file's mode, kept by
+  `rsync -a`), servable only because `www-data` owned it. The upgrade replayed that recorded
+  0600 and then made the served tree root-owned, so `www-data` could not read Vue, the Phase 12
+  effective-access check failed and the upgrade rolled back; the only way through was
+  TROUBLESHOOTING's `chmod -R`. Every file under `/var/www/topic-manager` is the release's, so
+  it now takes the release's modes in Phase 10 — `root:root` 0755/0644, or 0750/0640 through
+  the web account's group when the tree was not world-readable — whatever the old tree's files
+  had. Every other recorded path (config, TLS key, drop-in, logs…) is still restored exactly,
+  so a deliberately narrowed permission is never widened; the Phase 12 check stays the
+  backstop.
+- **A failed upgrade from a 1.0.x host left the newer release's units behind.** A 1.0.x
+  restore point had no record of what 1.0.x shipped, so the automatic rollback retired nothing:
+  `topic-manager.socket`, the apply and audit units, the root helper and the newer polkit rule
+  stayed, enabled, and the rollback ended `RESTORE INCOMPLETE`. The shipped list the rollback
+  judges a manifest-less host by now covers every release that wrote no install manifest —
+  v1.0.6 to v1.1.1, re-derived by the test suite from each of those tags — so the rollback
+  retires everything the failed run installed and puts the 1.0.x unit, site and rule back.
+- **A restore point no longer adopts a newer release's leftover manifest.** After such a
+  rollback the next run's backup copied the newer release's install manifest as the installed
+  release's record, so a later `--restore` kept the leftovers as if 1.0.x had shipped them. A
+  host's manifest is now taken as the restore point's record only when it names the installed
+  version; otherwise the backup says so and uses the installed release's shipped list.
+
+### Documentation
+
+- README: **Upgrading from a 1.0.x host** — what the upgrade now fixes itself and what to check
+  (including after an earlier attempt that rolled back). INSTALL points to it.
+- `ls -l /etc/polkit-1/rules.d/50-topic-manager.rules` (and `grep -c apply` on it) need `sudo`:
+  the directory is not world-readable.
+- The detached-run recipe's `sudo -v` failed (harmlessly) on a NOPASSWD host or without a
+  terminal; it is now `sudo -n true 2>/dev/null || sudo -v`.
+- TROUBLESHOOTING's `www-data cannot read ...`: the upgrade sets the served tree's modes itself;
+  the remaining causes are traversal, an ACL or a MAC policy, and the by-hand reset is the
+  release's modes (root-owned, 0755/0644), not `go+rX`.
+
+---
+
 ## [1.3.0] — 2026-10-02
 
 The STIG decision board's remaining rules (WO-0006; James's rulings of 2026-10-02). Every
