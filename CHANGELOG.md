@@ -5,6 +5,22 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
+## [1.3.2] — 2026-10-09
+
+A patch release: Settings > Support > STIG compliance no longer lists every rule on the page.
+No dependency, schema or configuration change; upgrade as usual.
+
+### Changed
+
+- **The STIG compliance section is a summary and a CSV download.** The page showed all 75
+  rules of the STIG decision board in a table. It now shows only the one-line summary — when
+  the host was last measured, and the open items — beside **Download CSV**, **Measure host
+  now** and **Refresh**; the rules, their status and every live check are in the CSV, which is
+  unchanged (James 2026-10-09). `GET /api/compliance` is unchanged and still read by the page,
+  which builds the CSV from it.
+
+---
+
 ## [1.3.1] — 2026-10-09
 
 A patch release: an upgrade from a 1.0.x host succeeds by the documentation, with no

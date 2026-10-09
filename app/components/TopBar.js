@@ -84,7 +84,7 @@ const TopBar = {
     template: `
 <header class="app-header">
   <div class="hdr-logo">
-    <span class="glyph"><img src="/jarvis-mark.png?v=1301" alt="Jarvis" width="24" height="24" style="display:block;object-fit:contain"></span>
+    <span class="glyph"><img src="/jarvis-mark.png?v=1302" alt="Jarvis" width="24" height="24" style="display:block;object-fit:contain"></span>
     <span class="name">
       <span class="sub">JARVIS</span>
       <span class="main">TOPIC MANAGER</span>

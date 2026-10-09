@@ -1,4 +1,4 @@
-# Jarvis Topic Manager v1.3.1
+# Jarvis Topic Manager v1.3.2
 
 **Standalone Kafka topic administration frontend for the Jarvis ecosystem.**
 
@@ -121,7 +121,7 @@ The script, in order:
 curl -sk https://localhost/api/health
 ```
 
-should return `{"status":"ok","version":"1.3.1"}`. Open `https://<server-name>/`, sign in as a
+should return `{"status":"ok","version":"1.3.2"}`. Open `https://<server-name>/`, sign in as a
 member of the required group, and add your Kafka clusters in **Settings → General → Cluster
 Profiles** — a new install starts with none.
 
