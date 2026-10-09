@@ -6,6 +6,8 @@
 # version. Installed with `pip install --require-hashes --only-binary :all:`
 # by install.sh, install/upgrade-full.sh and prepare-offline.sh, so a file
 # whose hash is not listed here is refused, wherever it came from.
+# pip itself is an entry too (venv tooling, v1.3.3): the installers upgrade
+# the venv to it first, and the installed venv must hold exactly this set.
 
 blinker==1.9.0 \
     --hash=sha256:ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc
@@ -354,6 +356,8 @@ MarkupSafe==3.0.4 \
     --hash=sha256:fa95848c929b6a75f6848d3c9793e59db365ee436776e57db835cdbfa79ba977 \
     --hash=sha256:fd9f8797427910198f95bced71ddfed61130d7e349213bfb8466c9c99e2c46a8 \
     --hash=sha256:fdb4ca07ab75ffadab4a8b135ad59cdbb3156b99310f3d565370da74a15d6bd3
+pip==26.2.1 \
+    --hash=sha256:71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e
 pyasn1==0.6.4 \
     --hash=sha256:deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b
 pycparser==3.11 \

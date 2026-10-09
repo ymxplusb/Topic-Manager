@@ -43,6 +43,15 @@ vouch for itself.
 | PyYAML           | 6.0.3   | MIT             | pyyaml.org                          |
 | cryptography     | 50.0.1  | Apache-2.0/BSD  | cryptography.io                     |
 | confluent-kafka  | 2.15.1  | Apache-2.0      | confluent.io / github.com/confluentinc/confluent-kafka-python |
+| pip              | 26.2.1  | MIT             | pip.pypa.io (venv tooling, v1.3.3)  |
+
+**pip is a component (v1.3.3).** `python3 -m venv` puts pip itself into the application's
+venv; on Ubuntu 24.04 that was ensurepip's 24.0, carrying six advisories, and because it was
+in no requirements file nothing pinned, hashed, scanned or upgraded it. It is now a direct pin
+under *venv tooling* in `requirements.txt`, hash-locked in `requirements.lock`, scanned by
+`tools/sca-check.sh`, upgraded first by every installer, and the installed venv is held to
+exactly the locked set (`venv_drift`). A 3.12 venv carries no setuptools and no wheel
+(measured in ubuntu:24.04 and python:3.12), so neither is a component.
 
 `cryptography` became a **direct, first-party** dependency in v1.0.4: `tm/clusters.py`
 imports `x509` and `serialization` to parse every PEM the Cluster Builder accepts before it
@@ -185,6 +194,7 @@ that day and is the latest stable release; Vue 3.5.43 is the latest on npm. Supe
 | Flask | 3.1.0 | 3.1.3 | CVE-2025-47278, CVE-2026-27205 (moved in 1.0.2) |
 | Werkzeug | 3.1.3 | 3.1.8 | CVE-2026-21860, CVE-2025-66221, CVE-2026-27199 (moved in 1.0.2) |
 | Werkzeug | 3.1.8 | 3.1.9 | CVE-2026-102598 (moved in 1.3.1) |
+| pip (venv tooling) | 24.0 | 26.2.1 | CVE-2025-8869, CVE-2026-1703, CVE-2026-3219, CVE-2026-6357, CVE-2026-8643, CVE-2026-13346 — 24.0 was ensurepip's, unpinned and unscanned (moved in 1.3.3) |
 | gunicorn | 26.0.0 | 26.2.0 | maintenance |
 | PyYAML | 6.0.2 | 6.0.3 | maintenance |
 | confluent-kafka | 2.14.0 | 2.15.0 | maintenance (moved in 1.0.2) |

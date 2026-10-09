@@ -21,6 +21,20 @@ How it is built (run on a developer machine with network access):
     python tools/gen-requirements-lock.py            # rewrite requirements.lock
     python tools/gen-requirements-lock.py --check    # same verdict as the lock gate
 
+VENV TOOLING (v1.3.3, REG-0068): `python3 -m venv` seeds the venv with pip
+itself (24.0 from Ubuntu 24.04's ensurepip, six advisories), and nothing
+locked it, scanned it or upgraded it. pip is now a direct pin in
+requirements.txt ("venv tooling") and so an ordinary lock entry. It is
+resolved the usual way: --target with --ignore-installed makes pip treat
+`pip==X` as a package to install, not as itself (measured 2026-10-09 with
+pip 25.0.1 and 26.2.1: the report lists it). That is pip's behaviour, not a
+promise, so resolve() REFUSES a resolution that drops ANY direct pin (pip
+included) instead of writing a lock without it; --check-set would then say
+"NOT in the resolved set". setuptools and wheel are not locked because a
+3.12 venv does not contain them (measured in ubuntu:24.04 and python:3.12).
+Every installer upgrades pip from its lock entry FIRST, then installs the
+whole lock, then holds the venv to exactly this set (venv_drift).
+
 Needs pip >= 23 in the running interpreter and network access to PyPI.
 tools/check-requirements-lock.sh verifies the result: published hashes and all target
 wheel hashes, not byte equality with regeneration. Offline is exit 3 unless
@@ -78,9 +92,27 @@ def resolve_report(constraints=None):
     return data['install']
 
 
+def direct_pins():
+    """{normalised name: version} of the == pins in requirements.txt."""
+    pins = {}
+    for line in open(REQ, encoding='utf-8'):
+        m = re.match(r'^\s*([A-Za-z0-9._-]+)\s*==\s*(\S+)', line.split('#', 1)[0])
+        if m:
+            pins[lockparse.norm(m.group(1))] = m.group(2)
+    return pins
+
+
 def resolve():
-    return sorted(((i['metadata']['name'], i['metadata']['version']) for i in resolve_report()),
+    pins = sorted(((i['metadata']['name'], i['metadata']['version']) for i in resolve_report()),
                   key=lambda nv: nv[0].lower())
+    # v1.3.3: a direct pin the resolution left out (pip special-casing
+    # itself, say) is refused here, never written as a lock without it.
+    got = {lockparse.norm(n): v for n, v in pins}
+    lost = ['%s==%s' % nv for nv in sorted(direct_pins().items()) if got.get(nv[0]) != nv[1]]
+    if lost:
+        raise SystemExit('the resolution does not carry the direct pin(s) %s; refusing to write '
+                         'a lock without them' % ', '.join(lost))
+    return pins
 
 
 def wheel_hashes(name, version):
@@ -105,6 +137,8 @@ def render(pins):
            '# version. Installed with `pip install --require-hashes --only-binary :all:`',
            '# by install.sh, install/upgrade-full.sh and prepare-offline.sh, so a file',
            '# whose hash is not listed here is refused, wherever it came from.',
+           '# pip itself is an entry too (venv tooling, v1.3.3): the installers upgrade',
+           '# the venv to it first, and the installed venv must hold exactly this set.',
            '']
     for name, version in pins:
         hashes = wheel_hashes(name, version)

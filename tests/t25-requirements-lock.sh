@@ -85,9 +85,15 @@ l_installers_use_it() {
             | grep -E '^[[:space:]]*pip (install|download)' | grep -v -- '--only-binary' > "${TM_TMP}/h" \
             && _tm_afail "${f}: a pip call without --only-binary: $(cat "${TM_TMP}/h")"
     done
-    grep -qx 'PIP_ARGS=(--require-hashes --only-binary :all:)' "$UP" \
+    grep -qx 'PIP_ARGS=(--require-hashes --only-binary :all: "${PIP_SRC_ARGS\[@\]}")' "$UP" \
         || _tm_afail "the upgrade's pip install no longer starts from --require-hashes --only-binary :all:"
-    grep -q -- '--no-index --require-hashes --only-binary :all: --find-links' "$IN" \
+    # v1.3.3: the source options (offline: --no-index --find-links <bundle>)
+    # are one array both stages use — the pip bootstrap and the lock install.
+    for f in "$IN" "$UP"; do
+        grep -qx '    PIP_SRC_ARGS=(--no-index --find-links="$PY_PKG_DIR")' "$f" \
+            || _tm_afail "${f}: the offline source is not --no-index --find-links <bundle>"
+    done
+    grep -qx '    pip install --require-hashes --only-binary :all: "${PIP_SRC_ARGS\[@\]}" \\' "$IN" \
         || _tm_afail "install.sh's offline pip install is not hash-locked"
     grep -q '^    -r "\$REQ_FILE"$' "${TM_REPO_ROOT}/prepare-offline.sh" \
         && _tm_afail "prepare-offline.sh still has the unrestricted pip download fallback" || true
@@ -102,9 +108,9 @@ l_upgrade_refuses_a_drifted_lock() {
     {
         echo '#!/usr/bin/env bash'; echo 'set -euo pipefail'
         echo 'fail() { echo "[FAIL] $*" >&2; exit 1; }'
-        echo 'declare -A PINS=([flask]=3.1.3 [werkzeug]=3.1.9 [gunicorn]=26.2.0 [ldap3]=2.9.1 [pyyaml]=6.0.3 [cryptography]=50.0.1 [confluent-kafka]=2.15.1)'
+        echo 'declare -A PINS=([pip]=26.2.1 [flask]=3.1.3 [werkzeug]=3.1.9 [gunicorn]=26.2.0 [ldap3]=2.9.1 [pyyaml]=6.0.3 [cryptography]=50.0.1 [confluent-kafka]=2.15.1)'
         echo 'LOCK_FILE="$1"'
-        TM_S='^for _pin in flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka; do$' \
+        TM_S='^for _pin in pip flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka; do$' \
             awk 'BEGIN{s=ENVIRON["TM_S"]} !on && $0 ~ s {on=1} on{print} on && /^done$/{exit}' "$UP"
         echo 'echo AGREED'
     } > "${TM_TMP}/lk.sh"
@@ -199,7 +205,7 @@ _fake_pypi() {
         /^[A-Za-z0-9._-]+==/ { flush(); split($1, p, "=="); name = p[1]; ver = p[2]; nv = name "==" ver; next }
         /--hash=sha256:/ { s = $0; sub(/.*--hash=sha256:/, "", s); sub(/[^0-9a-f].*$/, "", s); h[++n] = s }
         END { flush() }'
-    [ "$(find "$J" -name '*.json' | wc -l | tr -d ' ')" -eq 15 ] || tm_die "the fake PyPI was not built for all 15 releases"
+    [ "$(find "$J" -name '*.json' | wc -l | tr -d ' ')" -eq 16 ] || tm_die "the fake PyPI was not built for all 16 releases"
     cat > "${TM_TMP}/on/curl" <<STUB
 #!/usr/bin/env bash
 out=""; url=""
@@ -214,7 +220,7 @@ case "\$url" in
 esac
 STUB
     chmod +x "${TM_TMP}/on/curl"
-    printf '%s\n' 'print("requirements.lock covers the resolved set (15 packages)")' > "${TM_TMP}/c/tools/gen-requirements-lock.py"
+    printf '%s\n' 'print("requirements.lock covers the resolved set (16 packages)")' > "${TM_TMP}/c/tools/gen-requirements-lock.py"
 }
 _hash_gate() {
     RC=0; PATH="${TM_TMP}/on:${PATH}" TM_LOCK_OFFLINE_OK=0 bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 || RC=$?
@@ -238,7 +244,7 @@ tm_case "lock-completeness-is-checked-or-exits-3" none l_completeness
 h_online_good_lock() {
     _copy; _fake_pypi; _hash_gate
     tm_assert_rc 0 "$RC" "the real lock failed against a PyPI that publishes its hashes: $(cat "${TM_TMP}/out")"
-    tm_assert_grep "15 releases: every hash is one PyPI published" "${TM_TMP}/out" "the hash verdict was not printed"
+    tm_assert_grep "16 releases: every hash is one PyPI published" "${TM_TMP}/out" "the hash verdict was not printed"
 }
 tm_case "online-the-real-lock-matches-published-hashes" none h_online_good_lock
 
@@ -294,7 +300,7 @@ h_trailing_comment() {
         _copy; _fake_pypi; _comment_lock "$which" good
         _hash_gate
         tm_assert_rc 0 "$RC" "a GOOD ${which} hash followed by '# pinned' went red: $(cat "${TM_TMP}/out")"
-        tm_assert_grep "15 releases: every hash is one PyPI published" "${TM_TMP}/out" "a commented ${which} entry was not counted among the 15"
+        tm_assert_grep "16 releases: every hash is one PyPI published" "${TM_TMP}/out" "a commented ${which} entry was not counted among the 16"
     done
 }
 tm_case "online-a-trailing-comment-cannot-hide-an-entry" none h_trailing_comment
@@ -310,14 +316,14 @@ h_pip_shapes() {
         > "${TM_TMP}/c/requirements.lock"
     _hash_gate
     tm_assert_rc 0 "$RC" "a backslash on the lock's last line went red: $(cat "${TM_TMP}/out")"
-    tm_assert_grep "15 releases: every hash is one PyPI published" "${TM_TMP}/out" "a backslash on the last line lost the last entry"
+    tm_assert_grep "16 releases: every hash is one PyPI published" "${TM_TMP}/out" "a backslash on the last line lost the last entry"
     _copy; _fake_pypi
     tr -d '\r' < "${TM_REPO_ROOT}/requirements.lock" | awk '
         /^blinker==/ { print; getline; print $0 "\\"; print "# a note, column 0"; next } { print }' > "${TM_TMP}/c/requirements.lock"
     grep -q '^# a note, column 0$' "${TM_TMP}/c/requirements.lock" || tm_die "the column-0 comment fixture changed nothing"
     _hash_gate
     tm_assert_rc 0 "$RC" "a column-0 comment ending blinker's continuation went red: $(cat "${TM_TMP}/out")"
-    tm_assert_grep "15 releases: every hash is one PyPI published" "${TM_TMP}/out" "the column-0 comment lost an entry"
+    tm_assert_grep "16 releases: every hash is one PyPI published" "${TM_TMP}/out" "the column-0 comment lost an entry"
     _copy
     tr -d '\r' < "${TM_REPO_ROOT}/requirements.lock" | awk '
         /^blinker==/ { print; getline; print $0 "#pinned"; next } { print }' > "${TM_TMP}/c/requirements.lock"
@@ -434,7 +440,7 @@ PYASN1_048_HASH=39c7e2ec30515947ff4e87fb6f456dfc6e84857d34be479c9d4a4ba4bf46aa5d
 _xlock() {
     tr -d '\r' < "${TM_REPO_ROOT}/requirements.lock" | awk -v x="$1" -v h048="$PYASN1_048_HASH" '
         x == "x20" && prev ~ /^blinker==/ { print $0 " # regenerated \\"; prev = $0; next }
-        x == "x21" && prev ~ /^MarkupSafe==/ && /--hash/ && !/\\$/ { print $0 " # regenerated \\"; m = 1; prev = $0; next }
+        x == "x21" && prev ~ /^pip==/ && /--hash/ && !/\\$/ { print $0 " # regenerated \\"; m = 1; prev = $0; next }
         x == "x21" && m == 1 && /^pyasn1==/ { print; m = 2; prev = $0; next }
         x == "x21" && m == 2 { print; print "  pyasn1==0.4.8 --hash=sha256:" h048; m = 0; prev = $0; next }
         x == "tab" && /^blinker==/ { getline nx; s = nx; sub(/^ +/, "", s); print "blinker==1.9.0\t" s; prev = $0; next }
@@ -477,7 +483,7 @@ x_check_set_reads_pips_set() {
     _fake_resolver; _copy
     _check_set "${TM_TMP}/c"
     tm_assert_rc 0 "$RC" "the real lock against its own resolved set: $(cat "${TM_TMP}/cs-out")"
-    tm_assert_grep "covers the resolved set (15 packages)" "${TM_TMP}/cs-out" "the real lock's set was not 15"
+    tm_assert_grep "covers the resolved set (16 packages)" "${TM_TMP}/cs-out" "the real lock's set was not 16"
     _copy; _xlock x20; _check_set "${TM_TMP}/c"
     tm_assert_rc 1 "$RC" "X20: --check-set passed a lock from which pip loses cffi: $(cat "${TM_TMP}/cs-out")"
     tm_assert_grep "MISSING from requirements.lock: cffi==2.1.1" "${TM_TMP}/cs-out" "X20: cffi was not reported missing"
@@ -510,7 +516,7 @@ x_gate_refuses_x20_x21() {
     RC=0; PYTHONPATH="${TM_TMP}/fakepip" PATH="${TM_TMP}/on:${PATH}" TM_LOCK_OFFLINE_OK=0 bash "$GATE" --root "${TM_TMP}/c" \
         > "${TM_TMP}/out" 2>&1 || RC=$?
     tm_assert_rc 0 "$RC" "the real lock with the real generator went red: $(cat "${TM_TMP}/out")"
-    tm_assert_grep "covers the resolved set (15 packages)" "${TM_TMP}/out" "the real generator's verdict was not relayed"
+    tm_assert_grep "covers the resolved set (16 packages)" "${TM_TMP}/out" "the real generator's verdict was not relayed"
 }
 tm_case "x20-x21-the-gate-refuses-a-lock-pip-reads-differently" none x_gate_refuses_x20_x21
 
@@ -574,10 +580,10 @@ for fn in sorted(os.listdir(sys.argv[2])):
         print("   pip only: %s  lockparse only: %s" % (sorted(pip_set - ours), sorted(ours - pip_set)))
 sys.exit(1 if bad else 0)
 PY
-    tm_assert_grep "x21.lock       pip 15 entries  lockparse 15 entries" "${TM_TMP}/out" "X21 was not measured against pip"
-    tm_assert_grep "x20.lock       pip 14 entries" "${TM_TMP}/out" "X20 was not measured against pip"
-    tm_assert_grep "tab.lock       pip 14 entries (refuses a line)" "${TM_TMP}/out" "pip did not refuse the TAB line"
-    tm_assert_grep "splithash.lock pip 15 entries  lockparse 15 entries, 0 error(s)  AGREE" "${TM_TMP}/out" "a hash split across a continuation was not rejoined as pip rejoins it"
+    tm_assert_grep "x21.lock       pip 16 entries  lockparse 16 entries" "${TM_TMP}/out" "X21 was not measured against pip"
+    tm_assert_grep "x20.lock       pip 15 entries" "${TM_TMP}/out" "X20 was not measured against pip"
+    tm_assert_grep "tab.lock       pip 15 entries (refuses a line)" "${TM_TMP}/out" "pip did not refuse the TAB line"
+    tm_assert_grep "splithash.lock pip 16 entries  lockparse 16 entries, 0 error(s)  AGREE" "${TM_TMP}/out" "a hash split across a continuation was not rejoined as pip rejoins it"
 }
 tm_case "the-lock-parser-agrees-with-pips-own-parser" none x_differential
 
@@ -622,8 +628,8 @@ x_lockparse_cli() {
     local LP="${TM_REPO_ROOT}/tools/lib/lockparse.py"
     RC=0; "$(tm_python)" "$LP" "${TM_REPO_ROOT}/requirements.lock" > "${TM_TMP}/out" 2>&1 || RC=$?
     tm_assert_rc 0 "$RC" "the real lock: $(cat "${TM_TMP}/out")"
-    tm_assert_eq "#entries 15" "$(tail -n 1 "${TM_TMP}/out")" "the count line"
-    tm_assert_eq 15 "$(grep -c '==' "${TM_TMP}/out")" "the entry lines"
+    tm_assert_eq "#entries 16" "$(tail -n 1 "${TM_TMP}/out")" "the count line"
+    tm_assert_eq 16 "$(grep -c '==' "${TM_TMP}/out")" "the entry lines"
     _copy; _xlock tab
     RC=0; "$(tm_python)" "$LP" "${TM_TMP}/c/requirements.lock" > "${TM_TMP}/out" 2>"${TM_TMP}/err" || RC=$?
     tm_assert_rc 1 "$RC" "a lock pip refuses"
@@ -647,10 +653,10 @@ x_check_set_output_is_read() {
     _hash_gate
     tm_assert_rc 3 "$RC" "--check-set exited 0 with no verdict and the gate accepted it: $(cat "${TM_TMP}/out")"
     tm_assert_grep "exited 0 without its verdict" "${TM_TMP}/out" "the missing verdict was not named"
-    printf '%s\n' 'print("requirements.lock covers the resolved set (14 packages)")' > "${TM_TMP}/c/tools/gen-requirements-lock.py"
+    printf '%s\n' 'print("requirements.lock covers the resolved set (15 packages)")' > "${TM_TMP}/c/tools/gen-requirements-lock.py"
     _hash_gate
-    tm_assert_rc 1 "$RC" "a resolved count of 14 against a 15-entry lock passed: $(cat "${TM_TMP}/out")"
-    tm_assert_grep "the resolved set has 14 packages but the lock has 15 entries" "${TM_TMP}/out" "the count mismatch was not named"
+    tm_assert_rc 1 "$RC" "a resolved count of 15 against a 16-entry lock passed: $(cat "${TM_TMP}/out")"
+    tm_assert_grep "the resolved set has 15 packages but the lock has 16 entries" "${TM_TMP}/out" "the count mismatch was not named"
     _fake_resolver; _copy
     RC=0; TM_FAKE_PIP_SLEEP=30 TM_LOCK_RESOLVE_TIMEOUT=2 PYTHONPATH="${TM_TMP}/fakepip" \
         "$(tm_python)" "${TM_REPO_ROOT}/tools/gen-requirements-lock.py" --check-set --root "${TM_TMP}/c" > "${TM_TMP}/cs-out" 2>&1 || RC=$?
@@ -694,12 +700,12 @@ _sca_run() { RC=0; PATH="${TM_TMP}/osv:${PATH}" bash "${TM_TMP}/sc/tools/sca-che
 s_sca_queries_what_pip_installs() {
     _sca_tree "${TM_REPO_ROOT}/requirements.lock"; _sca_run
     tm_assert_rc 0 "$RC" "SCA on the real lock with a clean OSV went red: $(cat "${TM_TMP}/out")"
-    tm_assert_grep "15 of 15 requirements.lock entries checked at the version pip installs" "${TM_TMP}/out" "SCA did not account for every lock entry"
+    tm_assert_grep "16 of 16 requirements.lock entries checked at the version pip installs" "${TM_TMP}/out" "SCA did not account for every lock entry"
     grep -Eq '^  pyasn1 +0\.6\.4 +.*CLEAN' "${TM_TMP}/out" || _tm_afail "SCA did not query pyasn1 0.6.4 from the real lock"
     # A direct pin at the SAME version in requirements.txt and the lock is
     # queried once, whatever its spelling (Flask / flask, PyYAML / pyyaml).
     local p n
-    for p in flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka; do
+    for p in pip flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka; do
         n="$(grep -Eic "^  ${p} " "${TM_TMP}/out")"
         tm_assert_eq 1 "$n" "${p} was not queried exactly once"
     done
@@ -725,11 +731,11 @@ s_sca_queries_what_pip_installs() {
     grep -Eq '^  pyasn1 +0\.4\.8 +.*VULNERABLE.*CVE-2026-30922' "${TM_TMP}/out" \
         || _tm_afail "X21: SCA did not query the pyasn1 0.4.8 pip installs: $(cat "${TM_TMP}/out")"
     grep -Eq '^  pyasn1 +0\.6\.4 ' "${TM_TMP}/out" && _tm_afail "X21: SCA queried the 0.6.4 a comment hides from pip"
-    tm_assert_grep "15 of 15 requirements.lock entries checked" "${TM_TMP}/out" "X21: the indented entry was not counted"
+    tm_assert_grep "16 of 16 requirements.lock entries checked" "${TM_TMP}/out" "X21: the indented entry was not counted"
     _copy; _xlock x20
     _sca_tree "${TM_TMP}/c/requirements.lock"; _sca_run
     grep -Eq '^  cffi ' "${TM_TMP}/out" && _tm_afail "X20: SCA queried the cffi pip never reads: $(cat "${TM_TMP}/out")"
-    tm_assert_grep "14 of 14 requirements.lock entries checked" "${TM_TMP}/out" "X20: SCA's count is not pip's"
+    tm_assert_grep "15 of 15 requirements.lock entries checked" "${TM_TMP}/out" "X20: SCA's count is not pip's"
     return 0
 }
 tm_case "sca-queries-the-version-pip-installs" none s_sca_queries_what_pip_installs
@@ -891,7 +897,7 @@ n_gate_refuses_encodings() {
         _copy; _nlock "$x" "${TM_TMP}/c/requirements.lock"
         RC=0; PATH="${TM_TMP}/nobin:${PATH}" TM_LOCK_OFFLINE_OK=1 bash "$GATE" --root "${TM_TMP}/c" > "${TM_TMP}/out" 2>&1 || RC=$?
         tm_assert_rc 0 "$RC" "${x}: an otherwise real lock went red: $(cat "${TM_TMP}/out")"
-        tm_assert_grep "15 packages locked" "${TM_TMP}/out" "${x}: the lock lost entries"
+        tm_assert_grep "16 packages locked" "${TM_TMP}/out" "${x}: the lock lost entries"
     done
 }
 tm_case "n01-n04-the-gate-refuses-a-lock-pip-could-decode-differently" none n_gate_refuses_encodings

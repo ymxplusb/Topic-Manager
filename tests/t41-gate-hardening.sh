@@ -32,7 +32,7 @@ g_sca_lock_parse() {
     _tree tools/sca-check.sh tools/lib requirements.txt requirements.lock install/upgrade-full.sh
     _run bash "$FX/tools/sca-check.sh" --list-pins
     tm_assert_rc 0 "$RC" "the real lock does not parse: ${OUT}"
-    tm_assert_eq 15 "$(grep -c . <<<"$OUT")" "the real lock is not 15 packages"
+    tm_assert_eq 16 "$(grep -c . <<<"$OUT")" "the real lock is not 16 packages"
     # Indented, split over a continuation, no final newline, and a DIRECT
     # package drifted to a vulnerable version in the lock.
     local L="$FX/requirements.lock"

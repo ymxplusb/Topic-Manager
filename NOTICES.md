@@ -84,6 +84,16 @@ Copyright 2007 Pallets
 
 ---
 
+## pip
+Version: 26.2.1
+License: MIT
+Copyright (c) 2008-present The pip developers
+
+The venv's own package installer (venv tooling, pinned since v1.3.3): it is
+installed into `/opt/topic-manager/venv` with the application packages.
+
+---
+
 ## SQLite
 Version: 3.45.1 (provided by Python 3.12.3 stdlib `_sqlite3`, not a separate package)
 License: Public Domain
