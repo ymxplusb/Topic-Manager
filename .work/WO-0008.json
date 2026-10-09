@@ -32,6 +32,12 @@
       "meaning": "passed",
       "verdict": "PATCH on James's direct instruction 2026-10-09 ('Can the stig Compliance section not list all the actual stigs as part of the page. Just a download CSV is fine.'); James chose v1.3.2 now + keep the summary line. One defensible approach, no panel (as WO-0005). Security: configuration data, nobody new, no route/credential/outbound change.",
       "at": "2026-10-09T22:14:38Z"
+    },
+    "build": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Builder: compliance rules table removed from SettingsTab (261b17e, + dead checkGlyph helpers), docs (e0274e7), cascade 1.3.2/?v=1302 (06c137b), mutations M913-M926 14/14 caught (f24ecbe); Linux strict all-pass. Amendment: TROUBLESHOOTING.md one paragraph. render-proof VISIBLE @ 75e6540: section shows summary + 3 buttons, 0 table/rows, CSV 83 lines = API (75 rules/80 checks + footer), 14 assets ?v=1302, rest of Settings renders.",
+      "at": "2026-10-09T22:31:49Z"
     }
   },
   "builder": {
