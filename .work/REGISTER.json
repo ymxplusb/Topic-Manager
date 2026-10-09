@@ -623,6 +623,33 @@
       "finding": "Partial-coverage gate holes reproduced by gatekeeper: py_compile/bash -n miss a deleted file; config-example doesn't require logging:; malformed top CHANGELOG heading skipped; second PYKEYS heredoc not compiled; env-neutral skips a tracked plaintext .gz; pipefail-consumers misses \"$g\" -q; a PPSM row deleted from both copies passes; TM_LOCK_METADATA lets requirements-lock pass with pycparser missing. Also sca-check.sh:217 uses grep -oP (Linux-only; fails closed on macOS).",
       "where": "tools/*",
       "closes_when": "each hole has a falsifying test case and fails"
+    },
+    {
+      "id": "REG-0061",
+      "severity": "Low",
+      "status": "open",
+      "source": "clean-room 1.0.6 -> 1.3.1 offline upgrade on tm-upgtest (PASS, cf62e67), 2026-10-09",
+      "finding": "The UPGRADE commands prepare-offline.sh prints omit emptying offline-src (find … -mindepth 1 -delete) and the checksum verification the README requires.",
+      "where": "install/prepare-offline.sh (printed UPGRADE block)",
+      "closes_when": "the printed block matches README's offline upgrade steps"
+    },
+    {
+      "id": "REG-0062",
+      "severity": "Low",
+      "status": "open",
+      "source": "clean-room 1.0.6 -> 1.3.1 offline upgrade on tm-upgtest (PASS, cf62e67), 2026-10-09",
+      "finding": "README's rule for --audit-only exit 1 ('proceed when each warning is a change this release makes') read literally says stop on a 1.0.6 host: 3 of 12 warnings (rsyslog-openssl absent, consent notice off, group re-check) are pre-existing host conditions, not release changes.",
+      "where": "README.md Upgrading / audit-only exit 1",
+      "closes_when": "the rule names which warnings are safe to proceed past, or the audit classifies them"
+    },
+    {
+      "id": "REG-0063",
+      "severity": "Low",
+      "status": "open",
+      "source": "clean-room 1.0.6 -> 1.3.1 offline upgrade on tm-upgtest (PASS, cf62e67), 2026-10-09",
+      "finding": "The rollback section does not say that --restore discards audit rows written after the restore point (the two post-upgrade sign-in rows were lost on the test host).",
+      "where": "README.md rollback; docs/INSTALL.md §12",
+      "closes_when": "docs state it, or --restore preserves/merges post-restore-point audit rows"
     }
   ]
 }

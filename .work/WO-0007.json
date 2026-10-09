@@ -1,115 +1,140 @@
 {
- "id": "WO-0007",
- "intent": "Topic Manager v1.3.1 patch: make a 1.0.x -> 1.3.x OFFLINE upgrade succeed by the docs with no workaround. Findings of James's throwaway test (v1.0.6 installed online by its own README on tm-upgtest .93, then upgraded offline to 1.3.0 by the v1.3.0 docs): P1 the upgrade fails on any online-installed 1.0.x host (Vue 0600 kept by the baseline, owner made root, Phase 12 effective-access fails, rollback); P2 the automatic rollback left 1.3.0's units on the 1.0.6 host (RESTORE INCOMPLETE, 25 items) and the next run's restore point adopted them; docs (4) an 'Upgrading from a 1.0.x host' note, (5) sudo on the polkit ls check, (6) sudo -v on NOPASSWD/no-tty hosts. Cascade to 1.3.1 (?v=1301), CHANGELOG 1.3.1 dated 2026-10-09.",
- "project": "Topic Manager",
- "release": "patch",
- "opened": "2026-10-09",
- "status": "assuring",
- "depends_on": "v1.3.0 (tag 768cf77, LIVE on prod .90). Branch release/v1.3.1 from release/v1.3.0 (ce38332, tag v1.3.0 + records) in worktree /Users/jamesrodman/Scripts/topic-manager-v131.",
- "scout": {
-  "method": "NO independent scout pass. Scope and consumers were set by the coordinator's brief (James's findings from the throwaway test) and confirmed by the builder reading every touched site; recorded so the assure lane knows the scoping check was not independent (as WO-0005).",
-  "blast_radius": "install/upgrade-full.sh Phase 10 frontend permissions and the rollback's ownership record (Phase 4 backup_owned_artefacts, LEGACY list); tests; docs; version cascade. No backend, schema, dependency, install.sh or frontend-code change.",
-  "scope": [
-   "install/upgrade-full.sh: normalise_frontend_ownership and the Phase 10 per-file frontend pass; LEGACY_V11X_VERSIONS/ARTEFACTS, legacy_artefacts, backup_owned_artefacts",
-   "tests/t04 (frontend modes), t24 (normalise signature/order), t45 (rollback by record, legacy list from tags), tests/lib/harness.sh (gittags), tests/mutations.txt",
-   "README.md (Upgrading, checklist, detached recipe), docs/INSTALL.md (section 12), TROUBLESHOOTING.md (www-data cannot read, polkit checks)",
-   "every surface in project.yml surfaces (cascade) + CHANGELOG; .work/REGISTER.json"
-  ],
-  "consumers": [
-   "normalise_frontend_ownership: called once (Phase 10); extracted by t17 (Phase 10 block), t24 (_fu), t04",
-   "the Phase 10 FE_* per-file block: t04 (whole file), mutations M23-M29",
-   "LEGACY_V11X_*: legacy_artefacts, backup_owned_artefacts' derived header, t45 (_prog extraction, l_legacy_list_is_the_tags), harness gittags",
-   "backup_owned_artefacts: Phase 4 (m_wired), t45 cases",
-   "the docs strings: no test pins the changed lines (grep of tests/ and tools/)"
-  ]
- },
- "openproject": null,
- "decisions": [
-  {
-   "by": "James",
-   "date": "2026-10-09",
-   "id": "patch-after-throwaway-test",
-   "ruling": "v1.3.1 patch on James's direct instruction after a failed throwaway test (1.0.6 online -> 1.3.0 offline). Fix P1 at the root (product-owned frontend assets get their modes from the release; deliberately narrowed operator paths elsewhere preserved; Phase 12 stays the backstop) and P2 (the in-run rollback retires every artefact the failed run installed by the same manifest logic as --restore; a restore point never records artefacts that are not the installed release's own); docs items 4-6; register anything deferred."
-  }
- ],
- "builder": {
-  "by": "builder",
-  "date": "2026-10-09",
-  "worktree": "/Users/jamesrodman/Scripts/topic-manager-v131, branch release/v1.3.1 (base ce38332)",
-  "commits": [
-   "431f2d7 fix (v1.3.1): the served tree takes the release's modes (1.0.x Vue 0600)",
-   "70d9f3f fix (v1.3.1): a failed upgrade from 1.0.x rolls back clean; no adopted leftovers",
-   "4a7a62e docs (v1.3.1): upgrading from a 1.0.x host; sudo on the polkit checks; sudo -v",
-   "98f898f tests (v1.3.1): mutation controls M875-M912; M23-M29 and M94 retired",
-   "dbfff2b release: version cascade to 1.3.1",
-   "6d701a0 tests (v1.3.1): a symlinked served tree is named as such (M877 survived)",
-   "4d0b665 tests (v1.3.1): write is closed before the served tree's modes are set (M95 survived)"
-  ],
-  "root_cause": "(P1) Phase 10 treated the OLD tree's per-file modes as operator decisions: it replayed the recorded baseline onto the release's freshly deployed files and gave only NEW files the directory's mode, then normalise_frontend_ownership re-owned the tree to root keeping modes. v1.0.x's online install.sh left lib/vue.global.prod.js at mktemp's 0600 (kept by rsync -a), servable only because www-data OWNED it; replayed under a root owner it became root:root 0600, unreadable by www-data, so Phase 12's effective-access check failed and the run rolled back. (P2) A restore point's ownership record for a manifest-less host came only from LEGACY_V11X_VERSIONS=(1.1.0 1.1.1); a 1.0.6 host (tags v1.0.6..v1.0.11 all report tm/VERSION 1.0.6) had none, so restore_owned_artefacts took its 'unknown release' branch: it retired nothing, listed every newer artefact as a problem (RESTORE INCOMPLETE), and returned before removing the newer release's INSTALL_MANIFEST. The next run's Phase 4 (backup_owned_artefacts) copied any INSTALL_MANIFEST on the host as the installed release's record without checking whose it was, so the 1.3.0 leftovers became '1.0.6's' and a later --restore kept them.",
-  "files_changed": [
-   "install/upgrade-full.sh:~1011 normalise_frontend_ownership <dir> <web-user>: release modes by the tree's access model (o+r on the dir -> root:root 0755/0644; else 0750/0640, group = dir's group if the web account is in it, else its own group); chown -R -h first, chmod -R go-w, then exact modes; symlinks refused; info line names the old mode",
-   "install/upgrade-full.sh Phase 10: the FE_DIR_MODE/FE_FILE_MODE per-file pass (baseline-skip, widen/revert) removed; normalise_frontend_ownership \"$FRONTEND_DIR\" \"$WEB_USER\" is the last word on the served tree; every other recorded path still replayed verbatim; Phase 12 recheck unchanged",
-   "install/upgrade-full.sh:~311 LEGACY_V11X_VERSIONS/ARTEFACTS -> LEGACY_VERSIONS=(1.0.6 1.1.0 1.1.1)/LEGACY_ARTEFACTS (same eight artefacts; v1.0.6..v1.0.11 lay down the identical list, measured from each tag)",
-   "install/upgrade-full.sh: manifest_release() (header's release); backup_owned_artefacts adopts INSTALL_MANIFEST only when it names the installed version (and that is not 'unknown'), else warns 'names release X, not the installed vY' and derives from the shipped list (or no record)",
-   "tests/t04-frontend-mode.sh rewritten (11 cases): function access models, symlinks, missing web account, secondary reader group (id stub), and the REAL Phase 10 block on a 1.0.x layout (Vue 0600 web- or root-owned) asked of the kernel as www-data, with a 0400 TLS key, 0600 drop-in and 0600 config.yaml preserved",
-   "tests/t24: _fu passes the web account; order case anchors on the baseline replay",
-   "tests/t45: _prog extracts LEGACY_VERSIONS + manifest_release; p2 a-failed-upgrade-from-1.0.6-rolls-back-clean-by-record (THIS tree as the newer release); p2 a-restore-point-never-adopts-a-newer-releases-leftover-manifest (+ unknown version, own manifest still adopted); l_legacy list and version set re-derived from v1.0.6..v1.0.11, v1.1.0, v1.1.1 and v1.2.0 writes a manifest",
-   "tests/lib/harness.sh: gittags requires those nine tags (subshell loop)",
-   "tests/mutations.txt: M23-M29, M94 retired (anchors gone); M875-M912 added",
-   "README.md: 'Upgrading from a 1.0.x host'; Phase 10 row; sudo ls polkit; sudo -n true || sudo -v. docs/INSTALL.md s12 pointer + sudo recipe. TROUBLESHOOTING.md: www-data cannot read (no chmod go+rX; release modes / traversal / ACL / MAC), sudo on both polkit ls and grep -c",
-   "cascade: VERSION, tm/VERSION, PPSM.csv, SettingsTab PPSM row, install.sh + prepare-offline.sh headers, SBOM.md (version, serial, date 2026-10-09), docs/INSTALL.md, README (title, health), main.css header, index.html (14) + TopBar.js + AboutModal.js ?v=1301, CHANGELOG [1.3.1] - 2026-10-09, .claude/project.yml (hazard old-host-state-is-not-the-operators; repo-tests tag note)",
-   ".work/REGISTER.json REG-0053..0055"
-  ],
-  "amendments": [
-   "tests/lib/harness.sh - not in the brief's list of files but required: t45's gittags requirement named only v1.1.0/v1.1.1, and the case now reads nine tags (a missing tag must SKIP, which --strict fails, not error)"
-  ],
-  "consumers_addressed": "All: t17 Phase 10 extraction still passes with the new call (14/0/0); t24 _fu and order case updated; t04 rewritten (it tested the removed per-file pass); M23-M29/M94 retired with a note, every other anchor re-checked (887 records, 0 unmatched); t45 extraction and legacy-list case updated; harness gittags. install.sh untouched (its normalise_frontend_install already sets root:root 0755/0644 on a fresh install). .gitlab-ci.yml comment still says t45 needs 'the v1.1.0 and v1.1.1 TAGS' - stale wording only (CI fetches every tag); not edited.",
-  "self_check": "bash -n on every edited shell file; git diff v1.3.0..HEAD re-read for the contract hazards (no | grep -q / | head under pipefail in tests - pipefail-consumers gate rc 0; no failure message asserting a state the path cannot guarantee - the refusal says 'an upgrade that did not finish leaves one behind', not 'left it'); node --check covered by the frontend-syntax gate in the Linux container (no node on the Mac).",
-  "gates": {
-   "where": "fresh python:3.12-bookworm containers on 192.168.202.81 from a git bundle --all (11 tags) of the head, CI TEST_SETUP (sudo nodejs jq curl nginx + requirements.lock hash-checked); container --rm",
-   "head": "4d0b665 (code head; the records commit after it touches .work/ only)",
-   "test_command": "check-requirements-lock --require-online PASS (15 releases); tests/run.sh --strict 559 passed, 0 failed, 0 skipped, rc 0 (558/0/0 at 6d701a0)",
-   "python-syntax": "rc 0",
-   "shell-syntax": "rc 0",
-   "frontend-syntax": "rc 0 (12 scripts)",
-   "config-example": "rc 0",
-   "heredoc-python": "rc 0 (11)",
-   "sbom-consistency": "rc 0",
-   "ppsm-consistency": "rc 0 (37 rows)",
-   "stig-compliance": "rc 0",
-   "pipefail-consumers": "rc 0 (61 files)",
-   "env-neutral": "rc 0 (161 files)",
-   "version-surfaces": "rc 0 (1.3.1, 16 tokens ?v=1301)",
-   "requirements-lock": "rc 0 (--require-online)",
-   "sca": "rc 1 RED: Werkzeug 3.1.8 GHSA-g6x2-hccm-hh4m (CVE-2026-102598, MODERATE, CWE-67 Windows device names in safe_join; fixed 3.1.9; reviewed 2026-10-05, after v1.3.0). Not a v1.3.1 regression (v1.3.0 has the same pin). Out of this patch's scope: REG-0055, needs James.",
-   "sonar-local": "rc 2 COULD NOT RUN: 'the docker disk (/var/lib/docker) is 91% full (limit 90%)' on .81 (768cf77 -> 6d701a0). 136 docker volumes (48.35 GB, none in use, not mine; 134 at WO-0006) hold the disk there. Not pruned: deleting another tool's volumes on the GitLab server needs James. NOT a pass.",
-   "shellcheck": "not run (unavailable_gates: installed only on prod .90, which is out of bounds)",
-   "host_cleanup": "every container I started (tm-v131-b, -gate, -mut, -gate2) removed; /tmp/tm-v131-builder removed; docker volumes 136 before and after; no network left. The one container listed afterwards is a GitLab runner job of project 8, not this lane's."
+  "id": "WO-0007",
+  "intent": "Topic Manager v1.3.1 patch: make a 1.0.x -> 1.3.x OFFLINE upgrade succeed by the docs with no workaround. Findings of James's throwaway test (v1.0.6 installed online by its own README on tm-upgtest .93, then upgraded offline to 1.3.0 by the v1.3.0 docs): P1 the upgrade fails on any online-installed 1.0.x host (Vue 0600 kept by the baseline, owner made root, Phase 12 effective-access fails, rollback); P2 the automatic rollback left 1.3.0's units on the 1.0.6 host (RESTORE INCOMPLETE, 25 items) and the next run's restore point adopted them; docs (4) an 'Upgrading from a 1.0.x host' note, (5) sudo on the polkit ls check, (6) sudo -v on NOPASSWD/no-tty hosts. Cascade to 1.3.1 (?v=1301), CHANGELOG 1.3.1 dated 2026-10-09.",
+  "project": "Topic Manager",
+  "release": "patch",
+  "opened": "2026-10-09",
+  "status": "assuring",
+  "depends_on": "v1.3.0 (tag 768cf77, LIVE on prod .90). Branch release/v1.3.1 from release/v1.3.0 (ce38332, tag v1.3.0 + records) in worktree /Users/jamesrodman/Scripts/topic-manager-v131.",
+  "scout": {
+    "method": "NO independent scout pass. Scope and consumers were set by the coordinator's brief (James's findings from the throwaway test) and confirmed by the builder reading every touched site; recorded so the assure lane knows the scoping check was not independent (as WO-0005).",
+    "blast_radius": "install/upgrade-full.sh Phase 10 frontend permissions and the rollback's ownership record (Phase 4 backup_owned_artefacts, LEGACY list); tests; docs; version cascade. No backend, schema, dependency, install.sh or frontend-code change.",
+    "scope": [
+      "install/upgrade-full.sh: normalise_frontend_ownership and the Phase 10 per-file frontend pass; LEGACY_V11X_VERSIONS/ARTEFACTS, legacy_artefacts, backup_owned_artefacts",
+      "tests/t04 (frontend modes), t24 (normalise signature/order), t45 (rollback by record, legacy list from tags), tests/lib/harness.sh (gittags), tests/mutations.txt",
+      "README.md (Upgrading, checklist, detached recipe), docs/INSTALL.md (section 12), TROUBLESHOOTING.md (www-data cannot read, polkit checks)",
+      "every surface in project.yml surfaces (cascade) + CHANGELOG; .work/REGISTER.json"
+    ],
+    "consumers": [
+      "normalise_frontend_ownership: called once (Phase 10); extracted by t17 (Phase 10 block), t24 (_fu), t04",
+      "the Phase 10 FE_* per-file block: t04 (whole file), mutations M23-M29",
+      "LEGACY_V11X_*: legacy_artefacts, backup_owned_artefacts' derived header, t45 (_prog extraction, l_legacy_list_is_the_tags), harness gittags",
+      "backup_owned_artefacts: Phase 4 (m_wired), t45 cases",
+      "the docs strings: no test pins the changed lines (grep of tests/ and tools/)"
+    ]
   },
-  "mutation_controls": {
-   "harness": "tests/mutate.sh + tests/mutations.txt (tools/mutate.py does not exist in this repo; this is its mechanical harness)",
-   "targeted": "M875-M912 at the tree before 6d701a0: 38 run, 35 killed, 1 SURVIVED, 2 documented equivalents (M895, M904). SURVIVOR M877 (the served tree's own symlink guard neutralised): find -P reports a symlinked start point as -type l, so the second guard refused it anyway; the first guard's value is the accurate message, which t04 now asserts (6d701a0). M877 re-run: RED.",
-   "full_run": "EVERY control (887 records) at 6d701a0, one fresh container, 6 chunks in parallel (t36/t52 port users in one): 887 run, 872 killed, 1 SURVIVED, 0 unproven, 0 aborted, 14 documented equivalents (pre-existing M14 M45 M87 M103 M141 M142 M183 M254 M388 M462 M686 M858, new M895 M904); every target sha256 unchanged.",
-   "survivor_full_run": "M95 (drop `chmod -R go-w` in normalise_frontend_ownership) SURVIVED: a pre-existing control that went quiet BECAUSE of the P1 fix (the exact modes now set every bit afterwards, so no end state differs). The line's remaining job is closing group/other write before root sets modes BY NAME (find -exec chmod): t04 write-is-closed-before-modes-are-set-by-name spies on those finds (4d0b665). M95 re-run at 4d0b665 with every other t04-covered control (24): 24 killed, 0 survived. M895 (identical to M95) withdrawn.",
-   "net": "886 controls, 0 survivors, 14 documented equivalents after 4d0b665 (887 run once at 6d701a0; the 24 t04 controls re-run at 4d0b665)",
-   "retired": "M23-M29 and M94 (their code was removed/rewritten by P1; unmatched anchors abort, they are not passes)",
-   "security_mutation": "M893/M894 (tree not re-owned / only its top) and M885/M886/M888 (group-scoped tree widened to other, or given root's group) all RED; M905 (adopt any manifest: the P2 defect) RED; M899 (1.0.6 dropped from the shipped list: the P2 defect) RED; M875/M897 (the P1 defect) RED."
-  },
-  "not_done": [
-   "sca gate RED (REG-0055, Werkzeug 3.1.8 advisory published after v1.3.0): a dependency bump is outside this patch's brief; James to choose bump-in-1.3.1 or accept.",
-   "sonar-local could not run (exit 2): the .81 docker disk is 91% with 48 GB of idle volumes that are not this lane's; freeing them needs James's approval. No Sonar claim is made for 1.3.1.",
-   "Not proven on a real host: the throwaway re-test on tm-upgtest (.93) follows (not touched here). Fixtures model the 1.0.6 layout and THIS tree's artefacts; the real Phase 9/12 path, restore_verdict's health/version check and the rest of the 25 INCOMPLETE items are proven only by that re-test.",
-   "Hosts reporting tm/VERSION 1.0.0-1.0.5 still have no shipped list (REG-0053). 1.0.x files a v1.3.0 rollback already overwrote (nginx-test unit, polkit rule) are recorded as found (REG-0054); README says to revert the pre-attempt snapshot.",
-   "shellcheck not run (only on prod .90). No render proof needed: no UI change beyond the ?v= token.",
-   ".gitlab-ci.yml comment still says t45 needs 'the v1.1.0 and v1.1.1 TAGS' (stale wording; CI fetches all tags). Not edited."
+  "openproject": null,
+  "decisions": [
+    {
+      "by": "James",
+      "date": "2026-10-09",
+      "id": "patch-after-throwaway-test",
+      "ruling": "v1.3.1 patch on James's direct instruction after a failed throwaway test (1.0.6 online -> 1.3.0 offline). Fix P1 at the root (product-owned frontend assets get their modes from the release; deliberately narrowed operator paths elsewhere preserved; Phase 12 stays the backstop) and P2 (the in-run rollback retires every artefact the failed run installed by the same manifest logic as --restore; a restore point never records artefacts that are not the installed release's own); docs items 4-6; register anything deferred."
+    }
   ],
-  "red_without_fix": {
-   "P1": "t04 against the v1.3.0 upgrade script: 9 of 11 FAIL, incl. both Phase 10 cases: 'the KERNEL says www-data cannot read lib/vue.global.prod.js (root:root 600)' - the throwaway finding exactly.",
-   "P2a": "LEGACY_VERSIONS back to (1.1.0 1.1.1): 3 FAIL; with the record-shape assertions removed the consequence still fails ('the rollback to 1.0.6 is RESTORE INCOMPLETE: PROBLEM|not retired: ...').",
-   "P2b": "adoption back to [[ -f $INSTALL_MANIFEST ]]: 1 FAIL; with the record assertions removed: 'the newer release's topic-manager-apply-audit.path survived the rollback to 1.0.6'."
+  "builder": {
+    "by": "builder",
+    "date": "2026-10-09",
+    "worktree": "/Users/jamesrodman/Scripts/topic-manager-v131, branch release/v1.3.1 (base ce38332)",
+    "commits": [
+      "431f2d7 fix (v1.3.1): the served tree takes the release's modes (1.0.x Vue 0600)",
+      "70d9f3f fix (v1.3.1): a failed upgrade from 1.0.x rolls back clean; no adopted leftovers",
+      "4a7a62e docs (v1.3.1): upgrading from a 1.0.x host; sudo on the polkit checks; sudo -v",
+      "98f898f tests (v1.3.1): mutation controls M875-M912; M23-M29 and M94 retired",
+      "dbfff2b release: version cascade to 1.3.1",
+      "6d701a0 tests (v1.3.1): a symlinked served tree is named as such (M877 survived)",
+      "4d0b665 tests (v1.3.1): write is closed before the served tree's modes are set (M95 survived)"
+    ],
+    "root_cause": "(P1) Phase 10 treated the OLD tree's per-file modes as operator decisions: it replayed the recorded baseline onto the release's freshly deployed files and gave only NEW files the directory's mode, then normalise_frontend_ownership re-owned the tree to root keeping modes. v1.0.x's online install.sh left lib/vue.global.prod.js at mktemp's 0600 (kept by rsync -a), servable only because www-data OWNED it; replayed under a root owner it became root:root 0600, unreadable by www-data, so Phase 12's effective-access check failed and the run rolled back. (P2) A restore point's ownership record for a manifest-less host came only from LEGACY_V11X_VERSIONS=(1.1.0 1.1.1); a 1.0.6 host (tags v1.0.6..v1.0.11 all report tm/VERSION 1.0.6) had none, so restore_owned_artefacts took its 'unknown release' branch: it retired nothing, listed every newer artefact as a problem (RESTORE INCOMPLETE), and returned before removing the newer release's INSTALL_MANIFEST. The next run's Phase 4 (backup_owned_artefacts) copied any INSTALL_MANIFEST on the host as the installed release's record without checking whose it was, so the 1.3.0 leftovers became '1.0.6's' and a later --restore kept them.",
+    "files_changed": [
+      "install/upgrade-full.sh:~1011 normalise_frontend_ownership <dir> <web-user>: release modes by the tree's access model (o+r on the dir -> root:root 0755/0644; else 0750/0640, group = dir's group if the web account is in it, else its own group); chown -R -h first, chmod -R go-w, then exact modes; symlinks refused; info line names the old mode",
+      "install/upgrade-full.sh Phase 10: the FE_DIR_MODE/FE_FILE_MODE per-file pass (baseline-skip, widen/revert) removed; normalise_frontend_ownership \"$FRONTEND_DIR\" \"$WEB_USER\" is the last word on the served tree; every other recorded path still replayed verbatim; Phase 12 recheck unchanged",
+      "install/upgrade-full.sh:~311 LEGACY_V11X_VERSIONS/ARTEFACTS -> LEGACY_VERSIONS=(1.0.6 1.1.0 1.1.1)/LEGACY_ARTEFACTS (same eight artefacts; v1.0.6..v1.0.11 lay down the identical list, measured from each tag)",
+      "install/upgrade-full.sh: manifest_release() (header's release); backup_owned_artefacts adopts INSTALL_MANIFEST only when it names the installed version (and that is not 'unknown'), else warns 'names release X, not the installed vY' and derives from the shipped list (or no record)",
+      "tests/t04-frontend-mode.sh rewritten (11 cases): function access models, symlinks, missing web account, secondary reader group (id stub), and the REAL Phase 10 block on a 1.0.x layout (Vue 0600 web- or root-owned) asked of the kernel as www-data, with a 0400 TLS key, 0600 drop-in and 0600 config.yaml preserved",
+      "tests/t24: _fu passes the web account; order case anchors on the baseline replay",
+      "tests/t45: _prog extracts LEGACY_VERSIONS + manifest_release; p2 a-failed-upgrade-from-1.0.6-rolls-back-clean-by-record (THIS tree as the newer release); p2 a-restore-point-never-adopts-a-newer-releases-leftover-manifest (+ unknown version, own manifest still adopted); l_legacy list and version set re-derived from v1.0.6..v1.0.11, v1.1.0, v1.1.1 and v1.2.0 writes a manifest",
+      "tests/lib/harness.sh: gittags requires those nine tags (subshell loop)",
+      "tests/mutations.txt: M23-M29, M94 retired (anchors gone); M875-M912 added",
+      "README.md: 'Upgrading from a 1.0.x host'; Phase 10 row; sudo ls polkit; sudo -n true || sudo -v. docs/INSTALL.md s12 pointer + sudo recipe. TROUBLESHOOTING.md: www-data cannot read (no chmod go+rX; release modes / traversal / ACL / MAC), sudo on both polkit ls and grep -c",
+      "cascade: VERSION, tm/VERSION, PPSM.csv, SettingsTab PPSM row, install.sh + prepare-offline.sh headers, SBOM.md (version, serial, date 2026-10-09), docs/INSTALL.md, README (title, health), main.css header, index.html (14) + TopBar.js + AboutModal.js ?v=1301, CHANGELOG [1.3.1] - 2026-10-09, .claude/project.yml (hazard old-host-state-is-not-the-operators; repo-tests tag note)",
+      ".work/REGISTER.json REG-0053..0055"
+    ],
+    "amendments": [
+      "tests/lib/harness.sh - not in the brief's list of files but required: t45's gittags requirement named only v1.1.0/v1.1.1, and the case now reads nine tags (a missing tag must SKIP, which --strict fails, not error)"
+    ],
+    "consumers_addressed": "All: t17 Phase 10 extraction still passes with the new call (14/0/0); t24 _fu and order case updated; t04 rewritten (it tested the removed per-file pass); M23-M29/M94 retired with a note, every other anchor re-checked (887 records, 0 unmatched); t45 extraction and legacy-list case updated; harness gittags. install.sh untouched (its normalise_frontend_install already sets root:root 0755/0644 on a fresh install). .gitlab-ci.yml comment still says t45 needs 'the v1.1.0 and v1.1.1 TAGS' - stale wording only (CI fetches every tag); not edited.",
+    "self_check": "bash -n on every edited shell file; git diff v1.3.0..HEAD re-read for the contract hazards (no | grep -q / | head under pipefail in tests - pipefail-consumers gate rc 0; no failure message asserting a state the path cannot guarantee - the refusal says 'an upgrade that did not finish leaves one behind', not 'left it'); node --check covered by the frontend-syntax gate in the Linux container (no node on the Mac).",
+    "gates": {
+      "where": "fresh python:3.12-bookworm containers on 192.168.202.81 from a git bundle --all (11 tags) of the head, CI TEST_SETUP (sudo nodejs jq curl nginx + requirements.lock hash-checked); container --rm",
+      "head": "4d0b665 (code head; the records commit after it touches .work/ only)",
+      "test_command": "check-requirements-lock --require-online PASS (15 releases); tests/run.sh --strict 559 passed, 0 failed, 0 skipped, rc 0 (558/0/0 at 6d701a0)",
+      "python-syntax": "rc 0",
+      "shell-syntax": "rc 0",
+      "frontend-syntax": "rc 0 (12 scripts)",
+      "config-example": "rc 0",
+      "heredoc-python": "rc 0 (11)",
+      "sbom-consistency": "rc 0",
+      "ppsm-consistency": "rc 0 (37 rows)",
+      "stig-compliance": "rc 0",
+      "pipefail-consumers": "rc 0 (61 files)",
+      "env-neutral": "rc 0 (161 files)",
+      "version-surfaces": "rc 0 (1.3.1, 16 tokens ?v=1301)",
+      "requirements-lock": "rc 0 (--require-online)",
+      "sca": "rc 1 RED: Werkzeug 3.1.8 GHSA-g6x2-hccm-hh4m (CVE-2026-102598, MODERATE, CWE-67 Windows device names in safe_join; fixed 3.1.9; reviewed 2026-10-05, after v1.3.0). Not a v1.3.1 regression (v1.3.0 has the same pin). Out of this patch's scope: REG-0055, needs James.",
+      "sonar-local": "rc 2 COULD NOT RUN: 'the docker disk (/var/lib/docker) is 91% full (limit 90%)' on .81 (768cf77 -> 6d701a0). 136 docker volumes (48.35 GB, none in use, not mine; 134 at WO-0006) hold the disk there. Not pruned: deleting another tool's volumes on the GitLab server needs James. NOT a pass.",
+      "shellcheck": "not run (unavailable_gates: installed only on prod .90, which is out of bounds)",
+      "host_cleanup": "every container I started (tm-v131-b, -gate, -mut, -gate2) removed; /tmp/tm-v131-builder removed; docker volumes 136 before and after; no network left. The one container listed afterwards is a GitLab runner job of project 8, not this lane's."
+    },
+    "mutation_controls": {
+      "harness": "tests/mutate.sh + tests/mutations.txt (tools/mutate.py does not exist in this repo; this is its mechanical harness)",
+      "targeted": "M875-M912 at the tree before 6d701a0: 38 run, 35 killed, 1 SURVIVED, 2 documented equivalents (M895, M904). SURVIVOR M877 (the served tree's own symlink guard neutralised): find -P reports a symlinked start point as -type l, so the second guard refused it anyway; the first guard's value is the accurate message, which t04 now asserts (6d701a0). M877 re-run: RED.",
+      "full_run": "EVERY control (887 records) at 6d701a0, one fresh container, 6 chunks in parallel (t36/t52 port users in one): 887 run, 872 killed, 1 SURVIVED, 0 unproven, 0 aborted, 14 documented equivalents (pre-existing M14 M45 M87 M103 M141 M142 M183 M254 M388 M462 M686 M858, new M895 M904); every target sha256 unchanged.",
+      "survivor_full_run": "M95 (drop `chmod -R go-w` in normalise_frontend_ownership) SURVIVED: a pre-existing control that went quiet BECAUSE of the P1 fix (the exact modes now set every bit afterwards, so no end state differs). The line's remaining job is closing group/other write before root sets modes BY NAME (find -exec chmod): t04 write-is-closed-before-modes-are-set-by-name spies on those finds (4d0b665). M95 re-run at 4d0b665 with every other t04-covered control (24): 24 killed, 0 survived. M895 (identical to M95) withdrawn.",
+      "net": "886 controls, 0 survivors, 14 documented equivalents after 4d0b665 (887 run once at 6d701a0; the 24 t04 controls re-run at 4d0b665)",
+      "retired": "M23-M29 and M94 (their code was removed/rewritten by P1; unmatched anchors abort, they are not passes)",
+      "security_mutation": "M893/M894 (tree not re-owned / only its top) and M885/M886/M888 (group-scoped tree widened to other, or given root's group) all RED; M905 (adopt any manifest: the P2 defect) RED; M899 (1.0.6 dropped from the shipped list: the P2 defect) RED; M875/M897 (the P1 defect) RED."
+    },
+    "not_done": [
+      "sca gate RED (REG-0055, Werkzeug 3.1.8 advisory published after v1.3.0): a dependency bump is outside this patch's brief; James to choose bump-in-1.3.1 or accept.",
+      "sonar-local could not run (exit 2): the .81 docker disk is 91% with 48 GB of idle volumes that are not this lane's; freeing them needs James's approval. No Sonar claim is made for 1.3.1.",
+      "Not proven on a real host: the throwaway re-test on tm-upgtest (.93) follows (not touched here). Fixtures model the 1.0.6 layout and THIS tree's artefacts; the real Phase 9/12 path, restore_verdict's health/version check and the rest of the 25 INCOMPLETE items are proven only by that re-test.",
+      "Hosts reporting tm/VERSION 1.0.0-1.0.5 still have no shipped list (REG-0053). 1.0.x files a v1.3.0 rollback already overwrote (nginx-test unit, polkit rule) are recorded as found (REG-0054); README says to revert the pre-attempt snapshot.",
+      "shellcheck not run (only on prod .90). No render proof needed: no UI change beyond the ?v= token.",
+      ".gitlab-ci.yml comment still says t45 needs 'the v1.1.0 and v1.1.1 TAGS' (stale wording; CI fetches all tags). Not edited."
+    ],
+    "red_without_fix": {
+      "P1": "t04 against the v1.3.0 upgrade script: 9 of 11 FAIL, incl. both Phase 10 cases: 'the KERNEL says www-data cannot read lib/vue.global.prod.js (root:root 600)' - the throwaway finding exactly.",
+      "P2a": "LEGACY_VERSIONS back to (1.1.0 1.1.1): 3 FAIL; with the record-shape assertions removed the consequence still fails ('the rollback to 1.0.6 is RESTORE INCOMPLETE: PROBLEM|not retired: ...').",
+      "P2b": "adoption back to [[ -f $INSTALL_MANIFEST ]]: 1 FAIL; with the record assertions removed: 'the newer release's topic-manager-apply-audit.path survived the rollback to 1.0.6'."
+    }
+  },
+  "stages": {
+    "decide": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "PATCH on James's direct choice 2026-10-09 ('Build v1.3.1 patch (Recommended)') after the throwaway 1.0.6 -> 1.3.0 offline upgrade FAILED (P1 Vue 0600 -> Phase 12 rollback; P2 rollback left 1.3.0 units) + 3 doc defects; one defensible approach, no panel (process scaled to the change, as WO-0005). Scope widened by James 2026-10-09: Werkzeug 3.1.9 (CVE-2026-102598).",
+      "at": "2026-10-09T20:44:22Z"
+    },
+    "build": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Builder: P1 served tree takes release modes (Phase 10), P2 1.0.6 shipped-files list + version-matched manifest, docs (1.0.x warning, sudo, no sudo -v), cascade 1.3.1/?v=1301; strict 559/0/0, mutation 887/872 caught (14 equivalent, misses closed). Amendment: Werkzeug 3.1.9 + regenerated lock (MarkupSafe 3.0.4, pycparser 3.11) @ ae51ddd on James's approval.",
+      "at": "2026-10-09T20:44:22Z"
+    },
+    "assure": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Gatekeeper SHIP YES @ cf62e67: 15/15 gates exit 0, each falsified (run 1 RED on stale t25 anchor -> fixed); sca green (Werkzeug 3.1.9), sonar-local 0 new vs v1.3.0 after James-approved .81 volume prune; clean-room 1.0.6 -> 1.3.1 offline on fresh tm-upgtest PASS first try, no workaround, rollback leaves no 1.3.x artifact. Register REG-0056..0063 (MED/LOW). Not re-run: adversary/sec-review/DAST (dependency + installer-only delta).",
+      "at": "2026-10-09T20:44:22Z"
+    }
+  },
+  "register_note": "REG-0053 (pre-1.0.6 hosts have no shipped list), REG-0054 (1.0.x files a v1.3.0 rollback already overwrote are recorded as found), REG-0055 (sca RED: Werkzeug 3.1.8 GHSA-g6x2-hccm-hh4m, out of this patch's scope).",
+  "openproject_note": "No OpenProject ticket was opened for this patch (builder-scoped from James's direct instruction); not backfilled.",
+  "assure": {
+    "gatekeeper": "cf62e67: 15/15 gates exit 0, each falsified (sbom-consistency NOTICES-transitive half cannot fail: REG-0056). repo-tests strict 559/0/0. Run 1 at ae51ddd was RED (t25 MarkupSafe anchor) -> fixed cf62e67. sca green after Werkzeug 3.1.9 (James approved); sonar-local ran after James approved pruning 136 unused runner-cache volumes on .81 (91% -> 42%).",
+    "clean_room": "tm-upgtest .93 re-cloned from template; v1.0.6 online by its README (Vue 0600 www-data reproduced P1); 1.3.1 offline bundle sha256 e61c300c…866b; audit exit 1 (12 WARN, 0 BLOCK), backup 0, upgrade RESULT exit 0 first try, NO workaround; restore -> 1.0.6 with every 1.3.x-only artifact absent (P2 proven); re-upgrade exit 0. PASS. Upgrade-doc defects REG-0061..0063 (LOW). v1.0.6's own install-doc defects (ufw syntax exit 1, unpinned clone, etc.) are historical, not fixable in 1.3.1.",
+    "registered": "REG-0056..0063",
+    "not_run": "adversary/sec-review not re-run for this patch's Werkzeug delta (dependency-only; sca + lock gates cover it); DAST not re-run (no route/UI change beyond AboutModal version string)"
   }
- },
- "stages": {},
- "register_note": "REG-0053 (pre-1.0.6 hosts have no shipped list), REG-0054 (1.0.x files a v1.3.0 rollback already overwrote are recorded as found), REG-0055 (sca RED: Werkzeug 3.1.8 GHSA-g6x2-hccm-hh4m, out of this patch's scope).",
- "openproject_note": "No OpenProject ticket was opened for this patch (builder-scoped from James's direct instruction); not backfilled."
 }
