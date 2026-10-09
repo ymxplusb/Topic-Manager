@@ -1,0 +1,84 @@
+{
+  "id": "WO-0008",
+  "intent": "v1.3.2 patch (James 2026-10-09): Settings > STIG compliance should NOT list every rule on the page — 'Just a download CSV is fine.' Remove the 75-row rules table; KEEP the one-line summary (Host last measured / Open items) and the Download CSV / Measure host now / Refresh buttons + status. CSV content unchanged.",
+  "project": "topic-manager",
+  "release": {
+    "class": "patch",
+    "version": "1.3.2"
+  },
+  "opened": "2026-10-09",
+  "status": "assuring",
+  "depends_on": [
+    "WO-0007"
+  ],
+  "decisions": {
+    "release_class": "patch",
+    "new_infrastructure": "no",
+    "approaches": "one (remove the table)",
+    "security": {
+      "data": "configuration",
+      "reach": "nobody new",
+      "route_change": "no",
+      "credential": "no",
+      "outbound_call": "no"
+    },
+    "summary_line": "keep (James)",
+    "when": "v1.3.2 now (James)"
+  },
+  "openproject_note": "No ticket: patch on James's direct instruction (as WO-0005/WO-0007).",
+  "stages": {
+    "decide": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "PATCH on James's direct instruction 2026-10-09 ('Can the stig Compliance section not list all the actual stigs as part of the page. Just a download CSV is fine.'); James chose v1.3.2 now + keep the summary line. One defensible approach, no panel (as WO-0005). Security: configuration data, nobody new, no route/credential/outbound change.",
+      "at": "2026-10-09T22:14:38Z"
+    }
+  },
+  "builder": {
+    "at": "2026-10-09",
+    "scope_source": "the coordinator's brief (WO had no scout section; scope items 1-7 taken as scout.scope)",
+    "root_cause": "Not a defect: by design (v1.3.0, DQ3) the STIG compliance section rendered every rule of /api/compliance as a 75-row table; James 2026-10-09 wants only the summary and the CSV download.",
+    "commits": [
+      "261b17e settings: section without the rules table; t51 assertions",
+      "e0274e7 docs",
+      "06c137b release: version cascade to 1.3.2",
+      "f24ecbe tests: mutation controls M913-M926"
+    ],
+    "files_changed": {
+      "app/components/SettingsTab.js": "rules table removed; settingsCheckGlyph/SETTINGS_CHECK_GLYPHS/checkGlyph removed (used only by the table, grep-proved); section comment updated; PPSM Version row 1.3.2. settingsComplianceCsv, loadCompliance, downloadCompliance, mounted() unchanged.",
+      "tests/t51-host-checks-v130.sh": "a_settings_v130: section has no table/rows/compliance.rules/.checks; title, Download CSV, Measure host now, Refresh, status block, error line present; summary rendered for measured+open items and never-measured+none; mounted fetches; loadCompliance GETs /api/compliance and keeps the document; download == settingsComplianceCsv(doc) exactly (was startsWith).",
+      "tests/mutations.txt": "M913-M926 (TARGET settings, t51)",
+      "README.md, docs/INSTALL.md, docs/STIG-COMPLIANCE.md, TROUBLESHOOTING.md": "page described as summary + Download CSV",
+      "version cascade": "VERSION, tm/VERSION, PPSM.csv, SBOM.md, README.md, docs/INSTALL.md, main.css, install.sh, prepare-offline.sh, index.html(14)+TopBar.js+AboutModal.js ?v=1302, CHANGELOG [1.3.2] - 2026-10-09"
+    },
+    "css": "no dead CSS: .compliance-table had no rule in app/styles; .dt and .host-note are used elsewhere. No CSS edit beyond the version header.",
+    "api_change": "none (tm/ untouched apart from tm/VERSION)",
+    "amendments": [
+      "TROUBLESHOOTING.md - its site_log_modes paragraph said 'On the compliance page'; a doc describing the page, so inside item 4's intent but not named in the brief"
+    ],
+    "verification": {
+      "where": "fresh python:3.12-bookworm container on .81 (sudo -n docker run --rm), tree shipped as git bundle --all (12 tags), CI TEST_SETUP verbatim; temp dir removed, no container left",
+      "tests_run_strict": "559 passed, 0 failed, 0 skipped (exit 0)",
+      "gates": {
+        "requirements-lock --require-online": 0,
+        "version-surfaces": 0,
+        "frontend-syntax": 0,
+        "env-neutral": 0,
+        "sbom-consistency": 0,
+        "ppsm-consistency": 0,
+        "stig-compliance": 0
+      },
+      "not_run": "sca-check, sonar (gatekeeper's)"
+    },
+    "mutation_controls": {
+      "run": 14,
+      "killed": 14,
+      "survived": 0,
+      "aborted": 0,
+      "equivalent": 0,
+      "ids": "M913 table back, M914 rules as a list, M915 summary gone, M916 open-items join, M917 never-measured text, M918 Download CSV gone, M919 Measure gone, M920 Refresh gone, M921 status state gone, M922 error line gone, M923 no fetch on mount, M924 wrong URL, M925 document not kept, M926 download drops a rule",
+      "finding": "M926 would have SURVIVED the pre-existing assertion (download only checked startsWith '\"Rule\"'); closed by asserting the download equals settingsComplianceCsv(doc)."
+    },
+    "reg": "none needed"
+  }
+}
