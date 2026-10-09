@@ -158,7 +158,7 @@ License: BSD-3-Clause
 Copyright 2007 Pallets
 
 ## MarkupSafe
-Version: 3.0.3
+Version: 3.0.4
 License: BSD-3-Clause
 Copyright 2010 Pallets
 
@@ -168,7 +168,7 @@ License: MIT
 Copyright the cffi developers (Armin Rigo, Maciej Fijalkowski)
 
 ## pycparser
-Version: 3.0
+Version: 3.11
 License: BSD-3-Clause
 Copyright (c) 2008-2020 Eli Bendersky
 

@@ -577,6 +577,52 @@
       "where": "requirements.txt, requirements.lock (+ SBOM.md, NOTICES.md, AboutModal.js dependency table, by the sbom-consistency gate)",
       "closes_when": "Werkzeug pinned at 3.1.9 (or later) with the lock regenerated online, SBOM/NOTICES/AboutModal moved, sca exit 0 — in v1.3.1 if James widens its scope, otherwise the next release; or James accepts it for v1.3.1 with the reason recorded",
       "closed_by": "v1.3.1: Werkzeug 3.1.9 (James approved the bump 2026-10-09); lock regenerated online, also MarkupSafe 3.0.4 + pycparser 3.11; SBOM/NOTICES/AboutModal moved; lock + sbom-consistency gates exit 0"
+    },
+    {
+      "id": "REG-0056",
+      "severity": "Medium",
+      "status": "open",
+      "source": "WO-0007 gatekeeper (v1.3.1 @ ae51ddd), 2026-10-09",
+      "finding": "NOTICES.md per-package sections said MarkupSafe 3.0.3 / pycparser 3.0 while its table and the lock said 3.0.4 / 3.11; sbom-consistency compares NOTICES/About only against requirements.txt, so transitive versions there are never checked.",
+      "where": "NOTICES.md:161,171; tools/check-sbom-consistency.sh",
+      "closes_when": "the gate compares transitive versions in NOTICES sections and AboutModal against the lock (the two lines were fixed in v1.3.1; the gate hole stays open)",
+      "note": "the two stale NOTICES lines were fixed in v1.3.1; what stays open is the gate hole"
+    },
+    {
+      "id": "REG-0057",
+      "severity": "Medium",
+      "status": "open",
+      "source": "WO-0007 gatekeeper (v1.3.1 @ ae51ddd), 2026-10-09",
+      "finding": "frontend-syntax stays green when the app/main.js script tag is removed from index.html (11 scripts parse, exit 0) though the app would never mount.",
+      "where": "tools/check-frontend-syntax.sh",
+      "closes_when": "the gate requires the entry script(s) to be present, with a test case"
+    },
+    {
+      "id": "REG-0058",
+      "severity": "Medium",
+      "status": "open",
+      "source": "WO-0007 gatekeeper (v1.3.1 @ ae51ddd), 2026-10-09",
+      "finding": "stig-compliance counts a check as produced if its name appears in the source; a check removed from app_checks (e.g. _consent_check) still passes.",
+      "where": "tools/check-stig-compliance.sh",
+      "closes_when": "the gate proves each Yes rule's check is actually invoked, with a test case"
+    },
+    {
+      "id": "REG-0059",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0007 gatekeeper (v1.3.1 @ ae51ddd), 2026-10-09",
+      "finding": "tests/run.sh derives its expectations from the test files present, so a deleted test file goes unnoticed (t53 removed → exit 0); the final summary prints 553/0/0 and exits 2 without saying why.",
+      "where": "tests/run.sh",
+      "closes_when": "an expected-files manifest is enforced and the closing banner states the exit reason"
+    },
+    {
+      "id": "REG-0060",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0007 gatekeeper (v1.3.1 @ ae51ddd), 2026-10-09",
+      "finding": "Partial-coverage gate holes reproduced by gatekeeper: py_compile/bash -n miss a deleted file; config-example doesn't require logging:; malformed top CHANGELOG heading skipped; second PYKEYS heredoc not compiled; env-neutral skips a tracked plaintext .gz; pipefail-consumers misses \"$g\" -q; a PPSM row deleted from both copies passes; TM_LOCK_METADATA lets requirements-lock pass with pycparser missing. Also sca-check.sh:217 uses grep -oP (Linux-only; fails closed on macOS).",
+      "where": "tools/*",
+      "closes_when": "each hole has a falsifying test case and fails"
     }
   ]
 }

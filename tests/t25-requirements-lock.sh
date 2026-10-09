@@ -772,7 +772,7 @@ b_sbom_transitive() {
     bash "${TM_TMP}/sb/tools/check-sbom-consistency.sh" > "${TM_TMP}/out" 2>&1 \
         || _tm_afail "the unmodified copy fails: $(cat "${TM_TMP}/out")"
     tm_assert_grep "transitive packages agree with requirements.lock" "${TM_TMP}/out" "the transitive rows were not checked"
-    sed -i 's/^| MarkupSafe | 3\.0\.3 |/| MarkupSafe | 2.1.5 |/' "${TM_TMP}/sb/SBOM.md"
+    sed -i 's/^| MarkupSafe | 3\.0\.4 |/| MarkupSafe | 2.1.5 |/' "${TM_TMP}/sb/SBOM.md"
     cmp -s "${TM_REPO_ROOT}/SBOM.md" "${TM_TMP}/sb/SBOM.md" && tm_die "the drift fixture changed nothing"
     bash "${TM_TMP}/sb/tools/check-sbom-consistency.sh" > "${TM_TMP}/out" 2>&1 \
         && _tm_afail "a transitive SBOM row at the wrong version passed"
