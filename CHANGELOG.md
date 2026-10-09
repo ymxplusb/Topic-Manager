@@ -5,6 +5,44 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 
 ---
 
+## [1.3.3] — 2026-10-09
+
+A patch release: the application's venv no longer carries an unpinned, unscanned pip. No
+schema or configuration change. **The upgrade replaces the venv's pip** (24.0 -> 26.2.1), so
+`--audit-only` on a 1.3.2 or older host shows a `venv pip` WARN — expected, and fixed by the
+upgrade itself.
+
+### Security
+
+- **pip is a locked, scanned, verified package (REG-0068).** `python3 -m venv` puts pip itself
+  into `/opt/topic-manager/venv`; on Ubuntu 24.04 that is ensurepip's **pip 24.0**, which
+  carries CVE-2025-8869, CVE-2026-1703, CVE-2026-3219, CVE-2026-6357, CVE-2026-8643 and
+  CVE-2026-13346 (fixed in 26.2.0). It was in no requirements file, so the lock, the SCA gate
+  and the CI dependency scan never saw it, and apt never updates a venv. pip is now pinned
+  (`pip==26.2.1`, *venv tooling* in `requirements.txt`), hash-locked in `requirements.lock`,
+  bundled by `prepare-offline.sh` and scanned by `tools/sca-check.sh`. No setuptools or wheel
+  is locked: a Python 3.12 venv contains neither (measured).
+- **pip is upgraded first.** `install.sh` and `install/upgrade-full.sh` (online and
+  `--offline`) upgrade the new venv's pip to the locked version — `--require-hashes
+  --only-binary :all:`, from PyPI online or the bundle offline — before installing the
+  application packages, and fail if it does not then report that version.
+- **The venv must hold exactly the lock.** After the install, every package in the venv must
+  be in `requirements.lock` at its locked version, and every locked package must be installed:
+  an extra, missing, different or duplicate package fails the run (the upgrade rolls back).
+  `--audit-only` reports the same comparison for the installed venv as WARN rows.
+  `install.sh` now creates the venv with `--clear`, so a reinstall starts empty.
+- `tools/gen-requirements-lock.py` refuses a resolution that drops or changes a direct pin
+  (pip included) instead of writing a lock without it.
+
+### Not changed
+
+- `tm-apply compliance --report` does not check the venv: the host keeps no copy of the lock
+  to compare it with. The check runs at install, upgrade and `--audit-only`.
+- A rollback restores the previous venv as it was, including its pip — it is the previous
+  release.
+
+---
+
 ## [1.3.2] — 2026-10-09
 
 A patch release: Settings > Support > STIG compliance no longer lists every rule on the page.
