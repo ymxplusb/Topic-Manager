@@ -43,6 +43,9 @@ _fn() {   # _fn <dir> [web-user] — normalise_frontend_ownership as the script 
         # T_GROUPS: the web account's group list as `id -nG` would print it,
         # for a membership the container cannot hold without editing /etc/group.
         echo 'if [ -n "${T_GROUPS:-}" ]; then id() { if [ "$1" = -nG ]; then echo "$T_GROUPS"; else command id "$@"; fi; }; fi'
+        # T_FINDSPY: before each find that sets modes, record the modes of
+        # every directory in the tree (who could still write while it runs).
+        echo 'if [ -n "${T_FINDSPY:-}" ]; then find() { case " $* " in *" chmod "*) command find "$1" -type d -printf "%m %p\n" >> "$T_FINDSPY" ;; esac; command find "$@"; }; fi'
         tm_extract_func "$UP" normalise_frontend_ownership
         echo 'normalise_frontend_ownership "$1" "$2"'
     } > "${TM_TMP}/fn.sh"
@@ -68,6 +71,23 @@ f_stock_tree_is_755_644() {
     tm_assert_mode 755 "$d/lib" "a directory is not 0755"
 }
 tm_case "a-world-readable-tree-is-root-root-755-644-whatever-its-files-were" modes,chown f_stock_tree_is_755_644
+
+f_write_is_closed_before_the_modes_are_set() {
+    # The exact modes are set by find ... -exec chmod, which acts on a NAME
+    # found a moment earlier. On a tree whose directories were group- or
+    # world-writable (an old www-data 0775 tree), anyone with that write
+    # could swap a name for a symlink in between and have root chmod the
+    # target. So group/other write is closed on the whole tree FIRST.
+    local d="${TM_TMP}/fe"
+    _tree "$d" "${TM_WEB_USER}:${TM_WEB_USER}" 777
+    export T_FINDSPY="${TM_TMP}/spy"; : > "$T_FINDSPY"
+    _fn "$d"; unset T_FINDSPY
+    tm_assert_rc 0 "$RC" "$(cat "${TM_TMP}/out")"
+    [ -s "${TM_TMP}/spy" ] || tm_die "the find spy recorded nothing: the mode-setting finds were not seen"
+    awk '{ m = $1; if (m ~ /[2367]$/ || m ~ /[2367].$/) { print; bad = 1 } } END { exit bad }' "${TM_TMP}/spy" > "${TM_TMP}/open" \
+        || _tm_afail "group/other could still write the served tree while root set its modes by name: $(cat "${TM_TMP}/open")"
+}
+tm_case "write-is-closed-before-modes-are-set-by-name" modes,chown f_write_is_closed_before_the_modes_are_set
 
 f_group_scoped_tree_is_kept_group_scoped() {
     local d="${TM_TMP}/fe"

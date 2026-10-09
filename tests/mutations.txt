@@ -731,8 +731,8 @@ REPLACE|        find "$CERT_DIR" -mindepth 1 -type f -exec chown -h "${APP_USER}
 # rewritten; the same mutation on the new line is M879.
 
 --- M95
-DESC|upgrade: group/other write is left on the served tree
-TESTS|t24-restore-and-frontend.sh
+DESC|upgrade: group/other write is not closed before the served tree's modes are set by name (v1.3.1: the exact modes come after, so the end state is the same; what is lost is the closed window, held by t04 write-is-closed-before-modes-are-set-by-name)
+TESTS|t24-restore-and-frontend.sh t04-frontend-mode.sh
 EQUIV|no
 ANCHOR|    chmod -R go-w -- "$d"
 REPLACE|    true
@@ -7533,12 +7533,9 @@ EQUIV|no
 ANCHOR|    chown -R -h "root:${grp}" -- "$d"
 REPLACE|    chown -h "root:${grp}" -- "$d"
 
---- M895
-DESC|P1: group/other write is not closed before the modes are set — EQUIVALENT on every end state: the two finds below set every directory and file mode exactly; this line only closes the window in which an account with write on the old tree could swap a name while they run, which no test can open deterministically
-TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
-EQUIV|yes
-ANCHOR|    chmod -R go-w -- "$d"
-REPLACE|    true
+# M895 withdrawn before its first full run: the same anchor and replacement as M95,
+# which survived the first full run (the exact modes made it equivalent on every END
+# state) and is now held by t04 write-is-closed-before-modes-are-set-by-name.
 
 --- M896
 DESC|P1: directories do not get the release's mode
