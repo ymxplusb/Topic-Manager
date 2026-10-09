@@ -571,11 +571,12 @@
     {
       "id": "REG-0055",
       "severity": "Medium",
-      "status": "open",
+      "status": "closed",
       "source": "WO-0007 builder final gate (v1.3.1 @ 6d701a0), 2026-10-09",
       "finding": "Declared gate sca is RED: Werkzeug 3.1.8 (requirements.txt and requirements.lock) carries GHSA-g6x2-hccm-hh4m / CVE-2026-102598, MODERATE (CVSS 4.0 AV:N/AC:L/AT:P ... VA:L), CWE-67: safe_join() accepts Windows special device names; fixed in 3.1.9. GitHub-reviewed 2026-10-05, after v1.3.0 shipped, so v1.3.0 is affected too. The product runs on Ubuntu only, where the device-name class does not apply, but the gate does not judge exploitability and a tag would ship a pin with a known advisory.",
       "where": "requirements.txt, requirements.lock (+ SBOM.md, NOTICES.md, AboutModal.js dependency table, by the sbom-consistency gate)",
-      "closes_when": "Werkzeug pinned at 3.1.9 (or later) with the lock regenerated online, SBOM/NOTICES/AboutModal moved, sca exit 0 — in v1.3.1 if James widens its scope, otherwise the next release; or James accepts it for v1.3.1 with the reason recorded"
+      "closes_when": "Werkzeug pinned at 3.1.9 (or later) with the lock regenerated online, SBOM/NOTICES/AboutModal moved, sca exit 0 — in v1.3.1 if James widens its scope, otherwise the next release; or James accepts it for v1.3.1 with the reason recorded",
+      "closed_by": "v1.3.1: Werkzeug 3.1.9 (James approved the bump 2026-10-09); lock regenerated online, also MarkupSafe 3.0.4 + pycparser 3.11; SBOM/NOTICES/AboutModal moved; lock + sbom-consistency gates exit 0"
     }
   ]
 }

@@ -25,7 +25,7 @@ const AboutModal = {
                 { name: 'confluent-kafka', version: '2.15.1',   license: 'Apache-2.0',url: 'confluent.io' },
                 { name: 'PyYAML',          version: '6.0.3',    license: 'MIT',       url: 'pyyaml.org' },
                 { name: 'cryptography',    version: '50.0.1',   license: 'Apache-2.0 / BSD', url: 'cryptography.io' },
-                { name: 'Werkzeug',        version: '3.1.8',    license: 'BSD-3',     url: 'werkzeug.palletsprojects.com' },
+                { name: 'Werkzeug',        version: '3.1.9',    license: 'BSD-3',     url: 'werkzeug.palletsprojects.com' },
             ],
             // Installed on the host by install.sh. NOT a list of things the
             // product talks to — Kafka and AD are external peers and live in

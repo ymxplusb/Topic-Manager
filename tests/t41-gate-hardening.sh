@@ -40,7 +40,7 @@ g_sca_lock_parse() {
     printf 'zzsplit\\\n==1.2.3 \\\n    --hash=sha256:%064d' 0 >> "$L"
     _run bash "$FX/tools/sca-check.sh" --list-pins
     tm_assert_rc 0 "$RC" "the fixture lock was refused: ${OUT}"
-    grep -qx 'MarkupSafe 3.0.3' <<<"$OUT" || _tm_afail "an INDENTED lock entry was dropped from the scan: ${OUT}"
+    grep -qx 'MarkupSafe 3.0.4' <<<"$OUT" || _tm_afail "an INDENTED lock entry was dropped from the scan: ${OUT}"
     grep -qx 'zzsplit 1.2.3' <<<"$OUT" || _tm_afail "a continuation-split, unterminated last entry was dropped: ${OUT}"
     grep -qx 'cryptography 44.0.2' <<<"$OUT" || _tm_afail "the LOCKED version of a direct package is not what would be queried: ${OUT}"
     grep -q 'grep -qiE "^${n}==" "$REQ" && continue' "$FX/tools/sca-check.sh" \
@@ -293,7 +293,7 @@ tm_case "reg0014-only-src-and-href-attribute-values-are-cache-tokens" none g_ver
 g_sbom() {
     _tree tools/check-sbom-consistency.sh tools/lib requirements.txt requirements.lock SBOM.md NOTICES.md app/components/modals/AboutModal.js install/upgrade-full.sh
     _run bash "$FX/tools/check-sbom-consistency.sh"; tm_assert_rc 0 "$RC" "the copy is not green: ${OUT}"
-    sed -i 's/^MarkupSafe==3\.0\.3 /    MarkupSafe==3.0.2 /' "$FX/requirements.lock"
+    sed -i 's/^MarkupSafe==3\.0\.4 /    MarkupSafe==3.0.2 /' "$FX/requirements.lock"
     grep -q '^    MarkupSafe==3.0.2 ' "$FX/requirements.lock" || tm_die "fixture did not indent the entry"
     _run bash "$FX/tools/check-sbom-consistency.sh"
     [ "$RC" -ne 0 ] || _tm_afail "an INDENTED lock entry that disagrees with SBOM.md was not read: ${OUT}"

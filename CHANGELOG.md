@@ -8,8 +8,8 @@ Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 ## [1.3.1] — 2026-10-09
 
 A patch release: an upgrade from a 1.0.x host succeeds by the documentation, with no
-workaround, and a failed upgrade rolls back clean. No dependency, schema or configuration
-change; upgrade as usual. Found by a throwaway test: v1.0.6 installed online by its own README,
+workaround, and a failed upgrade rolls back clean. One dependency moves (Werkzeug 3.1.9,
+below); no schema or configuration change; upgrade as usual. Found by a throwaway test: v1.0.6 installed online by its own README,
 then upgraded offline to 1.3.0 by the 1.3.0 documentation.
 
 ### Fixed
@@ -37,6 +37,15 @@ then upgraded offline to 1.3.0 by the 1.3.0 documentation.
   release's record, so a later `--restore` kept the leftovers as if 1.0.x had shipped them. A
   host's manifest is now taken as the restore point's record only when it names the installed
   version; otherwise the backup says so and uses the installed release's shipped list.
+
+### Security
+
+- **Werkzeug 3.1.8 → 3.1.9** for CVE-2026-102598 (GHSA-g6x2-hccm-hh4m, moderate):
+  `safe_join()` accepted Windows special device names. The product runs only on Ubuntu, where
+  that class does not apply, but the pin carried a published advisory and the `sca` gate
+  refuses it (REG-0055). Regenerating the hash-pinned lock also moved two indirect
+  dependencies: MarkupSafe 3.0.3 → 3.0.4 and pycparser 3.0 → 3.11. SBOM, NOTICES and the
+  About dialog follow.
 
 ### Documentation
 

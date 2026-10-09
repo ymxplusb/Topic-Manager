@@ -78,7 +78,7 @@ Copyright (c) Individual contributors.
 ---
 
 ## Werkzeug
-Version: 3.1.8
+Version: 3.1.9
 License: BSD-3-Clause
 Copyright 2007 Pallets
 
@@ -105,12 +105,12 @@ from each package's own `dist-info/METADATA` on the deployed host (2026-09-01).
 | Component | Version | License | Required by |
 |-----------|---------|---------|-------------|
 | Jinja2 | 3.1.6 | BSD-3-Clause | Flask |
-| MarkupSafe | 3.0.3 | BSD-3-Clause | Jinja2, Werkzeug |
+| MarkupSafe | 3.0.4 | BSD-3-Clause | Jinja2, Werkzeug |
 | itsdangerous | 2.2.0 | BSD-3-Clause | Flask |
 | click | 8.5.0 | BSD-3-Clause | Flask |
 | blinker | 1.9.0 | MIT | Flask |
 | cffi | 2.1.1 | MIT-0 | cryptography |
-| pycparser | 3.0 | BSD-3-Clause | cffi |
+| pycparser | 3.11 | BSD-3-Clause | cffi |
 | pyasn1 | 0.6.4 | BSD-2-Clause | ldap3 |
 
 Full licence texts ship inside each package's `dist-info` directory in the

@@ -37,7 +37,7 @@ vouch for itself.
 | Component        | Version | License         | Source                              |
 |------------------|---------|-----------------|-------------------------------------|
 | Flask            | 3.1.3   | BSD-3-Clause    | flask.palletsprojects.com           |
-| Werkzeug         | 3.1.8   | BSD-3-Clause    | werkzeug.palletsprojects.com        |
+| Werkzeug         | 3.1.9   | BSD-3-Clause    | werkzeug.palletsprojects.com        |
 | gunicorn         | 26.2.0  | MIT             | gunicorn.org                        |
 | ldap3            | 2.9.1   | LGPL-3.0        | ldap3.readthedocs.io                |
 | PyYAML           | 6.0.3   | MIT             | pyyaml.org                          |
@@ -62,9 +62,9 @@ SHA-256 of every published wheel of each, and every installer uses `--require-ha
 | click | 8.5.0 | BSD-3-Clause | Flask |
 | itsdangerous | 2.2.0 | BSD-3-Clause | Flask |
 | Jinja2 | 3.1.6 | BSD-3-Clause | Flask |
-| MarkupSafe | 3.0.3 | BSD-3-Clause | Jinja2, Werkzeug |
+| MarkupSafe | 3.0.4 | BSD-3-Clause | Jinja2, Werkzeug |
 | cffi | 2.1.1 | MIT | cryptography |
-| pycparser | 3.0 | BSD-3-Clause | cffi |
+| pycparser | 3.11 | BSD-3-Clause | cffi |
 | pyasn1 | 0.6.4 | BSD-2-Clause | ldap3 |
 
 ## Database
@@ -184,6 +184,7 @@ that day and is the latest stable release; Vue 3.5.43 is the latest on npm. Supe
 | cryptography | 44.0.2 | 50.0.1 | CVE-2026-69247, CVE-2026-69248, CVE-2026-69249, CVE-2026-26007, CVE-2026-34073 |
 | Flask | 3.1.0 | 3.1.3 | CVE-2025-47278, CVE-2026-27205 (moved in 1.0.2) |
 | Werkzeug | 3.1.3 | 3.1.8 | CVE-2026-21860, CVE-2025-66221, CVE-2026-27199 (moved in 1.0.2) |
+| Werkzeug | 3.1.8 | 3.1.9 | CVE-2026-102598 (moved in 1.3.1) |
 | gunicorn | 26.0.0 | 26.2.0 | maintenance |
 | PyYAML | 6.0.2 | 6.0.3 | maintenance |
 | confluent-kafka | 2.14.0 | 2.15.0 | maintenance (moved in 1.0.2) |

@@ -102,7 +102,7 @@ l_upgrade_refuses_a_drifted_lock() {
     {
         echo '#!/usr/bin/env bash'; echo 'set -euo pipefail'
         echo 'fail() { echo "[FAIL] $*" >&2; exit 1; }'
-        echo 'declare -A PINS=([flask]=3.1.3 [werkzeug]=3.1.8 [gunicorn]=26.2.0 [ldap3]=2.9.1 [pyyaml]=6.0.3 [cryptography]=50.0.1 [confluent-kafka]=2.15.1)'
+        echo 'declare -A PINS=([flask]=3.1.3 [werkzeug]=3.1.9 [gunicorn]=26.2.0 [ldap3]=2.9.1 [pyyaml]=6.0.3 [cryptography]=50.0.1 [confluent-kafka]=2.15.1)'
         echo 'LOCK_FILE="$1"'
         TM_S='^for _pin in flask werkzeug gunicorn ldap3 pyyaml cryptography confluent-kafka; do$' \
             awk 'BEGIN{s=ENVIRON["TM_S"]} !on && $0 ~ s {on=1} on{print} on && /^done$/{exit}' "$UP"
