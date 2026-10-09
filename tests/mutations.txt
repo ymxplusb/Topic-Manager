@@ -183,54 +183,11 @@ ANCHOR|    chmod "$fm" -- "$fp" || fail "chmod failed on ${fp}"
 REPLACE|    true
 
 # ─── the frontend mode derivation (t04) ──────────────────────────────────────
---- M23
-DESC|the derived file mode goes back to the fixed 644 — THE DEFECT EXACTLY AS IT SHIPPED
-TESTS|t04-frontend-mode.sh
-EQUIV|no
-ANCHOR|FE_FILE_MODE="$(printf '%o' $(( 8#${FE_DIR_MODE} & 8#666 )))"
-REPLACE|FE_FILE_MODE=644
-
---- M24
-DESC|the derivation mask is widened from 0666 to 0777, so served files inherit the execute bit
-TESTS|t04-frontend-mode.sh
-EQUIV|no
-ANCHOR|FE_FILE_MODE="$(printf '%o' $(( 8#${FE_DIR_MODE} & 8#666 )))"
-REPLACE|FE_FILE_MODE="$(printf '%o' $(( 8#${FE_DIR_MODE} & 8#777 )))"
-
---- M25
-DESC|the access test before widening is inverted, so every new file is widened
-TESTS|t04-frontend-mode.sh
-EQUIV|no
-ANCHOR|        if ! can_access "$WEB_USER" -r "$f"; then
-REPLACE|        if can_access "$WEB_USER" -r "$f"; then
-
---- M26
-DESC|a widening that did not achieve access is NOT reverted, leaving the host loosened for nothing
-TESTS|t04-frontend-mode.sh
-EQUIV|no
-ANCHOR|                chmod "$FE_FILE_MODE" "$f"
-REPLACE|                true
-
---- M27
-DESC|the baseline-recorded test is inverted, so files the restore already handled are re-chmodded
-TESTS|t04-frontend-mode.sh
-EQUIV|no
-ANCHOR|    if baseline_has "$PERM_BASELINE" "$f"; then
-REPLACE|    if ! baseline_has "$PERM_BASELINE" "$f"; then
-
---- M28
-DESC|new directories no longer take the tree's mode
-TESTS|t04-frontend-mode.sh
-EQUIV|no
-ANCHOR|        chmod "$FE_DIR_MODE" "$f"
-REPLACE|        true
-
---- M29
-DESC|new files no longer take the derived mode at all
-TESTS|t04-frontend-mode.sh
-EQUIV|no
-ANCHOR|        chmod "$FE_FILE_MODE" "$f"
-REPLACE|        true
+# M23-M29 were RETIRED in v1.3.1 (WO-0007) with the code they mutated: the
+# Phase 10 per-file pass that replayed the OLD tree's baseline on the
+# release's files and gave only NEW files the directory's mode (that replay
+# is the throwaway-test P1 defect). Its replacement, normalise_frontend_ownership
+# setting the release's modes, is covered by M875 onward (t04, t24).
 
 # ─── v1.0.4: the cluster store and its permission boundary ───────────────────
 # TARGET|install selects install.sh; the default is still the upgrade script,
@@ -770,12 +727,8 @@ EQUIV|no
 ANCHOR|        find "$CERT_DIR" -mindepth 1 -type f -exec chown -h "${APP_USER}:${APP_USER}" -- {} + -exec chmod 600 -- {} +
 REPLACE|        find "$CERT_DIR" -mindepth 1 -type f -exec chown -h "${APP_USER}:${APP_USER}" -- {} +
 
---- M94
-DESC|upgrade: the frontend group is forced to root, breaking a group-scoped STIG tree
-TESTS|t24-restore-and-frontend.sh
-EQUIV|no
-ANCHOR|    if (( 8#$(stat -c '%a' "$d") & 8#005 )); then grp=root; else grp="$(stat -c '%G' "$d")"; fi
-REPLACE|    grp=root
+# M94 RETIRED in v1.3.1 (WO-0007): its anchor (the 8#005 world-readable test) was
+# rewritten; the same mutation on the new line is M879.
 
 --- M95
 DESC|upgrade: group/other write is left on the served tree
@@ -7432,3 +7385,276 @@ TARGET|envneutral
 EQUIV|no
 ANCHOR|RELEASE_EVIDENCE = re.compile(r"^docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
 REPLACE|RELEASE_EVIDENCE = re.compile(r".*docs/releases/[0-9]+\.[0-9]+\.[0-9]+/dast[a-z0-9.-]*\.json$")
+
+# ─── v1.3.1 (WO-0007): a 1.0.x host upgrades and rolls back clean ────────────
+# Mechanical over the changed code: normalise_frontend_ownership and its call
+# (P1: the served tree takes the release's modes), LEGACY_VERSIONS/
+# LEGACY_ARTEFACTS, manifest_release and backup_owned_artefacts' adoption rule
+# (P2). Every comparison flipped, every guard neutralised, every constant
+# moved, every returned value discarded.
+
+--- M875
+DESC|P1 THE DEFECT: Phase 10 no longer gives the served tree the release's modes (the old tree's 0600 Vue stays)
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|normalise_frontend_ownership "$FRONTEND_DIR" "$WEB_USER"
+REPLACE|true
+
+--- M876
+DESC|P1: the call loses the web account (set -u aborts Phase 10)
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|normalise_frontend_ownership "$FRONTEND_DIR" "$WEB_USER"
+REPLACE|normalise_frontend_ownership "$FRONTEND_DIR"
+
+--- M877
+DESC|P1: a served tree that is itself a symlink is re-owned through it
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|    [[ -L "$d" ]] && fail "${d} is a symlink; refusing to re-own the frontend through it."
+REPLACE|    [[ -L "$d" ]] && true
+
+--- M878
+DESC|P1: a symlink inside the served tree is not refused
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|    [[ -z "$l" ]] || fail "${l} is a symlink inside the served tree; refusing. Remove it and re-run."
+REPLACE|    [[ -z "$l" ]] || true
+
+--- M879
+DESC|P1: every tree is treated as world-readable (a group-scoped STIG tree is widened to other)
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|    if (( 8#${was} & 8#004 )); then
+REPLACE|    if true; then
+
+--- M880
+DESC|P1: the world-readable test inverted
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|    if (( 8#${was} & 8#004 )); then
+REPLACE|    if ! (( 8#${was} & 8#004 )); then
+
+--- M881
+DESC|P1: other's TRAVERSE bit is read as world-readable (0711 tree made 0755/0644)
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|    if (( 8#${was} & 8#004 )); then
+REPLACE|    if (( 8#${was} & 8#005 )); then
+
+--- M882
+DESC|P1: a world-readable tree's files get group write (664)
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|        grp=root; dm=755; fm=644
+REPLACE|        grp=root; dm=755; fm=664
+
+--- M883
+DESC|P1: a world-readable tree's directories get group write (775)
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|        grp=root; dm=755; fm=644
+REPLACE|        grp=root; dm=775; fm=644
+
+--- M884
+DESC|P1: a world-readable tree keeps the web account's group (the web server's group owns the JavaScript)
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|        grp=root; dm=755; fm=644
+REPLACE|        grp="$(stat -c '%G' "$d")"; dm=755; fm=644
+
+--- M885
+DESC|P1: a group-scoped tree's files are given to other (644)
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|        grp="$(stat -c '%G' "$d")"; dm=750; fm=640
+REPLACE|        grp="$(stat -c '%G' "$d")"; dm=750; fm=644
+
+--- M886
+DESC|P1: a group-scoped tree's directories are opened to other (755)
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|        grp="$(stat -c '%G' "$d")"; dm=750; fm=640
+REPLACE|        grp="$(stat -c '%G' "$d")"; dm=755; fm=640
+
+--- M887
+DESC|P1: a group-scoped tree's files keep group write (660)
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|        grp="$(stat -c '%G' "$d")"; dm=750; fm=640
+REPLACE|        grp="$(stat -c '%G' "$d")"; dm=750; fm=660
+
+--- M888
+DESC|P1: a group-scoped tree is always given root's group (www-data reads nothing)
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|        grp="$(stat -c '%G' "$d")"; dm=750; fm=640
+REPLACE|        grp=root; dm=750; fm=640
+
+--- M889
+DESC|P1: the web-account membership test inverted
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|        if [[ " $(id -nG "$web" 2>/dev/null) " != *" ${grp} "* ]]; then
+REPLACE|        if [[ " $(id -nG "$web" 2>/dev/null) " == *" ${grp} "* ]]; then
+
+--- M890
+DESC|P1: the web-account membership test neutralised: an operator's reader group is always swapped for www-data
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|        if [[ " $(id -nG "$web" 2>/dev/null) " != *" ${grp} "* ]]; then
+REPLACE|        if true; then
+
+--- M891
+DESC|P1: the web-account membership test neutralised the other way: a group www-data is not in is kept
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|        if [[ " $(id -nG "$web" 2>/dev/null) " != *" ${grp} "* ]]; then
+REPLACE|        if false; then
+
+--- M892
+DESC|P1: a missing web account is not a stop (the tree is re-owned to root's login group)
+TESTS|t04-frontend-mode.sh
+EQUIV|no
+ANCHOR|                || fail "The web account ${web} does not exist, so the served tree cannot be given a group it reads through."
+REPLACE|                || true
+
+--- M893
+DESC|P1: the tree is not re-owned (www-data keeps write on the JavaScript)
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|    chown -R -h "root:${grp}" -- "$d"
+REPLACE|    true
+
+--- M894
+DESC|P1: only the top of the tree is re-owned
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|    chown -R -h "root:${grp}" -- "$d"
+REPLACE|    chown -h "root:${grp}" -- "$d"
+
+--- M895
+DESC|P1: group/other write is not closed before the modes are set — EQUIVALENT on every end state: the two finds below set every directory and file mode exactly; this line only closes the window in which an account with write on the old tree could swap a name while they run, which no test can open deterministically
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|yes
+ANCHOR|    chmod -R go-w -- "$d"
+REPLACE|    true
+
+--- M896
+DESC|P1: directories do not get the release's mode
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|    find "$d" -type d -exec chmod "$dm" {} +
+REPLACE|    true
+
+--- M897
+DESC|P1 THE DEFECT, inside the function: files keep whatever mode the old tree or mktemp gave them
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|    find "$d" -type f -exec chmod "$fm" {} +
+REPLACE|    true
+
+--- M898
+DESC|P1: files are given the DIRECTORY mode (execute on every served file)
+TESTS|t04-frontend-mode.sh t24-restore-and-frontend.sh
+EQUIV|no
+ANCHOR|    find "$d" -type f -exec chmod "$fm" {} +
+REPLACE|    find "$d" -type f -exec chmod "$dm" {} +
+
+--- M899
+DESC|P2 THE DEFECT: 1.0.6 has no shipped list again (a rollback to a 1.0.x restore point retires nothing)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|LEGACY_VERSIONS=(1.0.6 1.1.0 1.1.1)
+REPLACE|LEGACY_VERSIONS=(1.1.0 1.1.1)
+
+--- M900
+DESC|P2: the shipped list covers a version no tag reports (1.0.11 is a tag, not a tm/VERSION)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|LEGACY_VERSIONS=(1.0.6 1.1.0 1.1.1)
+REPLACE|LEGACY_VERSIONS=(1.0.6 1.0.11 1.1.0 1.1.1)
+
+--- M901
+DESC|P2: the shipped list loses the polkit rule (a rollback to 1.0.6 retires 1.0.6's rule)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|                  "file /etc/polkit-1/rules.d/50-topic-manager.rules"
+REPLACE|                  "file /etc/polkit-1/rules.d/50-topic-manager-old.rules"
+
+--- M902
+DESC|P2: legacy_artefacts prints nothing for a covered version
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|            printf '%s\n' "${LEGACY_ARTEFACTS[@]}"
+REPLACE|            :
+
+--- M903
+DESC|P2: manifest_release reads no release (every manifest refused, the installed release's own included)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    sed -n '1s/^# topic-manager install manifest, release \([^ :]*\): .*/\1/p' -- "$1" 2>/dev/null || true
+REPLACE|    true
+
+--- M904
+DESC|P2: manifest_release reads the release from any line — EQUIVALENT: write_install_manifest writes the header on line 1 only, every later line is "<field> <path>"; and a second header line would make the value two lines, which equals no version, so the manifest is still refused
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|yes
+ANCHOR|    sed -n '1s/^# topic-manager install manifest, release \([^ :]*\): .*/\1/p' -- "$1" 2>/dev/null || true
+REPLACE|    sed -n 's/^# topic-manager install manifest, release \([^ :]*\): .*/\1/p' -- "$1" 2>/dev/null || true
+
+--- M905
+DESC|P2 THE DEFECT: any manifest on the host is adopted as the installed release's record
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ "$mr" == "$v" && "$v" != unknown ]]; then   # mr is empty when there is no manifest
+REPLACE|    if [[ -f "$INSTALL_MANIFEST" ]]; then
+
+--- M906
+DESC|P2: the release comparison inverted
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ "$mr" == "$v" && "$v" != unknown ]]; then   # mr is empty when there is no manifest
+REPLACE|    if [[ "$mr" != "$v" && "$v" != unknown ]]; then   # mr is empty when there is no manifest
+
+--- M907
+DESC|P2: an unknown installed version adopts a manifest that also says unknown
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ "$mr" == "$v" && "$v" != unknown ]]; then   # mr is empty when there is no manifest
+REPLACE|    if [[ "$mr" == "$v" ]]; then   # mr is empty when there is no manifest
+
+--- M908
+DESC|P2: the unknown-version test inverted
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|    if [[ "$mr" == "$v" && "$v" != unknown ]]; then   # mr is empty when there is no manifest
+REPLACE|    if [[ "$mr" == "$v" && "$v" == unknown ]]; then   # mr is empty when there is no manifest
+
+--- M909
+DESC|P2: a refused manifest is refused silently
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if [[ "$mr" != "$v" || "$v" == unknown ]]; then
+REPLACE|        if false; then
+
+--- M910
+DESC|P2: the refusal is announced for the installed release's own manifest
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if [[ "$mr" != "$v" || "$v" == unknown ]]; then
+REPLACE|        if [[ "$mr" == "$v" || "$v" == unknown ]]; then
+
+--- M911
+DESC|P2: an unknown-to-unknown refusal is not announced
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        if [[ "$mr" != "$v" || "$v" == unknown ]]; then
+REPLACE|        if [[ "$mr" != "$v" ]]; then
+
+--- M912
+DESC|P2: the host's manifest is never read for its release (mr stays empty)
+TESTS|t45-rollback-host-artefacts.sh
+EQUIV|no
+ANCHOR|        mr="$(manifest_release "$INSTALL_MANIFEST")"
+REPLACE|        :
