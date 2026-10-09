@@ -4,7 +4,7 @@
   "project": "Topic Manager",
   "release": "patch",
   "opened": "2026-10-09",
-  "status": "assuring",
+  "status": "done",
   "depends_on": "v1.3.0 (tag 768cf77, LIVE on prod .90). Branch release/v1.3.1 from release/v1.3.0 (ce38332, tag v1.3.0 + records) in worktree /Users/jamesrodman/Scripts/topic-manager-v131.",
   "scout": {
     "method": "NO independent scout pass. Scope and consumers were set by the coordinator's brief (James's findings from the throwaway test) and confirmed by the builder reading every touched site; recorded so the assure lane knows the scoping check was not independent (as WO-0005).",
@@ -139,6 +139,12 @@
       "meaning": "passed",
       "verdict": "Prod .90 1.3.0 -> 1.3.1 2026-10-09 ~21:31Z (online, deploy key, v1.3.1 @ abf0de4) on James's go ('Onces it up go ahead and push'). VM had been powered off since a guest shutdown 2026-10-04 05:29; James powered it on, booted healthy on 1.3.0 first. audit exit 1 (2 expected: consent off kept, no LDAP service bind) -> snapshot pre-v1.3.1-upgrade-20261009 -> backup 20261009-213107 -> full upgrade 'Upgrade complete' RESULT: exit 0 (restore point 20261009-213124). Verified before AND after reboot: 1.3.1 health, 4 units active, sock 660 topic-manager:www-data, 0 on 5001, Vue 644 root, Werkzeug 3.1.9, 14 assets ?v=1301, TLS1.1 refused, compliance 11 PASS 2 INFO, no reboot flag. Snapshot kept pending James's UI check.",
       "at": "2026-10-09T21:34:42Z"
+    },
+    "wrap": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "WO-0007 done: v1.3.1 live on prod .90, James checked the UI 10-09, snapshot removed; tm-upgtest deleted. No ticket (patch on James's direct choice). No new lessons (James: no preference). Recorded in session-2026-10-09c.",
+      "at": "2026-10-09T22:11:49Z"
     }
   },
   "register_note": "REG-0053 (pre-1.0.6 hosts have no shipped list), REG-0054 (1.0.x files a v1.3.0 rollback already overwrote are recorded as found), REG-0055 (sca RED: Werkzeug 3.1.8 GHSA-g6x2-hccm-hh4m, out of this patch's scope).",
