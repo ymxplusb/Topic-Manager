@@ -133,6 +133,12 @@
       "meaning": "passed",
       "verdict": "v1.3.1 (abf0de4) annotated tag = main; pipeline 337 success (version/prepare/test/build/scan x3/publish/guides); release v1.3.1 published 2026-10-09T20:55Z with 4 guides.",
       "at": "2026-10-09T20:56:06Z"
+    },
+    "deploy": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Prod .90 1.3.0 -> 1.3.1 2026-10-09 ~21:31Z (online, deploy key, v1.3.1 @ abf0de4) on James's go ('Onces it up go ahead and push'). VM had been powered off since a guest shutdown 2026-10-04 05:29; James powered it on, booted healthy on 1.3.0 first. audit exit 1 (2 expected: consent off kept, no LDAP service bind) -> snapshot pre-v1.3.1-upgrade-20261009 -> backup 20261009-213107 -> full upgrade 'Upgrade complete' RESULT: exit 0 (restore point 20261009-213124). Verified before AND after reboot: 1.3.1 health, 4 units active, sock 660 topic-manager:www-data, 0 on 5001, Vue 644 root, Werkzeug 3.1.9, 14 assets ?v=1301, TLS1.1 refused, compliance 11 PASS 2 INFO, no reboot flag. Snapshot kept pending James's UI check.",
+      "at": "2026-10-09T21:34:42Z"
     }
   },
   "register_note": "REG-0053 (pre-1.0.6 hosts have no shipped list), REG-0054 (1.0.x files a v1.3.0 rollback already overwrote are recorded as found), REG-0055 (sca RED: Werkzeug 3.1.8 GHSA-g6x2-hccm-hh4m, out of this patch's scope).",
