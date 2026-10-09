@@ -106,7 +106,7 @@ _fu() {
         echo '#!/usr/bin/env bash'; echo 'set -euo pipefail'
         echo 'fail() { echo "[FAIL] $*" >&2; exit 1; }; info() { echo "[INFO] $*"; }'
         tm_extract_func "$UP" normalise_frontend_ownership
-        echo 'normalise_frontend_ownership "$1"'
+        echo 'normalise_frontend_ownership "$1" "'"$TM_WEB_USER"'"'
     } > "${TM_TMP}/fu.sh"
     bash "${TM_TMP}/fu.sh" "$1" > "${TM_TMP}/out" 2>&1 || _tm_afail "failed: $(cat "${TM_TMP}/out")"
 }
@@ -132,13 +132,16 @@ f_upgrade_never_widens_stig() {
 tm_case "upgrade-never-widens-a-group-scoped-frontend" modes,chown f_upgrade_never_widens_stig
 
 f_upgrade_calls_it() {
+    # v1.3.1: after the baseline replay, which would otherwise put the OLD
+    # tree's per-file owners and modes back on the release's files.
     local fe call
-    fe="$(grep -n '^\[\[ \$DEVIATED -gt 0 \]\]' "$UP" | cut -d: -f1)"
-    call="$(grep -n '^normalise_frontend_ownership "\$FRONTEND_DIR"$' "$UP" | cut -d: -f1)"
+    fe="$(grep -n '^success "Re-applied recorded ownership/mode on' "$UP" | cut -d: -f1)"
+    call="$(grep -n '^normalise_frontend_ownership "\$FRONTEND_DIR" "\$WEB_USER"$' "$UP" | cut -d: -f1)"
+    tm_assert_nonempty "$fe" "no baseline replay anchor"
     tm_assert_nonempty "$call" "Phase 10 no longer re-owns the frontend"
-    [ "$call" -gt "$fe" ] || _tm_afail "the re-own runs before the per-file frontend pass that sets owners"
+    [ "$call" -gt "$fe" ] || _tm_afail "the re-own runs before the baseline replay that sets the old tree's owners"
 }
-tm_case "upgrade-phase10-re-owns-after-the-frontend-pass" none f_upgrade_calls_it
+tm_case "upgrade-phase10-re-owns-after-the-baseline-replay" none f_upgrade_calls_it
 
 # ─── snapshot and Vue fallback ───────────────────────────────────────────────
 s_snapshot_blocks() {

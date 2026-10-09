@@ -983,26 +983,51 @@ PYKEYS
 # the kernel as the actual principal.
 can_access() { sudo -u "$1" test "$2" "$3" 2>/dev/null; }
 
-# normalise_frontend_ownership <dir> — round 2 (sec-review): the served tree
-# is OWNED BY ROOT and writable by nobody else. Older installs chowned it to
-# www-data, so the web server could rewrite the JavaScript every administrator
-# runs. Modes are otherwise KEPT, never widened (the rule of this script):
-#   * owner -> root; group/other write bits removed;
-#   * group -> root when the tree is world-readable (the stock layout, which
-#     then becomes root:root 0755/0644); a group-scoped tree (no other-access
-#     on the directory, e.g. a STIG's 0750 root:www-data) keeps its group,
-#     because that group is how nginx reads it.
-# Symlinks are refused. The Phase 12 re-audit then asks the kernel, as
-# www-data, whether the files are still readable.
-normalise_frontend_ownership() {
-    local d="$1" l grp
+# normalise_frontend_ownership <dir> <web-user> — the served tree is the
+# PRODUCT's, OWNED BY ROOT and writable by nobody else (round 2, sec-review:
+# older installs chowned it to www-data, so the web server could rewrite the
+# JavaScript every administrator runs).
+#
+# v1.3.1: its modes come from the RELEASE, not from the old host's per-file
+# baseline. Phase 9 emptied the tree and laid down every file in it from the
+# release, so no mode a previous install left on one of those files is an
+# operator's decision to keep. v1.0.x's online install.sh fetched Vue with
+# mktemp and `rsync -a` kept mktemp's 0600 on lib/vue.global.prod.js; that was
+# readable only because www-data OWNED it, and replaying the 0600 under a root
+# owner made it unreadable, failed the Phase 12 re-audit and rolled the
+# upgrade back (throwaway test, 2026-10-09). What IS the operator's is the
+# tree's ACCESS MODEL, read from the directory itself, and it is kept:
+#   * world-readable (other may read the directory, the stock layout):
+#     root:root, directories 0755, files 0644 — what install.sh lays down;
+#   * group-scoped (no other read, e.g. a STIG's 0750 root:www-data):
+#     directories 0750, files 0640, group = the directory's group when the
+#     web account is a member of it, else the web account's own group. Other
+#     gets nothing.
+# Group and other never get write; no file gets execute. Symlinks are
+# refused. Ownership changes FIRST, so nobody but root can change the tree
+# while its modes are set. The Phase 12 re-audit still asks the kernel, as the
+# web account, whether the files are readable (an ACL, a MAC policy or a
+# parent directory can still say no).
+normalise_frontend_ownership() {   # normalise_frontend_ownership <dir> <web-user>
+    local d="$1" web="$2" l grp dm fm was
     [[ -L "$d" ]] && fail "${d} is a symlink; refusing to re-own the frontend through it."
     l="$(find "$d" -type l -print -quit)"
     [[ -z "$l" ]] || fail "${l} is a symlink inside the served tree; refusing. Remove it and re-run."
-    if (( 8#$(stat -c '%a' "$d") & 8#005 )); then grp=root; else grp="$(stat -c '%G' "$d")"; fi
+    was="$(stat -c '%a' "$d")"
+    if (( 8#${was} & 8#004 )); then
+        grp=root; dm=755; fm=644
+    else
+        grp="$(stat -c '%G' "$d")"; dm=750; fm=640
+        if [[ " $(id -nG "$web" 2>/dev/null) " != *" ${grp} "* ]]; then
+            grp="$(id -gn "$web" 2>/dev/null)" \
+                || fail "The web account ${web} does not exist, so the served tree cannot be given a group it reads through."
+        fi
+    fi
     chown -R -h "root:${grp}" -- "$d"
     chmod -R go-w -- "$d"
-    info "Frontend owned by root:${grp}, no group/other write (modes otherwise kept)"
+    find "$d" -type d -exec chmod "$dm" {} +
+    find "$d" -type f -exec chmod "$fm" {} +
+    info "Frontend: root:${grp}, directories ${dm}, files ${fm} (the release's modes for a tree that was ${was})"
 }
 
 # verify_clone_commit <dir> <40-hex> — the cloned HEAD must be exactly the
@@ -3151,59 +3176,14 @@ while IFS= read -r -d '' fp && IFS= read -r -d '' fo \
 done < <(baseline_stream "$PERM_BASELINE")
 success "Re-applied recorded ownership/mode on ${RESTORED_N} paths"
 
-# --- New files have no baseline entry. Give them the same treatment their
-# directory got, then assert the functional minimum: nginx must be able to
-# read what it serves, and the service account must own its own runtime.
-FE_DIR_MODE="$(stat -c '%a' "$FRONTEND_DIR" 2>/dev/null || echo 755)"
-FE_OWNER="$(stat -c '%U:%G' "$FRONTEND_DIR" 2>/dev/null || echo "${WEB_USER}:${WEB_USER}")"
-# Derive the file mode from the DIRECTORY's own mode rather than a fixed go+r.
-# An unconditional `chmod u+rw,go+r` grants group AND other read on every new
-# file regardless of what the host intended — on a tree deliberately kept
-# 0640 root:www-data that silently widens a STIG's access model. Masking the
-# directory's mode with 0666 keeps the host's own model and drops execute.
-FE_FILE_MODE="$(printf '%o' $(( 8#${FE_DIR_MODE} & 8#666 )))"
-WIDENED=0; DEVIATED=0
-while IFS= read -r f; do
-    # Anchor the baseline lookup: an unanchored substring can match a longer
-    # path that merely contains this one.
-    if baseline_has "$PERM_BASELINE" "$f"; then
-        continue    # recorded path — apply_baseline already restored it verbatim
-    fi
-    # New this release: it has no recorded owner/mode, so it takes the
-    # directory's. Note this is the ONLY chown here — a recursive chown would
-    # overwrite the per-file ownership the baseline loop just restored.
-    chown "$FE_OWNER" "$f" 2>/dev/null || true
-    if [[ -d "$f" ]]; then
-        chmod "$FE_DIR_MODE" "$f"
-    else
-        chmod "$FE_FILE_MODE" "$f"
-        # Then MEASURE, don't assume. The script's own principle is that
-        # effective access is asked of the kernel, never inferred from mode
-        # bits; a mode that looks right can still fail behind an ACL or a
-        # parent directory. Only widen further if the kernel actually says no,
-        # and report each widening as an explicit deviation.
-        if ! can_access "$WEB_USER" -r "$f"; then
-            chmod go+r "$f"
-            if can_access "$WEB_USER" -r "$f"; then
-                DEVIATED=$((DEVIATED+1))
-                warn "  widened beyond the host's model to make ${f} servable"
-            else
-                # Widening did not achieve access — the blocker is elsewhere
-                # (usually a parent directory the web user cannot traverse).
-                # Leaving the file widened would loosen the host's model for
-                # no benefit, so put it back and let the Phase 12 effective-
-                # access re-audit fail the upgrade with the real reason.
-                chmod "$FE_FILE_MODE" "$f"
-                warn "  ${f} is unreadable by ${WEB_USER} and widening it does not help"
-                warn "  — check traversal on the parent directories, not the file mode"
-            fi
-        fi
-        WIDENED=$((WIDENED+1))
-    fi
-done < <(find "$FRONTEND_DIR" -mindepth 1)
-[[ $WIDENED  -gt 0 ]] && info "Applied the frontend directory's own mode (${FE_FILE_MODE}) to ${WIDENED} newly deployed file(s)"
-[[ $DEVIATED -gt 0 ]] && warn "${DEVIATED} file(s) needed read access beyond the host's model — review the lines above"
-normalise_frontend_ownership "$FRONTEND_DIR"
+# --- The served tree: the release's modes, the host's access model (v1.3.1).
+# The replay above put back what the OLD tree's files had, and every file in
+# the tree is now the release's (Phase 9 emptied it first), so a per-file mode
+# recorded there is not an operator's decision: a v1.0.x online install left
+# lib/vue.global.prod.js 0600, readable only while www-data owned it. This is
+# the last word on the frontend — see normalise_frontend_ownership. Every
+# other recorded path keeps the mode the replay gave it.
+normalise_frontend_ownership "$FRONTEND_DIR" "$WEB_USER"
 
 chown -R "${APP_USER}:${APP_USER}" "${APP_HOME}/tm" "${APP_HOME}/wsgi.py" "$VENV"
 apply_baseline "${APP_HOME}/tm"     "$APP_USER" "$APP_USER" 755
