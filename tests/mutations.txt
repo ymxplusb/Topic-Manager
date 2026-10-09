@@ -7655,3 +7655,123 @@ TESTS|t45-rollback-host-artefacts.sh
 EQUIV|no
 ANCHOR|        mr="$(manifest_release "$INSTALL_MANIFEST")"
 REPLACE|        :
+
+# ─── v1.3.2 (WO-0008): STIG compliance is the summary and the CSV, not every rule ─
+
+--- M913
+DESC|v1.3.2 the rules table is back on the page (the v1.3.1 section)
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|      <p class="host-note">Host last measured: {{ compliance.host.measured_at || 'never (press Measure host now)' }}. Open items: {{ compliance.open_items.length ? compliance.open_items.join(', ') : 'none' }}.</p>
+REPLACE|      <p class="host-note">Host last measured: {{ compliance.host.measured_at || 'never (press Measure host now)' }}. Open items: {{ compliance.open_items.length ? compliance.open_items.join(', ') : 'none' }}.</p>
+REPLACE|      <table class="dt compliance-table">
+REPLACE|        <thead><tr><th>Rule</th><th>Decision</th><th>Status</th><th>Live checks</th></tr></thead>
+REPLACE|        <tbody>
+REPLACE|          <tr v-for="r in compliance.rules" :key="r.id">
+REPLACE|            <td :title="r.title"><code>{{ r.id }}</code> <span class="hint">{{ r.sev }}</span></td>
+REPLACE|            <td>{{ r.decision }}</td>
+REPLACE|            <td>{{ r.status }}</td>
+REPLACE|            <td><div v-for="c in r.checks" :key="c.key">{{ c.status }} {{ c.key }}: {{ c.detail }}</div></td>
+REPLACE|          </tr>
+REPLACE|        </tbody>
+REPLACE|      </table>
+
+--- M914
+DESC|v1.3.2 the rules are listed on the page as a list, not a table
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|      <p class="host-note">Host last measured: {{ compliance.host.measured_at || 'never (press Measure host now)' }}. Open items: {{ compliance.open_items.length ? compliance.open_items.join(', ') : 'none' }}.</p>
+REPLACE|      <p class="host-note">Host last measured: {{ compliance.host.measured_at || 'never (press Measure host now)' }}. Open items: {{ compliance.open_items.length ? compliance.open_items.join(', ') : 'none' }}.</p>
+REPLACE|      <ul><li v-for="r in compliance.rules" :key="r.id">{{ r.id }} {{ r.status }}</li></ul>
+
+--- M915
+DESC|v1.3.2 the one-line summary is gone
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|      <p class="host-note">Host last measured: {{ compliance.host.measured_at || 'never (press Measure host now)' }}. Open items: {{ compliance.open_items.length ? compliance.open_items.join(', ') : 'none' }}.</p>
+
+--- M916
+DESC|v1.3.2 the summary runs the open items together
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|      <p class="host-note">Host last measured: {{ compliance.host.measured_at || 'never (press Measure host now)' }}. Open items: {{ compliance.open_items.length ? compliance.open_items.join(', ') : 'none' }}.</p>
+REPLACE|      <p class="host-note">Host last measured: {{ compliance.host.measured_at || 'never (press Measure host now)' }}. Open items: {{ compliance.open_items.length ? compliance.open_items.join(',') : 'none' }}.</p>
+
+--- M917
+DESC|v1.3.2 the summary does not say how to measure a never-measured host
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|      <p class="host-note">Host last measured: {{ compliance.host.measured_at || 'never (press Measure host now)' }}. Open items: {{ compliance.open_items.length ? compliance.open_items.join(', ') : 'none' }}.</p>
+REPLACE|      <p class="host-note">Host last measured: {{ compliance.host.measured_at || 'never' }}. Open items: {{ compliance.open_items.length ? compliance.open_items.join(', ') : 'none' }}.</p>
+
+--- M918
+DESC|v1.3.2 the Download CSV button is gone
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|      <button class="btn btn-sm" @click="downloadCompliance" :disabled="!compliance">⬇ Download CSV</button>
+
+--- M919
+DESC|v1.3.2 Measure host now is gone
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|      <button type="button" class="btn btn-sm" @click="measureCompliance" :disabled="!settingsLoaded || applyJobs.compliance.busy || applyJobs.compliance.uncertain">Measure host now</button>
+
+--- M920
+DESC|v1.3.2 Refresh is gone
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|      <button type="button" class="btn btn-sm" @click="loadCompliance" :disabled="complianceLoading">Refresh</button>
+
+--- M921
+DESC|v1.3.2 the measurement status block loses its state
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <div class="host-status" role="status" aria-live="polite" :data-state="applyViews.compliance.state">
+REPLACE|    <div class="host-status" role="status" aria-live="polite">
+
+--- M922
+DESC|v1.3.2 the compliance error line is gone
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|    <p v-if="complianceError" class="host-status" data-state="failed" role="alert">✕ {{ complianceError }}</p>
+
+--- M923
+DESC|v1.3.2 Settings no longer fetches the compliance document when it opens (the download has nothing to build)
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|        this.loadCompliance();
+
+--- M924
+DESC|v1.3.2 Refresh fetches the wrong document
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                const r = await fetch('/api/compliance', { cache: 'no-store', headers: { 'X-TM-Background': '1' } });
+REPLACE|                const r = await fetch('/api/compliance/rules', { cache: 'no-store', headers: { 'X-TM-Background': '1' } });
+
+--- M925
+DESC|v1.3.2 the fetched document is not kept for the download
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|                if (!this.hostDisposed) this.compliance = d;
+REPLACE|                if (!this.hostDisposed) void d;
+
+--- M926
+DESC|v1.3.2 the download is not the CSV of the whole fetched document (drops a rule; the header still leads)
+TESTS|t51-host-checks-v130.sh
+TARGET|settings
+EQUIV|no
+ANCHOR|            a.href = URL.createObjectURL(new Blob([settingsComplianceCsv(this.compliance)], { type: 'text/csv' }));
+REPLACE|            a.href = URL.createObjectURL(new Blob([settingsComplianceCsv({ ...this.compliance, rules: this.compliance.rules.slice(1) })], { type: 'text/csv' }));
