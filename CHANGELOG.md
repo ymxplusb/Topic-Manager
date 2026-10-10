@@ -39,6 +39,20 @@ upgrade itself.
   match the sha256 its RECORD gives (or is missing). Measured on a real Ubuntu 24.04 venv:
   the installed venv passes (1220 files verified), and each of the four escapes the
   gatekeeper found fails it.
+- **The drift check also holds pyvenv.cfg and bin/ (REG-0076).** `include-system-site-packages`
+  must be present and `false` (Python reads a missing line as true); `home` must be the
+  directory of the python3 that made the venv; in `bin/`, `python`, `python3` and `python3.N`
+  must be links to the system interpreter, and every other entry must be a file a
+  distribution's RECORD lists (hash-checked) or one of the venv's own `activate` scripts — a
+  wrapper in place of `python3`, or a `bin/gunicorn.py` shadowing the gunicorn package, fails.
+- **The venv is root's (REG-0078).** Since v1.0.3 the upgrade handed the whole venv to the
+  service account, so it could rewrite its own code; `install.sh` and the upgrade now leave it
+  `root:root`, directories 0755, files 0755/0644 — the service only reads and runs it.
+  Measured on Ubuntu 24.04: `topic-manager` imports every package and runs gunicorn, and
+  cannot write a file in the venv.
+- **Accepted, needs root (REG-0084, James 2026-10-10 "Practical hardening"):** a swapped
+  install-time `.pyc` (pip records those with no hash) and a RECORD rewritten to match a
+  tampered file are not detected; with the venv root-owned both need root on the host.
 - **The SCA gate no longer reads a non-answer as clean (REG-0070).** `tools/sca-check.sh`
   sends every query in ONE OSV `/v1/querybatch` and takes a verdict only from a well-formed
   answer for every query: HTTP 200 and `{"results": [...]}` with one entry per query. A bare

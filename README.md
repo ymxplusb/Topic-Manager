@@ -636,6 +636,8 @@ older host `--audit-only` therefore shows `WARN venv pip  24.0 installed, the lo
 (DIFFERENT)`: that is a change this release makes on purpose, so proceed. A `venv` row naming
 any other package means something was installed into the venv by hand; the upgrade removes it.
 Offline, the bundle carries the pip wheel; build it with this release's `prepare-offline.sh`.
+The venv also becomes **root-owned** (`root:root`, read-only to `topic-manager`; until 1.3.2 the
+upgrade gave it to the service account), and the check covers `pyvenv.cfg` and `bin/` too.
 
 ### Upgrading from a 1.0.x host
 

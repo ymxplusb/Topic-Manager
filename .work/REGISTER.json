@@ -775,32 +775,35 @@
     {
       "id": "REG-0076",
       "severity": "Medium",
-      "status": "open",
+      "status": "closed",
       "date": "2026-10-10",
       "source": "gatekeeper WO-0009 (v1.3.3 FINAL) at 5af8be2, 2026-10-10: gatekeeper probes N1/N2/N5 + Daybreak Blue F-01/F-02/F-03 (gpt-daybreak-blue-latest/xhigh, banner; Codex gave no severity this run); reproduced by the gatekeeper on copies of a real venv built from requirements.lock in a fresh ubuntu:24.04 container on .81 (system python3 3.12.3). Gatekeeper MEDIUM on the REG-0069 rubric (needs write access to the venv), but REG-0069 was ruled FIX-before-ship by James and its fix is incomplete: treated as BLOCKING for v1.3.3.",
       "finding": "venv_drift (REG-0069 fix) still prints '16 packages, exactly the lock' (exit 0) while the venv runs code outside the lock, each shown executing: (a) include-system-site-packages line DELETED from pyvenv.cfg - CPython defaults it to true, /usr/lib/python3/dist-packages lands on sys.path (REG-0069 P3 with the key removed instead of set); (b) pyvenv.cfg home = an attacker prefix - base_prefix moves there and its sitecustomize.py runs; (c) bin/python3 replaced by a wrapper script (bin/ is never inspected; every entry point's shebang names it); (d) bin/gunicorn.py added - the script dir is sys.path[0], it shadows the gunicorn package for the service's own ExecStart; (e) an install-time __pycache__/*.cpython-312.pyc replaced (timestamp-matched or unchecked-hash) - pip records all 984 such pycs in RECORD with an EMPTY digest, and an empty digest is treated as owned-and-fine; (f) an importable file's RECORD digest blanked then the file edited (a RECORD edit, REG-0075-adjacent); (g) a run-time .opt-1.pyc is exempt and runs under -O (service does not use -O). REG-0069's closes_when is therefore not met.",
       "where": "install.sh venv_drift (PYVENV ~l.380-500) = install/upgrade-full.sh copy: pyvenv.cfg loop l.408-411, 'if not digest: continue' l.441-442, __pycache__ exemption l.485-488, site walk only (bin/ never read)",
-      "closes_when": "pyvenv.cfg must carry exactly include-system-site-packages = false and home equal to the system interpreter's dir; bin/ is attested (python* symlinks point at the system python3.12, no unowned files); every RECORD row except RECORD itself must carry sha256 and pip-written pyc rows are verified (or the venv is installed --no-compile with __pycache__ refused); t55 controls execute the venv interpreter for each of (a)-(f)"
+      "closes_when": "pyvenv.cfg must carry exactly include-system-site-packages = false and home equal to the system interpreter's dir; bin/ is attested (python* symlinks point at the system python3.12, no unowned files); every RECORD row except RECORD itself must carry sha256 and pip-written pyc rows are verified (or the venv is installed --no-compile with __pycache__ refused); t55 controls execute the venv interpreter for each of (a)-(f)",
+      "closed_by": "v1.3.3 round 3 (8aa3855), James 2026-10-10 'Practical hardening': (a) pyvenv.cfg must carry include-system-site-packages (last line wins, as in site.py) and it must be false - missing is SYSTEM-SITE; (b) home must resolve to the directory of the python3 running the check, the one the installers create the venv with (HOME); (c) bin/: python, python3, python3.N must be links resolving to the system interpreter, every other entry a RECORDed file (hash-checked) or the venv's own activate/activate.csh/activate.fish/Activate.ps1 as regular files (BIN). Real ubuntu:24.04 venv from install.sh's stage: clean PASS; key deleted, home moved, python3 wrapper, bin/gunicorn.py each exit 1. t55 cases; controls M998-M1009. The gatekeeper's (c) python3 wrapper and (d) bin/gunicorn.py are both BIN findings; (g) -O is not used by the service. With REG-0078 none of these is open to the service account. ACCEPTED remainder (e) swapped install-time .pyc with empty RECORD digest and (f) RECORD edited to match: REG-0084 (accepted, root-only)."
     },
     {
       "id": "REG-0077",
       "severity": "Low",
-      "status": "open",
+      "status": "closed",
       "date": "2026-10-10",
       "source": "gatekeeper WO-0009 (v1.3.3 FINAL) at 5af8be2, 2026-10-10: gatekeeper, repo-tests run 1 in a fresh python:3.12-bookworm container on .81 (570/1/0, exit 1); run 2 571/0/0; 0/40 isolated",
       "finding": "t51 settings-builds-the-compliance-csv-and-ends-sessions-as-asked is time-racy: the expected value is a second call to settingsComplianceCsv(), whose 'Generated' row is new Date().toISOString() (ms). Two builds 2 ms apart differ (measured). Under host load the assertion 'the download is not the CSV of the fetched document' fails; CI's tag pipeline can go red on a correct tree. Pre-existing since v1.3.2 (WO-0008).",
       "where": "tests/t51-host-checks-v130.sh:476; app/components/SettingsTab.js:161",
-      "closes_when": "the case freezes Date in the vm sandbox (or compares with the Generated row removed) and still fails on a wrong document"
+      "closes_when": "the case freezes Date in the vm sandbox (or compares with the Generated row removed) and still fails on a wrong document",
+      "closed_by": "v1.3.3 round 3 (8aa3855): t51's vm sandbox gets a FrozenDate (new Date()/Date.now() fixed), so every build of one document is byte-identical; the case asserts the frozen time reached the CSV and that another document still compares unequal. 50 runs of t51 under CPU load: see WO-0009 builder.round3."
     },
     {
       "id": "REG-0078",
       "severity": "Low",
-      "status": "open",
+      "status": "closed",
       "date": "2026-10-10",
       "source": "gatekeeper WO-0009 (v1.3.3 FINAL) at 5af8be2, 2026-10-10: gatekeeper, code reading while rating REG-0076",
       "finding": "upgrade-full.sh does chown -R APP_USER on the venv (since v1.0.3) and apply_baseline then resets only the venv directory itself (non-recursive), so after an upgrade every venv file - pyvenv.cfg, bin/, site-packages, pycs - is owned by the service account; install.sh leaves them root-owned. The two installers produce different ownership, and on an upgraded host REG-0076's states need only the service account, not root.",
       "where": "install/upgrade-full.sh:3473, apply_baseline l.901-913; install.sh l.1517 (venv not chowned)",
-      "closes_when": "both installers leave the venv root-owned (service account read/execute only), and a test asserts it"
+      "closes_when": "both installers leave the venv root-owned (service account read/execute only), and a test asserts it",
+      "closed_by": "v1.3.3 round 3 (8aa3855): lock_down_venv (shared block): root:root -R -h, dirs 0755, files 0755/0644 by execute bit, symlinks never followed, then any other owner or group/other-writable entry fails. install.sh runs it after the install; the upgrade no longer chowns the venv to the service account and runs it in Phase 10 (fail -> rollback). Measured on ubuntu:24.04 under umask 077: 0 entries not root:root, 0 writable by group/other; topic-manager imports every package and runs gunicorn --version, cannot write in the venv. t55 install stage + lock_down + Phase 10 cases; controls M1010-M1019. Residual noted: /opt/topic-manager itself is the service account's (0750), unchanged here; the unit's ProtectSystem=strict keeps it read-only to the running service."
     },
     {
       "id": "REG-0079",
@@ -851,6 +854,17 @@
       "finding": "The contract's own claims are stale or weaker than CI: the sca note says the real lock is '15 of 15' (HEAD: 16), the repo-tests note says 't00-t27 (28 files)' (HEAD: 54 tests/t*.sh); the requirements-lock gate cmd omits --require-online (CI uses it), so PyPI unreachable + an inherited TM_LOCK_OFFLINE_OK=1 makes the declared command a structure-only PASS, exit 0.",
       "where": ".claude/project.yml gates[sca].note, gates[repo-tests].note, gates[requirements-lock].cmd",
       "closes_when": "the counts are corrected and the declared cmd is --require-online"
+    },
+    {
+      "id": "REG-0084",
+      "severity": "Low",
+      "status": "accepted",
+      "date": "2026-10-10",
+      "source": "REG-0076 (e)(f), gatekeeper WO-0009 at 5af8be2; ruling James 2026-10-10 'Practical hardening'",
+      "finding": "venv_drift does not detect (e) an install-time __pycache__/*.pyc replaced (pip records every pyc it compiles in RECORD with an EMPTY digest, so there is nothing to compare) or (f) a RECORD row's digest rewritten (or blanked) to match a tampered file (the host keeps no copy of the lock's wheel hashes). Related: REG-0075.",
+      "where": "install.sh / install/upgrade-full.sh venv_drift (RECORD rows with no digest are owned, not hashed)",
+      "accepted_because": "ACCEPTED, root-only (James 2026-10-10 'Practical hardening'): with REG-0078 the venv is root:root and not writable by the service account, so both need root on the host, which can change anything the check itself reads.",
+      "closes_when": "(if revisited) install with --no-compile and refuse install-time __pycache__, and keep the locked wheels' RECORD digests on the host, root-owned, to compare with"
     }
   ]
 }

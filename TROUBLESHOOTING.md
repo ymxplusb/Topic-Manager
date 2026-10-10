@@ -297,8 +297,17 @@ package whose dist-info was deleted, a `sitecustomize.py`, a symlink), `PTH <fil
 file no distribution installed: it adds import paths or runs code at start-up),
 `SYSTEM-SITE pyvenv.cfg` (`include-system-site-packages` is not `false`), `MODIFIED <name>: <file>`
 (the file does not match the sha256 in its distribution's RECORD, or is missing),
-`MISLABELLED <name>` (the dist-info directory and its METADATA disagree on the version) and
-`NORECORD <name>`. The upgrade rolls back; install.sh stops. A venv built
+`MISLABELLED <name>` (the dist-info directory and its METADATA disagree on the version),
+`NORECORD <name>`, `HOME pyvenv.cfg` (`home` is not the directory of the python3 that made the
+venv), `BIN <name>` (in `bin/`: `python*` not a link to the system interpreter, or a file no
+distribution installed — a wrapper, a stray `.py`) and `SYSTEM-SITE pyvenv.cfg: no
+include-system-site-packages line` (Python reads a missing line as true).
+
+### `The venv could not be made root-owned: ...`
+v1.3.3 (REG-0078): after the install the venv is made `root:root`, directories 0755, files
+0755/0644, and checked. The reason names the path that failed (a chown/chmod error, or an
+entry still owned by another account or writable by group/other — e.g. an immutable
+attribute, `lsattr -d <path>`). The upgrade rolls back; install.sh stops. The upgrade rolls back; install.sh stops. A venv built
 from the lock should hold exactly it, so treat any line here as a finding: something else
 installed into the venv during the run, or the lock and the wheels disagree. Keep the lines
 and report them; do not install or remove packages by hand to make it pass.
