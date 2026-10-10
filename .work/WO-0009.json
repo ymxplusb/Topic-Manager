@@ -1,0 +1,113 @@
+{
+  "id": "WO-0009",
+  "intent": "v1.3.3 patch (James 2026-10-09): the app venv's pip (24.0, from Ubuntu's ensurepip) carries 6 advisories (CVE-2025-8869, CVE-2026-3219, CVE-2026-6357, CVE-2026-13346, CVE-2026-8643, CVE-2026-1703; fixed by >=26.2.0) and is outside requirements.lock, so neither apt nor the sca gate covers it. Make pip (and any other venv bootstrap tool) a hash-pinned, locked, scanned dependency like every other package; installer/upgrade/offline bundle install it; add a check that the installed venv holds ONLY locked packages at locked versions. REG-0068.",
+  "project": "topic-manager",
+  "release": {
+    "class": "patch",
+    "version": "1.3.3"
+  },
+  "opened": "2026-10-09",
+  "status": "assuring",
+  "depends_on": [
+    "WO-0008"
+  ],
+  "decisions": {
+    "release_class": "patch",
+    "new_infrastructure": "no",
+    "approaches": "one (lock + install pinned pip; venv drift check)",
+    "security": {
+      "data": "none",
+      "reach": "nobody new",
+      "route_change": "no",
+      "credential": "no",
+      "outbound_call": "no new (pip wheel comes from PyPI at bundle-build/online install, same as every other wheel)"
+    },
+    "standard": "James 2026-10-09: make pinning + continuous scanning of EVERY installed app package a standard for all apps, CI pipelines and the OS-update skills (separate follow-up for ci-templates + system-updates)."
+  },
+  "openproject_note": "No ticket: patch on James's direct instruction.",
+  "stages": {
+    "decide": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "PATCH on James's direct instruction 2026-10-09 ('lets start workin 1.3.3 specifcally to account for the update'): pin + hash + scan the venv's pip (24.0 -> 26.2.x, 6 advisories), venv-drift check; one defensible approach, no panel (as WO-0005/7/8). Security: no data/route/credential change; no new outbound source.",
+      "at": "2026-10-09T23:27:56Z"
+    }
+  },
+  "builder": {
+    "at": "2026-10-09",
+    "scope_source": "the coordinator's brief (WO had no scout section; brief items 1-8 taken as scout.scope, as WO-0008 did)",
+    "root_cause": "pip is installed into the app venv by `python3 -m venv` (ensurepip; 24.0 on Ubuntu 24.04), not by any installer step that reads requirements.txt/requirements.lock. Every control in the repo (lock gate, sca, CI Trivy on the lock, the installers' --require-hashes) is keyed to the lock, so a package the venv acquires outside the lock is invisible to all of them; v1.1.0 also deliberately refused to self-upgrade pip because the only upgrade available then was unhashed. Nothing compared the installed venv with the lock.",
+    "commits": [
+      "2d44188 deps: pin and hash-lock pip 26.2.1 (requirements.txt venv tooling, lock, generator refusal, SBOM/NOTICES/About)",
+      "1266b27 install: shared block (lock_entry, venv_bootstrap_pip, venv_drift) in install.sh + upgrade-full.sh; Phase 8 venv->pip->lock->drift; audit WARN; t55",
+      "f7cc360 docs: README/INSTALL upgrade notes, TROUBLESHOOTING messages, SBOM OSV run",
+      "3db5b63 release: version cascade to 1.3.3 (?v=1303), CHANGELOG [1.3.3]",
+      "b659ea2 tests: mutation controls M927-M968",
+      "2fcb39b install: venv_drift reads metadata with .get (found by t55); t55 anchor",
+      "4915906 tests: --clear proven by consequence; M927 documented equivalent"
+    ],
+    "files_changed": {
+      "requirements.txt": "venv tooling section: pip==26.2.1; CVE list in the header",
+      "requirements.lock": "regenerated in python:3.12-bookworm: only change is the pip entry (one wheel hash, 71138adf...ed3e) + two header comment lines the generator now writes",
+      "tools/gen-requirements-lock.py": "docstring documents venv tooling; direct_pins(); resolve() refuses a resolution that drops or changes any direct pin (pip resolves normally with --target --ignore-installed, measured)",
+      "install.sh / install/upgrade-full.sh": "byte-identical block: lock_entry, venv_bootstrap_pip (pip entry alone, --require-hashes --only-binary :all:, install's source args, then pip --version must equal the lock), venv_drift (PYVENV heredoc, system python3 -I, site-packages metadata; EXTRA/MISSING/DIFFERENT/DUPLICATE/UNREADABLE exit 1, cannot-say exit 3). upgrade: require_pins claims pip, Phase 8 venv->pip->lock->drift (drift = fail -> EXIT-trap rollback), --audit-only venv section (PASS / WARN per drift line / WARN not compared), --dry-run text. install.sh: venv --clear, same stages, die on drift",
+      "prepare-offline.sh": "comment only: the lock's pip wheel is bundled by the existing pip download + pin check (measured: pip-26.2.1-py3-none-any.whl in the bundle)",
+      "tools/sca-check.sh": "header comment only; pip is scanned because it is now a pin and a lock entry",
+      "tools/check-heredocs.sh": "PYVENV expected in both scripts",
+      "SBOM.md / NOTICES.md / app/components/modals/AboutModal.js": "pip 26.2.1 rows (sbom-consistency demands every direct pin in all three); SBOM history row 24.0 -> 26.2.1 + CVE list; OSV run 2026-10-09",
+      "tests/t55-venv-tooling-v133.sh": "new, 10 cases",
+      "tests/t25-requirements-lock.sh / tests/t41-gate-hardening.sh": "16-entry lock; pip in the claimed-pin list; installer source-arg assertions; X21 fixture anchors on the entry before pyasn1 (now pip)",
+      "tests/mutate.sh": "targets genlock (TM_GEN_LOCK) and sca (TM_SCA_CHECK)",
+      "tests/mutations.txt": "M927-M968",
+      "docs": "README (Upgrading to 1.3.3), docs/INSTALL.md section 12, install/README.md (bundle contract), TROUBLESHOOTING.md (audit WARN, two new failure messages, pip freeze hides pip), CHANGELOG [1.3.3] Security",
+      "version cascade": "VERSION, tm/VERSION, PPSM.csv + SettingsTab PPSM row, SBOM version/serial, README, docs/INSTALL.md, main.css, install.sh, prepare-offline.sh, index.html(14)+TopBar.js+AboutModal.js ?v=1303"
+    },
+    "amendments": [
+      "TROUBLESHOOTING.md - the contract keys it to the exact output strings of the upgrade/install; v1.3.3 adds three (audit WARN, pip-stage failure, drift failure)",
+      "install/README.md - declares the offline bundle contract, which now includes the pip wheel",
+      "tools/check-heredocs.sh - its EXPECTED map must name the new PYVENV heredoc or coverage is not asserted",
+      "tests/mutate.sh - two new TARGET keys so the generator change can be mutated",
+      "install.sh `python3 -m venv --clear` - without it a reinstall keeps an older release's packages and the new drift check would (correctly) fail it; behaviour change on reinstall only"
+    ],
+    "not_done": [
+      "tm-apply compliance --report does not check the venv: the host keeps no copy of the lock to compare against (brief: 'if that fits... don't force it'). Install, upgrade and --audit-only do.",
+      "setuptools/wheel not locked: a 3.12 venv holds neither (measured: ubuntu:24.04 venv = pip 24.0 only; python:3.12-bookworm venv = pip 25.0.1 only).",
+      ".claude/project.yml not edited: its sca/lock notes still say '15 of 15' / 'PASS, 15 releases' (now 16); surface-sweep/scribe's to move."
+    ],
+    "verification": {
+      "where": "fresh python:3.12-bookworm container on .81 (sudo -n docker run --rm), tree as git bundle --all (13 tags), CI TEST_SETUP verbatim from .gitlab-ci.yml; HEAD 4915906",
+      "tests_run_strict": "569 passed, 0 failed, 0 skipped (exit 0)",
+      "gates": {
+        "version-surfaces": 0,
+        "requirements-lock --require-online": "0 (PASS - 16 releases)",
+        "sbom-consistency": 0,
+        "sca": "0 (17 clean, 16 of 16 lock entries)",
+        "heredoc-python": 0,
+        "pipefail-consumers": 0,
+        "env-neutral": 0,
+        "shell-syntax": 0,
+        "python-syntax": 0
+      },
+      "sca_red_proof": "same tree with the lock's pip entry set to 24.0: pip 24.0 VULNERABLE (6 GHSA + 6 PYSEC ids), clean 17 / vulnerable 1, exit 1",
+      "e2e_ubuntu_24_04": "fresh ubuntu:24.04 container: prepare-offline.sh --bundle exit 0 (lock gate PASS 16, pip-26.2.1-py3-none-any.whl bundled, 190M bundle, env-neutral --bundle passed); a stock venv = pip 24.0 only; install.sh's real venv+packages stage extracted verbatim, real python3, ONLINE=false from the extracted bundle: 'venv tooling: pip 26.2.1 (hash-verified)', 'Python environment ready (16 packages, exactly the lock)', exit 0; pip --version 26.2.1; venv_drift exit 0; after `pip install six`: exit 1 'EXTRA six: 1.17.0 installed, not in the lock'",
+      "left_on_81": "nothing: docker ps -a empty, no new volume (8 runner caches predate the session), only default networks, no /tmp tree",
+      "not_run": "sonar-local, frontend render proof (no frontend behaviour change beyond the About row and ?v tokens), a full install.sh/upgrade-full.sh run on a VM (tm-qc) - gatekeeper/qc's"
+    },
+    "mutation_controls": {
+      "harness": "tests/mutate.sh (the repo's mechanical harness; tools/mutate.py named by the agent brief does not exist in this repo), in a fresh python:3.12-bookworm container, PYTHONDONTWRITEBYTECODE=1, target copies outside the tree, sha256 of every target unchanged after each run",
+      "run": 42,
+      "killed": 42,
+      "survived": 0,
+      "aborted": 0,
+      "equivalent": 1,
+      "ids": "M927-M968",
+      "findings": [
+        "M952 (--clear removed) was first red only on an assertion about the venv command's arguments (red for the wrong reason). The stand-in venv now keeps an existing venv's packages without --clear, as the real one does; t55 reinstalls over a leftover package. Re-run: RED on install-sh-venv-then-pip-then-lock-then-drift by consequence.",
+        "M927 (lock_entry missing-file guard) red only on the byte-identity case: measured equivalent (the redirection fails, n=0, return 1); documented EQUIV in mutations.txt.",
+        "Every shared-block control (M927-M951) is also red on the byte-identity case; each was checked to be red on at least one behavioural case too (all but M927).",
+        "Writing t55 found a product defect: venv_drift's d.metadata['Name'] warns on 3.12 (KeyError later) for a nameless distribution; fixed with .get (2fcb39b)."
+      ]
+    },
+    "register": "REG-0068 added (the finding) and closed by this build"
+  }
+}

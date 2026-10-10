@@ -690,6 +690,17 @@
       "where": "tests/run.sh:46-60, 146-148; .claude/project.yml gates; .gitlab-ci.yml:44",
       "closes_when": "an independent pinned inventory (file list + per-file case count, updated deliberately) is enforced by --strict, and/or the release's named mutation range becomes a declared gate",
       "date": "2026-10-09"
+    },
+    {
+      "id": "REG-0068",
+      "severity": "Medium",
+      "status": "closed",
+      "source": "James 2026-10-09, measured on prod .90 (v1.3.2): OSV against the venv's installed packages",
+      "finding": "The app venv holds pip 24.0 (Ubuntu 24.04 ensurepip, seeded by `python3 -m venv`) with 5 MODERATE + 1 LOW advisories (CVE-2025-8869, CVE-2026-3219, CVE-2026-6357, CVE-2026-13346, CVE-2026-8643, CVE-2026-1703; fixed in 26.2.0). pip is in neither requirements.txt nor requirements.lock, so tools/sca-check.sh, the lock gate and CI's Trivy scan of the lock never see it, apt never updates the venv, and nothing compares the installed venv with the lock.",
+      "where": "install.sh, install/upgrade-full.sh (venv creation), requirements.txt, requirements.lock, tools/sca-check.sh",
+      "closes_when": "pip is pinned and hash-locked, scanned by sca, installed first from the lock by every installer (online and offline), and the installed venv is held to exactly the locked set",
+      "closed_by": "v1.3.3 (WO-0009): pip==26.2.1 pinned (venv tooling) and locked; install.sh/upgrade-full.sh upgrade it first (--require-hashes, PyPI or bundle) then hold the venv to exactly the lock (drift fails the run; upgrade rolls back; --audit-only WARNs); sca 17 clean and RED with pip 24.0 in the lock; e2e in ubuntu:24.04 from a prepare-offline.sh bundle: pip 26.2.1, drift exit 0, exit 1 after `pip install six`",
+      "date": "2026-10-09"
     }
   ]
 }
