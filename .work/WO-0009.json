@@ -114,6 +114,48 @@
         "Writing t55 found a product defect: venv_drift's d.metadata['Name'] warns on 3.12 (KeyError later) for a nameless distribution; fixed with .get (2fcb39b)."
       ]
     },
-    "register": "REG-0068 added (the finding) and closed by this build"
+    "register": "REG-0068 added (the finding) and closed by this build",
+    "round2": {
+      "at": "2026-10-09",
+      "trigger": "James ruled FIX BOTH before shipping (REG-0069, REG-0070), via the coordinator; base 30625f0",
+      "commits": [
+        "e72bad8 sca REG-0070: one querybatch, whole well-formed answer only",
+        "bce6390 install REG-0069: drift check holds everything the venv can import",
+        "e4972e4 tests+docs: M969-M997, CHANGELOG, TROUBLESHOOTING",
+        "2c4f36c tests: close M986/M987/M989 survivors; REG-0069/0070 closed"
+      ],
+      "root_cause": {
+        "REG-0069": "venv_drift trusted dist-info Name/Version as the description of what the venv can import; nothing tied site-packages files, .pth files or pyvenv.cfg to it, and nothing verified file contents against RECORD.",
+        "REG-0070": "sca used /v1/query, whose clean answer is {} - indistinguishable from an empty/truncated/proxied/paginated reply; HTTP status was not read."
+      },
+      "files_changed": {
+        "install.sh, install/upgrade-full.sh": "venv_drift (byte-identical): SYSTEM-SITE, RECORD read via csv (Distribution.files drops missing files on 3.12), sha256 per row, MISLABELLED, NORECORD, site-packages walk (UNOWNED/PTH, run-time .pyc allowed)",
+        "tools/sca-check.sh": "osv_judge + osv_batch (querybatch, curl rc, HTTP 200, envelope/count/entry shape), explicit pagination (follow up to 5 pages, then SKIPPED), sections run twice (collect, print)",
+        "tests": "t55 (2 new cases: REG-0069 escapes, REG-0070 non-answers), t25 judge case + TM_SCA_CHECK, tests/lib/fake_dist.py, tests/lib/osv-curl-stub.sh, mutations M969-M997",
+        "docs": "CHANGELOG [1.3.3], TROUBLESHOOTING (every new drift line), SBOM tooling row"
+      },
+      "amendments": [
+        "tests/lib/fake_dist.py and tests/lib/osv-curl-stub.sh (new test helpers)"
+      ],
+      "verification": {
+        "tests_run_strict": "571 passed, 0 failed, 0 skipped (python:3.12-bookworm, git bundle, CI TEST_SETUP, HEAD 2c4f36c)",
+        "gates": "version-surfaces, requirements-lock --require-online (16), sbom-consistency, sca (live: 17 clean exit 0), heredoc-python, pipefail-consumers, env-neutral, shell-syntax, python-syntax: all 0",
+        "sca_live_red": "pip 24.0 in the lock, live OSV querybatch: VULNERABLE, exit 1",
+        "real_venv_ubuntu_24_04": "install.sh stage online: pass (1220 files match their RECORD), still pass after importing every package and -O; P1 exit 1 (UNOWNED six.py + its pyc), P2 exit 1 (PTH evil.pth), P3 exit 1 (SYSTEM-SITE), P4 exit 1 (MISLABELLED + MODIFIED METADATA); restored flask 3.1.3: pass",
+        "not_rerun": "the offline prepare-offline.sh bundle e2e (18 min) was not repeated after the drift rewrite; the online real-venv run above covers the same installed set",
+        "left_on_81": "nothing of this session's"
+      },
+      "mutation_controls": {
+        "run": 29,
+        "new_ids": "M969-M997",
+        "killed": 29,
+        "survived_then_closed": [
+          "M987, M989: t25's judge case ignored TM_SCA_CHECK, so it never ran the sca mutants; fixed, both RED",
+          "M986: red only on byte-identity with a 12-file fixture ('> 10' == '> 11'); fixture now 11 files, RED by behaviour"
+        ],
+        "rerun_after_rewrite": "M942-M951, M955, M959: 12/12 RED"
+      },
+      "residual": "a root attacker who rewrites a dist's RECORD to match tampered files is not caught: the host keeps no copy of the lock's wheel hashes to compare RECORD with"
+    }
   }
 }
