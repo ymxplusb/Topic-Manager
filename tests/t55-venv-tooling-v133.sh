@@ -407,29 +407,19 @@ a_audit_warns() {
 tm_case "audit-only-warns-on-the-installed-venv-pip-24-0" linux a_audit_warns
 
 # ─── SCA reads pip: 24.0 in the lock is RED (stand-in OSV) ───────────────────
-s_sca_reads_pip() {
+_sca_tree55() {   # the real sca-check over the real tree, OSV played by tests/lib/osv-curl-stub.sh
     local S="${TM_TMP}/sc"
     mkdir -p "$S/tools/lib" "$S/install" "${TM_TMP}/osv"
     cp "$SCA" "$S/tools/sca-check.sh"; cp "${TM_REPO_ROOT}/tools/lib/lockparse.py" "$S/tools/lib/"
     cp "${TM_REPO_ROOT}/requirements.txt" "${TM_REPO_ROOT}/requirements.lock" "$S/"
     cp "$(tm_upgrade_sh)" "$S/install/upgrade-full.sh"
-    cat > "${TM_TMP}/osv/curl" <<'STUB'
-#!/usr/bin/env bash
-out=""; url=""; data=""; fmt=""
-while [ $# -gt 0 ]; do case "$1" in -o) shift; out="$1" ;; -d) shift; data="$1" ;; -w) shift; fmt="$1" ;; -X|--max-time) shift ;; -*) ;; *) url="$1" ;; esac; shift; done
-body=""
-case "$url" in
-    https://api.osv.dev/v1/query)
-        case "$data" in
-            *'"name":"pip"},"version":"24.0"'*) body='{"vulns": [{"id": "GHSA-4xh5-x5gv-qwph"}, {"id": "GHSA-wf93-45jw-7689"}]}' ;;
-            *) body='{}' ;;
-        esac ;;
-esac
-if [ -n "$out" ]; then printf '%s' "$body" > "$out"; else printf '%s' "$body"; fi
-case "$fmt" in *http_code*) printf '200' ;; esac
-exit 0
-STUB
+    cp "${TM_REPO_ROOT}/tests/lib/osv-curl-stub.sh" "${TM_TMP}/osv/curl"
     chmod +x "${TM_TMP}/osv/curl"
+    export STUB_VULNS="pip==24.0=GHSA-4xh5-x5gv-qwph GHSA-wf93-45jw-7689"
+}
+s_sca_reads_pip() {
+    local S="${TM_TMP}/sc"
+    _sca_tree55
     RC=0; PATH="${TM_TMP}/osv:${PATH}" bash "$S/tools/sca-check.sh" > "${TM_TMP}/out" 2>&1 || RC=$?
     tm_assert_rc 0 "$RC" "SCA on the real tree went red: $(cat "${TM_TMP}/out")"
     grep -Eq '^  pip +26\.2\.1 +.*CLEAN' "${TM_TMP}/out" || _tm_afail "SCA did not query pip 26.2.1: $(cat "${TM_TMP}/out")"
@@ -442,5 +432,31 @@ STUB
     grep -Eq '^  pip +24\.0 +.*VULNERABLE.*GHSA-4xh5-x5gv-qwph' "${TM_TMP}/out" || _tm_afail "SCA did not name pip 24.0's advisories: $(cat "${TM_TMP}/out")"
 }
 tm_case "sca-queries-pip-and-24-0-is-red" none s_sca_reads_pip
+
+# REG-0070: only a well-formed answer for EVERY query is a verdict. With pip
+# 24.0 in the lock, each broken answer must be exit 2 (could not check) and
+# never print pip CLEAN; a paginated answer is followed to its advisory.
+s_sca_needs_a_whole_answer() {
+    local S="${TM_TMP}/sc" mode
+    _sca_tree55
+    sed -i 's/^pip==26\.2\.1 /pip==24.0 /' "$S/requirements.lock"
+    grep -q '^pip==24\.0 ' "$S/requirements.lock" || tm_die "the pip 24.0 fixture changed nothing"
+    for mode in empty token short endless http500; do
+        RC=0
+        if [ "$mode" = http500 ]; then
+            STUB_OSV_HTTP=500 PATH="${TM_TMP}/osv:${PATH}" bash "$S/tools/sca-check.sh" > "${TM_TMP}/out" 2>&1 || RC=$?
+        else
+            STUB_OSV_MODE="$mode" PATH="${TM_TMP}/osv:${PATH}" bash "$S/tools/sca-check.sh" > "${TM_TMP}/out" 2>&1 || RC=$?
+        fi
+        tm_assert_rc 2 "$RC" "OSV answer '${mode}' was not 'could not check': $(cat "${TM_TMP}/out")"
+        grep -Eq '^  pip +24\.0 +.*SKIPPED' "${TM_TMP}/out" || _tm_afail "'${mode}': pip 24.0 was not SKIPPED: $(cat "${TM_TMP}/out")"
+        grep -Eq 'CLEAN' "${TM_TMP}/out" && _tm_afail "'${mode}': a package was CLEAN on an answer that is no verdict: $(cat "${TM_TMP}/out")"
+    done
+    RC=0; STUB_OSV_MODE=page PATH="${TM_TMP}/osv:${PATH}" bash "$S/tools/sca-check.sh" > "${TM_TMP}/out" 2>&1 || RC=$?
+    tm_assert_rc 1 "$RC" "a paginated answer was not followed to pip 24.0's advisories: $(cat "${TM_TMP}/out")"
+    grep -Eq '^  pip +24\.0 +.*VULNERABLE.*GHSA-4xh5-x5gv-qwph' "${TM_TMP}/out" || _tm_afail "page: pip 24.0 not VULNERABLE: $(cat "${TM_TMP}/out")"
+    grep -Eq '^  pip +26\.2\.1 +.*CLEAN' "${TM_TMP}/out" || _tm_afail "page: the followed clean page was not CLEAN: $(cat "${TM_TMP}/out")"
+}
+tm_case "sca-an-answer-that-is-no-verdict-is-exit-2" none s_sca_needs_a_whole_answer
 
 tm_finish

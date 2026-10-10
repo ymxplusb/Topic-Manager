@@ -401,18 +401,29 @@ SCA="${TM_REPO_ROOT}/tools/sca-check.sh"
 s_osv_any_vuln_is_a_finding() {
     {
         echo 'PY="${PYTHON:-python3}"; "$PY" -c "import json" >/dev/null 2>&1 || PY=python'
-        tm_extract_func "$SCA" osv_verdict
-        echo 'osv_verdict "$1"'
+        tm_extract_func "$SCA" osv_judge
+        echo 'osv_judge "$1" <<<"$2"'
     } > "${TM_TMP}/v.sh"
     local got
-    got="$(bash "${TM_TMP}/v.sh" '{}')";  tm_assert_eq "CLEAN" "$got" "an empty OSV answer"
-    got="$(bash "${TM_TMP}/v.sh" '{"vulns": []}')"; tm_assert_eq "CLEAN" "$got" "an empty vulns list"
-    got="$(bash "${TM_TMP}/v.sh" '{"vulns": [{"id": "BIT-flask-2026-1"}]}')"
+    _j() { bash "${TM_TMP}/v.sh" "$@"; }
+    got="$(_j 1 '{"results": [{}]}')";  tm_assert_eq "CLEAN" "$got" "an empty result in a well-formed answer"
+    got="$(_j 1 '{"results": [{"vulns": []}]}')"; tm_assert_eq "CLEAN" "$got" "an empty vulns list"
+    got="$(_j 1 '{"results": [{"vulns": [{"id": "BIT-flask-2026-1"}]}]}')"
     tm_assert_eq "VULN BIT-flask-2026-1" "$got" "an advisory with an unlisted ID prefix was not a finding"
-    got="$(bash "${TM_TMP}/v.sh" '{"vulns": [{"summary": "no id"}]}')"
+    got="$(_j 1 '{"results": [{"vulns": [{"summary": "no id"}]}]}')"
     tm_assert_eq "VULN (no-id)" "$got" "an advisory with no id was not a finding"
-    got="$(bash "${TM_TMP}/v.sh" '<html>502</html>')"; tm_assert_eq "BAD" "$got" "an HTML error page"
-    got="$(bash "${TM_TMP}/v.sh" '{"message": "rate limited"}')"; tm_assert_eq "BAD" "$got" "an error object"
+    got="$(_j 1 '{"results": [{"vulns": [{"id": "X-1"}], "next_page_token": "t"}]}')"
+    tm_assert_eq "VULN X-1" "$got" "an advisory on a page with more to come was not a finding"
+    got="$(_j 1 '{"results": [{"next_page_token": "t2"}]}')"; tm_assert_eq "PAGE t2" "$got" "a page token with no advisory"
+    # REG-0070: an answer that is not a verdict for EVERY query is BAD.
+    got="$(_j 1 '<html>502</html>')"; [[ "$got" == BAD* ]] || _tm_afail "an HTML error page: ${got}"
+    got="$(_j 1 '{"message": "rate limited"}')"; [[ "$got" == BAD* ]] || _tm_afail "an error object: ${got}"
+    got="$(_j 1 '{}')"; [[ "$got" == BAD* ]] || _tm_afail "a bare {} was read as a verdict: ${got}"
+    got="$(_j 1 '{"next_page_token": "abc"}')"; [[ "$got" == BAD* ]] || _tm_afail "a bare page token was read as a verdict: ${got}"
+    got="$(_j 2 '{"results": [{}]}')"; [[ "$got" == BAD* ]] || _tm_afail "1 result for 2 queries was read as a verdict: ${got}"
+    got="$(_j 1 '{"results": [{}], "extra": 1}')"; [[ "$got" == BAD* ]] || _tm_afail "an envelope with another key: ${got}"
+    got="$(_j 2 '{"results": [{}, {"vulns": "x"}]}')"
+    tm_assert_eq "CLEAN"$'\n'"BAD a result has a malformed vulns list or page token" "$got" "a malformed entry is BAD for that query only"
 }
 tm_case "sca-any-osv-advisory-is-a-finding-whatever-its-prefix" none s_osv_any_vuln_is_a_finding
 
@@ -676,26 +687,11 @@ _sca_tree() {   # _sca_tree <lock-file> [fake-lockparse-body]
     cp "${TM_REPO_ROOT}/requirements.txt" "$S/"; cp "$1" "$S/requirements.lock"
     cp "$(tm_upgrade_sh)" "$S/install/upgrade-full.sh"
     [ -n "${2:-}" ] && printf '%s\n' "$2" > "$S/tools/lib/lockparse.py"
-    cat > "${TM_TMP}/osv/curl" <<'STUB'
-#!/usr/bin/env bash
-out=""; url=""; data=""; fmt=""
-while [ $# -gt 0 ]; do case "$1" in -o) shift; out="$1" ;; -d) shift; data="$1" ;; -w) shift; fmt="$1" ;; -X|--max-time) shift ;; -*) ;; *) url="$1" ;; esac; shift; done
-case "$url" in
-    https://api.osv.dev/v1/query)
-        case "$data" in
-            *'"name":"pyasn1"},"version":"0.4.8"'*) body='{"vulns": [{"id": "CVE-2026-30922"}]}' ;;
-            *'"name":"Flask"},"version":"3.1.2"'*) body='{"vulns": [{"id": "CVE-2026-00001"}]}' ;;
-            *) body='{}' ;;
-        esac ;;
-    *) body="" ;;
-esac
-if [ -n "$out" ]; then printf '%s' "$body" > "$out"; else printf '%s' "$body"; fi
-case "$fmt" in *http_code*) printf '200' ;; esac
-exit 0
-STUB
+    # v1.3.3 (REG-0070): one /v1/querybatch; the stand-in answers it.
+    cp "${TM_REPO_ROOT}/tests/lib/osv-curl-stub.sh" "${TM_TMP}/osv/curl"
     chmod +x "${TM_TMP}/osv/curl"
 }
-_sca_run() { RC=0; PATH="${TM_TMP}/osv:${PATH}" bash "${TM_TMP}/sc/tools/sca-check.sh" > "${TM_TMP}/out" 2>&1 || RC=$?; }
+_sca_run() { RC=0; STUB_VULNS="${STUB_VULNS:-pyasn1==0.4.8=CVE-2026-30922,Flask==3.1.2=CVE-2026-00001}" PATH="${TM_TMP}/osv:${PATH}" bash "${TM_TMP}/sc/tools/sca-check.sh" > "${TM_TMP}/out" 2>&1 || RC=$?; }
 
 s_sca_queries_what_pip_installs() {
     _sca_tree "${TM_REPO_ROOT}/requirements.lock"; _sca_run

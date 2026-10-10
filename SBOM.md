@@ -178,7 +178,7 @@ TLS session, no key agreement) and remains a known limitation as described above
 |------|---------|
 | `tools/check-env-neutral.sh` | Refuses a tracked tree or an offline bundle that names the site it was built at (host names, private addresses, account names, paths), or a bundle carrying the repository's process records |
 | `tools/check-ppsm-consistency.sh` | Runs the real Settings → Download PPSM generator and requires it to equal `PPSM.csv` |
-| `tools/sca-check.sh` | Software Composition Analysis gate. Queries OSV.dev for every `==` pin in `requirements.txt` and for the Vue pin. Exits 1 on any advisory, 2 if a package could not be checked, 3 if OSV is unreachable — it does not report a pass it did not earn. Uses `curl` only; no third-party dependency of its own |
+| `tools/sca-check.sh` | Software Composition Analysis gate. Queries OSV.dev for every `==` pin in `requirements.txt` and for the Vue pin. Since v1.3.3 one OSV `/v1/querybatch` carries every query and only a well-formed answer for every one of them is a verdict (a bare `{}`, a page token alone, a short result list or a non-200 status is "could not check"; a page token is followed). Exits 1 on any advisory, 2 if a package could not be checked, 3 if OSV is unreachable — it does not report a pass it did not earn. Uses `curl` only; no third-party dependency of its own |
 | `prepare-offline.sh` | Builds the offline bundle from `git archive` of the committed tree, verifies it against `requirements.txt` and the Vue hash, and runs the leak check on it |
 | `install/upgrade-full.sh` | Audit, backup, upgrade, restore |
 

@@ -111,58 +111,99 @@ package_exists() {
     esac
 }
 
-# osv_verdict <OSV /v1/query response> — prints CLEAN for `{}` or an empty
-# "vulns" list, "VULN <id> <id>..." when "vulns" holds ANY entry (an entry
-# with no id still counts, as "(no-id)"), and BAD for anything that is not a
-# JSON object of that shape.
-osv_verdict() {
+# osv_judge <n> — judge one OSV /v1/querybatch answer (stdin) for <n> queries.
+# REG-0070 (v1.3.3, gatekeeper + Daybreak Blue F-03): the gate used to send one
+# /v1/query per package and read `{}` — which is ALSO what an empty proxy page,
+# a truncated reply or `{"next_page_token": ...}` with no vulns looks like — as
+# CLEAN. One batch now carries every query, and only a WELL-FORMED answer for
+# EVERY one of them is a verdict: a JSON object whose only key is "results",
+# holding exactly <n> entries, each an object with no key but "vulns" (a list)
+# and "next_page_token". Anything else prints one line, "BAD <why>", and every
+# package is SKIPPED (exit 2). Otherwise <n> lines, in query order:
+#   CLEAN              no vulns and no page token
+#   VULN <id> <id>...  ANY entry in "vulns", whatever its ID prefix (round 8:
+#                      a prefix allowlist read unknown databases as clean); an
+#                      entry with no id still counts, as "(no-id)"
+#   PAGE <token>       no vulns on this page, but OSV says there are more:
+#                      followed by the caller, never read as clean
+#   BAD <why>          this entry is malformed: that package is SKIPPED
+osv_judge() {   # osv_judge <n>  (answer on stdin)
     "$PY" -c '
 import json, sys
+n = int(sys.argv[1])
 try:
     d = json.loads(sys.stdin.read())
 except Exception:
-    print("BAD"); sys.exit(0)
-if not isinstance(d, dict) or any(k not in ("vulns", "next_page_token") for k in d):
-    print("BAD"); sys.exit(0)
-v = d.get("vulns", [])
-if not isinstance(v, list):
-    print("BAD"); sys.exit(0)
-if not v:
-    print("CLEAN"); sys.exit(0)
-ids = sorted({(x.get("id") if isinstance(x, dict) else None) or "(no-id)" for x in v})
-print("VULN " + " ".join(ids))
-' <<<"$1" 2>/dev/null || echo BAD
+    print("BAD the answer is not JSON"); sys.exit(0)
+if not isinstance(d, dict) or set(d) != {"results"}:
+    print("BAD the answer is not {\"results\": [...]} (keys: %s)" % (",".join(sorted(d)) if isinstance(d, dict) else type(d).__name__)); sys.exit(0)
+r = d["results"]
+if not isinstance(r, list) or len(r) != n:
+    print("BAD %s results for %d queries" % (len(r) if isinstance(r, list) else "no list of", n)); sys.exit(0)
+for e in r:
+    if not isinstance(e, dict) or any(k not in ("vulns", "next_page_token") for k in e):
+        print("BAD a result is not {vulns, next_page_token}"); continue
+    v, t = e.get("vulns", []), e.get("next_page_token")
+    if not isinstance(v, list) or (t is not None and not (isinstance(t, str) and t)):
+        print("BAD a result has a malformed vulns list or page token"); continue
+    if v:
+        print("VULN " + " ".join(sorted({(x.get("id") if isinstance(x, dict) else None) or "(no-id)" for x in v})))
+    elif t:
+        print("PAGE " + t)
+    else:
+        print("CLEAN")
+' "$1" 2>/dev/null || echo "BAD the answer could not be judged"
 }
 
-query_osv() {  # query_osv <ecosystem> <name> <version>
-    local eco="$1" name="$2" ver="$3" resp rc ids
-    resp="$(curl -sS --max-time 25 -X POST \
-        -d "{\"package\":{\"ecosystem\":\"${eco}\",\"name\":\"${name}\"},\"version\":\"${ver}\"}" \
-        https://api.osv.dev/v1/query 2>/dev/null)"
+# osv_batch <file of "eco<TAB>name<TAB>version<TAB>page-token" lines> — POST
+# them as ONE /v1/querybatch; print osv_judge's lines. The transfer must
+# succeed (curl's own exit status) and answer HTTP 200, or it is one BAD line.
+osv_batch() {   # osv_batch <query-file>
+    local n req resp rc code
+    n="$(grep -c . "$1")"
+    req="$("$PY" -c '
+import json, sys
+q = []
+for line in open(sys.argv[1], encoding="utf-8"):
+    eco, name, ver, tok = line.rstrip("\n").split("\t")
+    e = {"package": {"ecosystem": eco, "name": name}, "version": ver}
+    if tok:
+        e["page_token"] = tok
+    q.append(e)
+print(json.dumps({"queries": q}))
+' "$1")" || { echo "BAD the query could not be built"; return 0; }
+    resp="$(curl -sS --max-time 60 -w '\n%{http_code}' -X POST -d "$req" https://api.osv.dev/v1/querybatch 2>/dev/null)"
     rc=$?
-    # Check curl's OWN exit status, not just whether bytes came back. A
-    # truncated or aborted transfer can leave a non-empty body that is neither
-    # a clean result nor an advisory list, and grepping it silently reads CLEAN.
-    if [[ $rc -ne 0 ]]; then
-        printf '  %-22s %-12s %bSKIPPED%b  (curl exit %d)\n' "$name" "$ver" "$YELLOW" "$NC" "$rc"
-        SKIPPED=$((SKIPPED+1)); return 0
+    [[ $rc -eq 0 ]] || { echo "BAD curl exit ${rc}"; return 0; }
+    code="${resp##*$'\n'}"; resp="${resp%$'\n'*}"
+    [[ "$code" == 200 ]] || { echo "BAD HTTP ${code:-none}"; return 0; }
+    osv_judge "$n" <<<"$resp"
+}
+
+# Two passes over the SAME section code (scan_sections): COLLECT=true records
+# every query in order; the batch runs; the second pass prints each query's
+# verdict in that order. A query the first pass did not record is a harness
+# fault, never a verdict.
+COLLECT=true; QI=0; Q_FILE="$(mktemp "${TMPDIR:-/tmp}/tm-sca.XXXXXX")" || exit 3
+trap 'rm -f -- "$Q_FILE" "${Q_FILE}".*' EXIT
+V_FILE="${Q_FILE}.v"
+query_osv() {  # query_osv <ecosystem> <name> <version>
+    local eco="$1" name="$2" ver="$3" verdict
+    if [[ $COLLECT == true ]]; then
+        printf '%s\t%s\t%s\t\n' "$eco" "$name" "$ver" >> "$Q_FILE"; return 0
     fi
-    if [[ -z "$resp" ]]; then
-        printf '  %-22s %-12s %bSKIPPED%b  (empty response from OSV)\n' "$name" "$ver" "$YELLOW" "$NC"
-        SKIPPED=$((SKIPPED+1)); return 0
-    fi
-    # Parsed as JSON (round 8, gatekeeper): the verdict used to grep for IDs
-    # with a KNOWN PREFIX (CVE, GHSA, PYSEC, ...), so an advisory whose ID
-    # prefix was not on that list — BIT-, a new database — was reported CLEAN.
-    # Now ANY entry in "vulns" is a finding, whatever its ID.
-    local verdict; verdict="$(osv_verdict "$resp")"
+    QI=$((QI+1))
+    verdict="$(sed -n "${QI}p" "$V_FILE")"
     case "$verdict" in
         CLEAN) ;;
         VULN*)
             printf '  %-22s %-12s %bVULNERABLE%b  %s\n' "$name" "$ver" "$RED" "$NC" "${verdict#VULN }"
             VULN=$((VULN+1)); return 0 ;;
-        *)  # an error object, an HTML page, a half-received body: never clean
-            printf '  %-22s %-12s %bSKIPPED%b  (unrecognised OSV response shape)\n' "$name" "$ver" "$YELLOW" "$NC"
+        PAGE*)
+            printf '  %-22s %-12s %bSKIPPED%b  (OSV kept paginating with no advisory on any page)\n' "$name" "$ver" "$YELLOW" "$NC"
+            SKIPPED=$((SKIPPED+1)); return 0 ;;
+        *)  # an error object, an HTML page, a half-received body, no verdict at all: never clean
+            printf '  %-22s %-12s %bSKIPPED%b  (OSV: %s)\n' "$name" "$ver" "$YELLOW" "$NC" "${verdict#BAD }"
             SKIPPED=$((SKIPPED+1)); return 0 ;;
     esac
 
@@ -181,54 +222,106 @@ query_osv() {  # query_osv <ecosystem> <name> <version>
     esac
 }
 
-echo "── Python pins (requirements.txt) ───────────────────────────────"
-PINS=0
-QUERIED=""      # "normalised-name==version" per line, already queried (bash 3 has no assoc arrays)
 lk_norm() { tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/[-_.]+/-/g'; }
-while IFS= read -r line; do
-    line="${line%%#*}"
-    line="$(tr -d '[:space:]' <<<"$line")"
-    [[ -z "$line" ]] && continue
-    if [[ "$line" != *"=="* ]]; then
-        printf '  %-22s %-12s %bNOT PINNED%b  (== required for SCA)\n' "$line" "-" "$RED" "$NC"
-        VULN=$((VULN+1)); continue
+scan_sections() {
+    echo "── Python pins (requirements.txt) ───────────────────────────────"
+    PINS=0
+    QUERIED=""      # "normalised-name==version" per line, already queried (bash 3 has no assoc arrays)
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(tr -d '[:space:]' <<<"$line")"
+        [[ -z "$line" ]] && continue
+        if [[ "$line" != *"=="* ]]; then
+            printf '  %-22s %-12s %bNOT PINNED%b  (== required for SCA)\n' "$line" "-" "$RED" "$NC"
+            VULN=$((VULN+1)); continue
+        fi
+        query_osv PyPI "${line%%==*}" "${line##*==}"
+        QUERIED+="$(lk_norm "${line%%==*}")==${line##*==}"$'\n'
+        PINS=$((PINS+1))
+    done < "$REQ"
+
+    if [[ $PINS -eq 0 ]]; then
+        echo "${RED}sca-check: no pins parsed from requirements.txt — refusing to pass.${NC}" >&2
+        exit 3
     fi
-    query_osv PyPI "${line%%==*}" "${line##*==}"
-    QUERIED+="$(lk_norm "${line%%==*}")==${line##*==}"$'\n'
-    PINS=$((PINS+1))
-done < "$REQ"
 
-if [[ $PINS -eq 0 ]]; then
-    echo "${RED}sca-check: no pins parsed from requirements.txt — refusing to pass.${NC}" >&2
-    exit 3
-fi
+    # Round 2: the TRANSITIVE dependencies too. requirements.lock carries every
+    # package the installers actually install (Jinja2, MarkupSafe, cffi, ...),
+    # as read above by lockparse.py. A direct pin is skipped only when
+    # requirements.txt already queried that SAME version.
+    echo
+    echo "── Locked packages (requirements.lock — what pip installs) ──────"
+    for pair in "${LOCK_PINS[@]}"; do
+        n="${pair%% *}"; v="${pair#* }"
+        grep -Fqx -- "$(lk_norm "$n")==${v}" <<<"$QUERIED" && continue     # same version queried above
+        query_osv PyPI "$n" "$v"
+    done
+    echo "  ${LSEEN} of ${LEXPECT} requirements.lock entries checked at the version pip installs"
 
-# Round 2: the TRANSITIVE dependencies too. requirements.lock carries every
-# package the installers actually install (Jinja2, MarkupSafe, cffi, ...),
-# as read above by lockparse.py. A direct pin is skipped only when
-# requirements.txt already queried that SAME version.
-echo
-echo "── Locked packages (requirements.lock — what pip installs) ──────"
-for pair in "${LOCK_PINS[@]}"; do
-    n="${pair%% *}"; v="${pair#* }"
-    grep -Fqx -- "$(lk_norm "$n")==${v}" <<<"$QUERIED" && continue     # same version queried above
-    query_osv PyPI "$n" "$v"
-done
-echo "  ${LSEEN} of ${LEXPECT} requirements.lock entries checked at the version pip installs"
-
-echo
-echo "── Frontend pin (install/upgrade-full.sh) ───────────────────────"
-if [[ -f "$UPGRADE" ]]; then
-    VUE_VER="$(grep -m1 -oP '^VUE_VERSION="\K[^"]+' "$UPGRADE" || true)"
-    if [[ -n "$VUE_VER" ]]; then
-        query_osv npm vue "$VUE_VER"
+    echo
+    echo "── Frontend pin (install/upgrade-full.sh) ───────────────────────"
+    if [[ -f "$UPGRADE" ]]; then
+        VUE_VER="$(grep -m1 -oP '^VUE_VERSION="\K[^"]+' "$UPGRADE" || true)"
+        if [[ -n "$VUE_VER" ]]; then
+            query_osv npm vue "$VUE_VER"
+        else
+            echo "  ${YELLOW}could not read VUE_VERSION from ${UPGRADE}${NC}"; SKIPPED=$((SKIPPED+1))
+        fi
     else
-        echo "  ${YELLOW}could not read VUE_VERSION from ${UPGRADE}${NC}"; SKIPPED=$((SKIPPED+1))
+        echo "  ${YELLOW}${UPGRADE} not found${NC}"; SKIPPED=$((SKIPPED+1))
     fi
-else
-    echo "  ${YELLOW}${UPGRADE} not found${NC}"; SKIPPED=$((SKIPPED+1))
-fi
+}
 
+# Pass 1: record every query, in order (nothing printed, nothing counted).
+scan_sections > /dev/null
+NQ="$(grep -c . "$Q_FILE")"
+[[ "$NQ" -gt 0 ]] || { echo "${RED}sca-check: no query was recorded — refusing to pass.${NC}" >&2; exit 3; }
+osv_batch "$Q_FILE" > "$V_FILE"
+# One BAD line for the whole batch (transfer, HTTP status or envelope): every
+# package gets it, so every package is SKIPPED.
+if [[ "$(grep -c '' "$V_FILE")" -ne "$NQ" ]]; then
+    _why="$(sed -n 1p "$V_FILE")"; : > "$V_FILE"
+    for ((_i = 0; _i < NQ; _i++)); do printf '%s\n' "${_why:-BAD no answer}" >> "$V_FILE"; done
+fi
+# PAGINATION, explicitly: a result with an advisory is already a finding. A
+# result with NO advisory but a next_page_token is followed, that package
+# alone, with its page_token, up to OSV_MAX_PAGES more pages; one still
+# paginating after that is SKIPPED (exit 2), never clean.
+OSV_MAX_PAGES=5
+for ((_round = 1; _round <= OSV_MAX_PAGES; _round++)); do
+    grep -q '^PAGE ' "$V_FILE" || break
+    : > "${Q_FILE}.p"; _idx=""
+    _n=0
+    while IFS= read -r _v; do
+        _n=$((_n+1))
+        [[ "$_v" == "PAGE "* ]] || continue
+        _q="$(sed -n "${_n}p" "$Q_FILE")"
+        printf '%s%s\n' "${_q%$'\t'*}"$'\t' "${_v#PAGE }" >> "${Q_FILE}.p"
+        _idx="${_idx} ${_n}"
+    done < "$V_FILE"
+    osv_batch "${Q_FILE}.p" > "${Q_FILE}.pv"
+    _np="$(grep -c . "${Q_FILE}.p")"
+    if [[ "$(grep -c '' "${Q_FILE}.pv")" -ne "$_np" ]]; then
+        _why="$(sed -n 1p "${Q_FILE}.pv")"; : > "${Q_FILE}.pv"
+        for ((_i = 0; _i < _np; _i++)); do printf '%s\n' "${_why:-BAD no answer}" >> "${Q_FILE}.pv"; done
+    fi
+    # Put each follow-up verdict back at its query's line.
+    "$PY" -c '
+import sys
+v = open(sys.argv[1]).read().split("\n")[:-1]
+pv = open(sys.argv[2]).read().split("\n")[:-1]
+for i, line in zip(sys.argv[3].split(), pv):
+    v[int(i) - 1] = line
+open(sys.argv[1], "w").write("".join(x + "\n" for x in v))
+' "$V_FILE" "${Q_FILE}.pv" "$_idx" || { echo "${RED}sca-check: could not merge OSV pages — refusing to pass.${NC}" >&2; exit 3; }
+done
+
+# Pass 2: the same sections, each query printed with its verdict.
+VULN=0; CLEAN=0; SKIPPED=0; COLLECT=false; QI=0
+scan_sections
+if [[ $QI -ne $NQ ]]; then
+    echo "${RED}sca-check: ${QI} verdicts printed for ${NQ} queries — refusing to pass.${NC}" >&2; exit 3
+fi
 echo
 echo "─────────────────────────────────────────────────────────────────"
 printf 'clean %d · vulnerable %d · skipped %d\n' "$CLEAN" "$VULN" "$SKIPPED"
