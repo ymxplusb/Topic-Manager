@@ -474,6 +474,13 @@ d_drift_escapes() {
     printf 'import os\n' > "$V/bin/gunicorn.py"; _drift "$V" "$L"
     tm_assert_rc 1 "$RC" "REG-0076c: bin/gunicorn.py passed"
     tm_assert_eq "BIN gunicorn.py: in the venv bin/, in no distribution's RECORD and not one of the venv's own files" "$(cat "${TM_TMP}/out")" "REG-0076c line"
+    # activate is the venv's own only as a FILE: a link in its place is not.
+    mv "$V/bin/activate" "${TM_TMP}/activate.ok"; ln -s /etc/hostname "$V/bin/activate"; _drift "$V" "$L"
+    tm_assert_eq "BIN activate: not a regular file a distribution installed" "$(cat "${TM_TMP}/out")" "a linked activate"
+    rm "$V/bin/activate"; mv "${TM_TMP}/activate.ok" "$V/bin/activate"
+    # No bin/ at all: cannot say.
+    mv "$V/bin" "${TM_TMP}/bin.ok"; _drift "$V" "$L"; tm_assert_rc 3 "$RC" "a venv with no bin/ was not 'cannot say'"
+    mv "${TM_TMP}/bin.ok" "$V/bin"
     rm -f "$V/bin/gunicorn.py"; mkdir "$V/bin/sub"; _drift "$V" "$L"
     tm_assert_eq "BIN sub: not a regular file a distribution installed" "$(cat "${TM_TMP}/out")" "a directory in bin/"
     rmdir "$V/bin/sub"
