@@ -31,6 +31,12 @@
       "meaning": "passed",
       "verdict": "PATCH on James's direct instruction 2026-10-09 ('lets start workin 1.3.3 specifcally to account for the update'): pin + hash + scan the venv's pip (24.0 -> 26.2.x, 6 advisories), venv-drift check; one defensible approach, no panel (as WO-0005/7/8). Security: no data/route/credential change; no new outbound source.",
       "at": "2026-10-09T23:27:56Z"
+    },
+    "build": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "Builder (2d44188..acf5f03): pip==26.2.1 locked+hashed (venv tooling section; generator refuses lost direct pins), shared venv block in install.sh + upgrade-full.sh (venv -> pinned pip -> lock -> drift check; drift fails/rolls back; audit WARN), venv --clear, SBOM/NOTICES/About, t55, cascade 1.3.3/?v=1303, REG-0068 closed. Linux strict 569/0/0; sca red with pip 24.0; e2e ubuntu:24.04 offline bundle -> pip 26.2.1, drift pass then EXTRA six fail; mutations 42/42 (1 equivalent). Amendments: TROUBLESHOOTING, install/README, check-heredocs, tests/mutate.sh. render-proof VISIBLE: About 16 rows incl pip 26.2.1, ?v=1303, STIG section unchanged.",
+      "at": "2026-10-10T00:43:55Z"
     }
   },
   "builder": {
