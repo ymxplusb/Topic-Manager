@@ -8110,8 +8110,8 @@ DESC|v1.3.3 generator: the direct-pin comparison is flipped
 TESTS|t55-venv-tooling-v133.sh
 TARGET|genlock
 EQUIV|no
-ANCHOR|    lost = ['%s==%s' % nv for nv in sorted(direct_pins().items()) if got.get(nv[0]) != nv[1]]
-REPLACE|    lost = ['%s==%s' % nv for nv in sorted(direct_pins().items()) if got.get(nv[0]) == nv[1]]
+ANCHOR|    lost = [PIN_FMT % nv for nv in sorted(direct_pins().items()) if got.get(nv[0]) != nv[1]]
+REPLACE|    lost = [PIN_FMT % nv for nv in sorted(direct_pins().items()) if got.get(nv[0]) == nv[1]]
 
 --- M968
 DESC|v1.3.3 generator: direct_pins returns nothing (no pin is ever "lost")
