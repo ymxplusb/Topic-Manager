@@ -7,7 +7,7 @@
     "version": "1.3.3"
   },
   "opened": "2026-10-09",
-  "status": "shipping",
+  "status": "done",
   "depends_on": [
     "WO-0008"
   ],
@@ -55,6 +55,12 @@
       "meaning": "passed",
       "verdict": "Prod .90 1.3.2 -> 1.3.3 2026-10-10 ~05:16Z (online, deploy key, v1.3.3 @ 3d7f039). audit exit 1 (expected: venv pip 24.0 vs 26.2.1 + 2 known). vCenter snapshot NOT taken: govc memory snapshot stunned prod ~11 min (23% done), Claude cancelled it to restore service; the deploy command then continued (no && between steps) - backup RESULT exit 0 + upgrade RESULT exit 0 (restore point 20261010-051642), so rollback = --restore only. Verified before AND after reboot: 1.3.3 health, units active, sock 660, 0 on 5001, venv pip 26.2.1, venv == lock (16, 1220 files), 0 non-root/writable venv entries, 14 assets ?v=1303, TLS1.1 refused. app_env_scan.py: CLEAN (was APP-DEP pip 24.0).",
       "at": "2026-10-10T05:18:51Z"
+    },
+    "wrap": {
+      "code": 0,
+      "meaning": "passed",
+      "verdict": "WO-0009 done: v1.3.3 live on prod .90, app_env_scan CLEAN; no snapshot (memory snapshot cancelled, lesson recorded); tm-upgtest deleted; REG-0079..0091 open, REG-0084 accepted; CI CVE job parked by James. No ticket (patch on James's direct instruction). Recorded in session-2026-10-10b; 4 lessons approved and written.",
+      "at": "2026-10-10T12:35:30Z"
     }
   },
   "builder": {
