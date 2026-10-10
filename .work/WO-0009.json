@@ -156,6 +156,36 @@
         "rerun_after_rewrite": "M942-M951, M955, M959: 12/12 RED"
       },
       "residual": "a root attacker who rewrites a dist's RECORD to match tampered files is not caught: the host keeps no copy of the lock's wheel hashes to compare RECORD with"
+    },
+    "round3": {
+      "at": "2026-10-10",
+      "trigger": "James ruled 'Practical hardening' (via the coordinator); base 5af8be2 + gatekeeper REGISTER additions committed as 69f-records",
+      "commits": "records REG-0076..0083; 8aa3855 code+tests; e130766 controls M998-M1019; 654dfaa docs+records; t55 order fix; c8d7642 M1016 equivalent; 0b27800 t04/t17 Phase 10 extractions",
+      "root_cause": {
+        "REG-0076": "venv_drift trusted pyvenv.cfg's absence of a bad value and never read bin/, both of which decide what the interpreter imports and runs.",
+        "REG-0077": "the test compared two calls of a builder that stamps wall-clock ms.",
+        "REG-0078": "upgrade Phase 10 chowned the venv -R to the service account (v1.0.3) and replayed the baseline only for the venv directory."
+      },
+      "verification": {
+        "strict_runs": "573/0/0 twice at 0b27800 (python:3.12-bookworm, git bundle, CI TEST_SETUP), the second with 16 CPU burners on 8 cores (load 17)",
+        "t51_under_load": "50/50 passed with 16 burners (load 18.4)",
+        "gates": "version-surfaces, requirements-lock --require-online (16), sbom-consistency, sca (live), heredoc-python, pipefail-consumers, env-neutral, shell-syntax, python-syntax: all 0",
+        "real_venv_ubuntu_24_04": "install.sh stage, umask 077: 0 entries not root:root, 0 group/other-writable, dirs 0755; topic-manager imports all 15 packages and runs gunicorn --version, cannot write in the venv (Permission denied); drift clean PASS (1220 files); include-system-site-packages line deleted (sys.path then has dist-packages) -> exit 1; home moved -> exit 1; python3 wrapper (runs) -> exit 1; bin/gunicorn.py -> exit 1; 'False' accepted; restored -> PASS",
+        "left_on_81": "nothing of this session's"
+      },
+      "mutation_controls": {
+        "new_ids": "M998-M1019 (M969 retired: its line was rewritten)",
+        "run": 22,
+        "killed_by_behaviour": 19,
+        "documented_equivalent": [
+          "M1004 (realpath test alone refuses a non-link)",
+          "M1016 (lock_down's closing check is a backstop; measured red only on byte-identity)",
+          "M1019 (re-adding the venv to the chown -R is overridden by lock_down_venv; M1018 removes that)"
+        ],
+        "survived": 0
+      },
+      "accepted": "REG-0084 (accepted, root-only): swapped install-time .pyc with empty RECORD digest; RECORD rewritten to match",
+      "residual_noted": "/opt/topic-manager itself stays the service account's (0750), so that account could rename the venv directory away; the unit's ProtectSystem=strict keeps /opt read-only to the running service. Not in this ruling's scope; not changed."
     }
   }
 }
