@@ -753,6 +753,24 @@
       "where": "tools/check-sbom-consistency.sh:~254",
       "closes_when": "NOTICES entries go through record() and a duplicate section is a failure",
       "date": "2026-10-09"
+    },
+    {
+      "id": "REG-0074",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0009 clean-room 1.3.2 -> 1.3.3 (PASS) / builder REG-0069 fix, 2026-10-10",
+      "finding": "README's offline upgrade section never mentions a reboot; the upgrade can print REBOOT REQUIRED (pending libc6/kernel from the OS) and only the online section's Step 6 checklist covers it.",
+      "where": "README.md offline upgrade",
+      "closes_when": "the offline section points to the post-upgrade checklist (reboot included)"
+    },
+    {
+      "id": "REG-0075",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0009 clean-room 1.3.2 -> 1.3.3 (PASS) / builder REG-0069 fix, 2026-10-10",
+      "finding": "The venv drift check (REG-0069 hardening) cannot catch a root attacker who rewrites a package's RECORD to match tampered files: the host keeps no copy of the lock's wheel hashes.",
+      "where": "install.sh / install/upgrade-full.sh venv_drift",
+      "closes_when": "the host keeps the lock (or its wheel hashes) and the check verifies RECORD against it, or this is accepted as out of scope (root can do anything)"
     }
   ]
 }
