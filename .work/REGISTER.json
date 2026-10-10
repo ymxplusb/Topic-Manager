@@ -771,6 +771,86 @@
       "finding": "The venv drift check (REG-0069 hardening) cannot catch a root attacker who rewrites a package's RECORD to match tampered files: the host keeps no copy of the lock's wheel hashes.",
       "where": "install.sh / install/upgrade-full.sh venv_drift",
       "closes_when": "the host keeps the lock (or its wheel hashes) and the check verifies RECORD against it, or this is accepted as out of scope (root can do anything)"
+    },
+    {
+      "id": "REG-0076",
+      "severity": "Medium",
+      "status": "open",
+      "date": "2026-10-10",
+      "source": "gatekeeper WO-0009 (v1.3.3 FINAL) at 5af8be2, 2026-10-10: gatekeeper probes N1/N2/N5 + Daybreak Blue F-01/F-02/F-03 (gpt-daybreak-blue-latest/xhigh, banner; Codex gave no severity this run); reproduced by the gatekeeper on copies of a real venv built from requirements.lock in a fresh ubuntu:24.04 container on .81 (system python3 3.12.3). Gatekeeper MEDIUM on the REG-0069 rubric (needs write access to the venv), but REG-0069 was ruled FIX-before-ship by James and its fix is incomplete: treated as BLOCKING for v1.3.3.",
+      "finding": "venv_drift (REG-0069 fix) still prints '16 packages, exactly the lock' (exit 0) while the venv runs code outside the lock, each shown executing: (a) include-system-site-packages line DELETED from pyvenv.cfg - CPython defaults it to true, /usr/lib/python3/dist-packages lands on sys.path (REG-0069 P3 with the key removed instead of set); (b) pyvenv.cfg home = an attacker prefix - base_prefix moves there and its sitecustomize.py runs; (c) bin/python3 replaced by a wrapper script (bin/ is never inspected; every entry point's shebang names it); (d) bin/gunicorn.py added - the script dir is sys.path[0], it shadows the gunicorn package for the service's own ExecStart; (e) an install-time __pycache__/*.cpython-312.pyc replaced (timestamp-matched or unchecked-hash) - pip records all 984 such pycs in RECORD with an EMPTY digest, and an empty digest is treated as owned-and-fine; (f) an importable file's RECORD digest blanked then the file edited (a RECORD edit, REG-0075-adjacent); (g) a run-time .opt-1.pyc is exempt and runs under -O (service does not use -O). REG-0069's closes_when is therefore not met.",
+      "where": "install.sh venv_drift (PYVENV ~l.380-500) = install/upgrade-full.sh copy: pyvenv.cfg loop l.408-411, 'if not digest: continue' l.441-442, __pycache__ exemption l.485-488, site walk only (bin/ never read)",
+      "closes_when": "pyvenv.cfg must carry exactly include-system-site-packages = false and home equal to the system interpreter's dir; bin/ is attested (python* symlinks point at the system python3.12, no unowned files); every RECORD row except RECORD itself must carry sha256 and pip-written pyc rows are verified (or the venv is installed --no-compile with __pycache__ refused); t55 controls execute the venv interpreter for each of (a)-(f)"
+    },
+    {
+      "id": "REG-0077",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-10",
+      "source": "gatekeeper WO-0009 (v1.3.3 FINAL) at 5af8be2, 2026-10-10: gatekeeper, repo-tests run 1 in a fresh python:3.12-bookworm container on .81 (570/1/0, exit 1); run 2 571/0/0; 0/40 isolated",
+      "finding": "t51 settings-builds-the-compliance-csv-and-ends-sessions-as-asked is time-racy: the expected value is a second call to settingsComplianceCsv(), whose 'Generated' row is new Date().toISOString() (ms). Two builds 2 ms apart differ (measured). Under host load the assertion 'the download is not the CSV of the fetched document' fails; CI's tag pipeline can go red on a correct tree. Pre-existing since v1.3.2 (WO-0008).",
+      "where": "tests/t51-host-checks-v130.sh:476; app/components/SettingsTab.js:161",
+      "closes_when": "the case freezes Date in the vm sandbox (or compares with the Generated row removed) and still fails on a wrong document"
+    },
+    {
+      "id": "REG-0078",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-10",
+      "source": "gatekeeper WO-0009 (v1.3.3 FINAL) at 5af8be2, 2026-10-10: gatekeeper, code reading while rating REG-0076",
+      "finding": "upgrade-full.sh does chown -R APP_USER on the venv (since v1.0.3) and apply_baseline then resets only the venv directory itself (non-recursive), so after an upgrade every venv file - pyvenv.cfg, bin/, site-packages, pycs - is owned by the service account; install.sh leaves them root-owned. The two installers produce different ownership, and on an upgraded host REG-0076's states need only the service account, not root.",
+      "where": "install/upgrade-full.sh:3473, apply_baseline l.901-913; install.sh l.1517 (venv not chowned)",
+      "closes_when": "both installers leave the venv root-owned (service account read/execute only), and a test asserts it"
+    },
+    {
+      "id": "REG-0079",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-10",
+      "source": "gatekeeper WO-0009 (v1.3.3 FINAL) at 5af8be2, 2026-10-10: Daybreak Blue F-05 (gpt-daybreak-blue-latest/xhigh, banner; Codex gave no severity this run); reproduced by the gatekeeper on a copy in a fresh python:3.12-bookworm container on .81",
+      "finding": "check-heredocs.sh (gate heredoc-python) finds openers only when the quoted delimiter is followed by a newline, so PYSEED (... <<'PYSEED' 2>&1) and PYSAVED (... <<'PYSAVED' 2>/dev/null || true) in BOTH installers are never compiled: 13 of 17 bodies. 'def broken(:::' in any of the four leaves bash -n and the gate at exit 0 ('13 embedded Python heredoc(s) compile'). All 17 compile at 5af8be2 (gatekeeper compiled each). Pre-existing (present at v1.3.2).",
+      "where": "tools/check-heredocs.sh:71 (regex), :46 (EXPECTED lists)",
+      "closes_when": "the opener regex allows trailing redirections/commands, PYSEED and PYSAVED are in EXPECTED for both files, and t-case goes red on each"
+    },
+    {
+      "id": "REG-0080",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-10",
+      "source": "gatekeeper WO-0009 (v1.3.3 FINAL) at 5af8be2, 2026-10-10: Daybreak Blue F-09 (gpt-daybreak-blue-latest/xhigh, banner; Codex gave no severity this run); reproduced by the gatekeeper on a copy in a fresh python:3.12-bookworm container on .81",
+      "finding": "check-version-surfaces.sh passes a newly added local <script src> with no ?v= token: it requires the tokens it FINDS to be 16 and equal, never that every local asset carries one ('every surface says 1.3.3', exit 0). frontend-syntax happened to fail the same copy for the empty file, not the missing token.",
+      "where": "tools/check-version-surfaces.sh:103 (EXPECTED_TOKENS = 16), :202",
+      "closes_when": "every local src/href in index.html (and component imports) must carry the derived token; the count follows from that inventory"
+    },
+    {
+      "id": "REG-0081",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-10",
+      "source": "gatekeeper WO-0009 (v1.3.3 FINAL) at 5af8be2, 2026-10-10: Daybreak Blue F-04 (gpt-daybreak-blue-latest/xhigh, banner; Codex gave no severity this run); reproduced by the gatekeeper on a copy in a fresh python:3.12-bookworm container on .81 (stub curl)",
+      "finding": "sca-check.sh binds OSV verdicts to packages only by position: a count-correct {\"results\":[{},...]} reply (OSV's own clean shape) makes pip 24.0 CLEAN, exit 0. Needs a TLS-intercepting proxy or a lying OSV; HTTPS to api.osv.dev makes this residual, not a transport bypass. Also the second pass re-reads requirements.txt/lock/VUE_VERSION after the batch, so a file changed mid-run gets the old version's verdict.",
+      "where": "tools/sca-check.sh:195-196 (positional verdict), :276/:321 (two scans)",
+      "closes_when": "pass 2 prints from the collected query file, not a re-scan; the positional-binding residual is accepted in writing or per-package /v1/query answers are cross-checked"
+    },
+    {
+      "id": "REG-0082",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-10",
+      "source": "gatekeeper WO-0009 (v1.3.3 FINAL) at 5af8be2, 2026-10-10: Daybreak Blue F-11 (gpt-daybreak-blue-latest/xhigh, banner; Codex gave no severity this run); reproduced by the gatekeeper on a copy in a fresh python:3.12-bookworm container on .81",
+      "finding": "check-sbom-consistency.sh reads requirements.txt last-write-wins: pip==24.0 placed above pip==26.2.1 passes ('all 3 copies agree', exit 0). requirements-lock (exit 1) and sca (exit 1) fail the same copy, so it is a checker-local gap.",
+      "where": "tools/check-sbom-consistency.sh:53-58",
+      "closes_when": "a duplicate normalised name in requirements.txt is a FAIL"
+    },
+    {
+      "id": "REG-0083",
+      "severity": "Low",
+      "status": "open",
+      "date": "2026-10-10",
+      "source": "gatekeeper WO-0009 (v1.3.3 FINAL) at 5af8be2, 2026-10-10: Daybreak Blue F-10/F-12 (gpt-daybreak-blue-latest/xhigh, banner; Codex gave no severity this run); confirmed by the gatekeeper reading .claude/project.yml",
+      "finding": "The contract's own claims are stale or weaker than CI: the sca note says the real lock is '15 of 15' (HEAD: 16), the repo-tests note says 't00-t27 (28 files)' (HEAD: 54 tests/t*.sh); the requirements-lock gate cmd omits --require-online (CI uses it), so PyPI unreachable + an inherited TM_LOCK_OFFLINE_OK=1 makes the declared command a structure-only PASS, exit 0.",
+      "where": ".claude/project.yml gates[sca].note, gates[repo-tests].note, gates[requirements-lock].cmd",
+      "closes_when": "the counts are corrected and the declared cmd is --require-online"
     }
   ]
 }
