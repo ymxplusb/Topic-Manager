@@ -373,7 +373,9 @@ venv_bootstrap_pip() {   # venv_bootstrap_pip <venv> <lock> [pip source option..
 #   MODIFIED <name>: <file> does not match its RECORD hash (or is missing)
 #   PTH <file>: a .pth file no installed distribution put there
 #   UNOWNED <path>: in site-packages, in no distribution's RECORD
-#   SYSTEM-SITE pyvenv.cfg: include-system-site-packages = <value>
+#   SYSTEM-SITE pyvenv.cfg: include-system-site-packages missing or not false
+#   HOME pyvenv.cfg: home = <dir>, not the system python3's directory
+#   BIN <name>: a bin/ entry no RECORD lists, or python* not a link to python3
 # Exit 0 (one "<n> packages, exactly the lock (<f> files match their
 # RECORD)" line), 1 on any finding, 3 when it cannot say (no lock, no
 # pyvenv.cfg, no site-packages) — never a pass it did not earn.
@@ -406,10 +408,26 @@ try:
 except (OSError, UnicodeError) as e:
     print("cannot read %s/pyvenv.cfg: %s" % (venv, e)); sys.exit(3)
 probs = []
+# REG-0076 (a)(b): the key must be THERE and say false (Python reads a
+# missing one as true), and home must be the directory of the python3 that
+# made the venv - the one running this check, as the installers create the
+# venv with it - or base_prefix (and its sitecustomize) moves with it. The
+# last of repeated keys wins, as in Python's own reader.
+syssite, home = None, None
 for line in cfg.splitlines():
     k, _, v = line.partition("=")
-    if k.strip().lower() == "include-system-site-packages" and v.strip().lower() != "false":
-        probs.append("SYSTEM-SITE pyvenv.cfg: include-system-site-packages = %s, so the system site-packages are importable too" % v.strip())
+    k = k.strip().lower()
+    if k == "include-system-site-packages":
+        syssite = v.strip()
+    elif k == "home":
+        home = v.strip()
+if syssite is None:
+    probs.append("SYSTEM-SITE pyvenv.cfg: no include-system-site-packages line, which Python reads as true, so the system site-packages are importable too")
+elif syssite.lower() != "false":
+    probs.append("SYSTEM-SITE pyvenv.cfg: include-system-site-packages = %s, so the system site-packages are importable too" % syssite)
+want_home = os.path.dirname(sys.executable)
+if home is None or os.path.realpath(home) != os.path.realpath(want_home):
+    probs.append("HOME pyvenv.cfg: home = %s, not %s, the directory of the python3 that made the venv" % (home if home is not None else "(none)", want_home))
 have, owned, nfiles = {}, set(), 0
 for dist_dir in sorted(glob.glob(os.path.join(site, "*.dist-info"))):
     d = metadata.PathDistribution(pathlib.Path(dist_dir))
@@ -491,6 +509,28 @@ for root, dirs, fnames in os.walk(site):
             probs.append("PTH %s: a .pth file no installed distribution put there (it adds import paths or runs code at start-up)" % fn)
             continue
         unowned.append(rel)
+# REG-0076 (c): bin/ holds only what a RECORD lists (pip-written entry
+# points), the venv's own activate scripts, and python/python3/python3.N as
+# LINKS to the system interpreter: a wrapper in their place, or any other
+# file (bin/gunicorn.py shadows the gunicorn package, bin/ being sys.path[0]
+# for every entry point), is a finding.
+sysexe = os.path.realpath(sys.executable)
+links = {"python", "python3", "python3.%d" % sys.version_info[1]}
+venv_own = {"activate", "activate.csh", "activate.fish", "Activate.ps1"}
+bindir = os.path.join(venv, "bin")
+try:
+    entries = set(os.listdir(bindir))
+except OSError as e:
+    print("cannot read %s: %s" % (bindir, e)); sys.exit(3)
+for b in sorted(entries | links):
+    p = os.path.join(bindir, b)
+    if b in links:
+        if not os.path.islink(p) or os.path.realpath(p) != sysexe:
+            probs.append("BIN %s: not a link to the system interpreter %s" % (b, sysexe))
+    elif os.path.islink(p) or not os.path.isfile(p):
+        probs.append("BIN %s: not a regular file a distribution installed" % b)
+    elif os.path.relpath(p, site) not in owned and b not in venv_own:
+        probs.append("BIN %s: in the venv bin/, in no distribution's RECORD and not one of the venv's own files" % b)
 for u in unowned[:10]:
     probs.append("UNOWNED %s: in site-packages, in no distribution's RECORD" % u)
 if len(unowned) > 10:
@@ -499,6 +539,25 @@ if probs:
     print("\n".join(probs)); sys.exit(1)
 print("%d packages, exactly the lock (%d files match their RECORD)" % (len(locked), nfiles))
 PYVENV
+}
+
+# lock_down_venv <venv> — REG-0078 (v1.3.3): the venv is ROOT's. Until v1.3.2
+# the upgrade chowned it -R to the service account (install.sh left it
+# root's), so on an upgraded host the account could rewrite its own code and
+# every state the drift check refuses needed no root. Owner root:root
+# throughout (symlinks themselves, never their targets), directories 0755,
+# files 0755 if any execute bit is set else 0644; the service only reads and
+# executes it (and its unit mounts /opt read-only besides). Then nothing in it
+# may be another owner's or writable by group/other. 1 + the reason on stdout.
+lock_down_venv() {   # lock_down_venv <venv>
+    local v="$1" bad
+    [[ -d "$v" && ! -L "$v" ]] || { echo "${v} is not a directory"; return 1; }
+    chown -R -h root:root -- "$v" || { echo "chown -R root:root failed on ${v}"; return 1; }
+    find "$v" -type d -exec chmod 0755 {} + || { echo "chmod failed on the directories of ${v}"; return 1; }
+    find "$v" -type f -perm /111 -exec chmod 0755 {} + || { echo "chmod failed on the executables of ${v}"; return 1; }
+    find "$v" -type f ! -perm /111 -exec chmod 0644 {} + || { echo "chmod failed on the files of ${v}"; return 1; }
+    bad="$(find "$v" \( ! -user root -o ! -group root -o \( ! -type l -perm /022 \) \) -print -quit)"
+    [[ -z "$bad" ]] || { echo "${bad} is not root:root and closed to group/other writes"; return 1; }
 }
 # <<< v1.3.3 venv tooling and drift
 # Where a retired unit's RuntimeDirectory= lives (remove_retired_runtime).
@@ -3470,10 +3529,14 @@ success "Re-applied recorded ownership/mode on ${RESTORED_N} paths"
 # other recorded path keeps the mode the replay gave it.
 normalise_frontend_ownership "$FRONTEND_DIR" "$WEB_USER"
 
-chown -R "${APP_USER}:${APP_USER}" "${APP_HOME}/tm" "${APP_HOME}/wsgi.py" "$VENV"
+chown -R "${APP_USER}:${APP_USER}" "${APP_HOME}/tm" "${APP_HOME}/wsgi.py"
 apply_baseline "${APP_HOME}/tm"     "$APP_USER" "$APP_USER" 755
 apply_baseline "${APP_HOME}/wsgi.py" "$APP_USER" "$APP_USER" 644
-apply_baseline "${APP_HOME}/venv"   root root 755
+# REG-0078 (v1.3.3): NOT the recorded owner. Since v1.0.3 this chowned the
+# venv -R to the service account (only the directory itself was then put
+# back), so the account could rewrite its own code. The venv is root's, like
+# install.sh's; like data/ below, this overrides the baseline on purpose.
+VENV_LOCK="$(lock_down_venv "$VENV")" || fail "The venv could not be made root-owned: ${VENV_LOCK}"
 safe_install_dir 755 "$APP_USER" "$APP_USER" "${APP_HOME}/logs"
 apply_baseline "${APP_HOME}/logs" "$APP_USER" "$APP_USER" 750
 # NOT the recorded mode (v1.1.0). data/ and tm.db are the one place the

@@ -43,24 +43,29 @@ _BLK_START='^# >>> v1\.3\.3 venv tooling and drift'
 _BLK_END='^# <<< v1\.3\.3 venv tooling and drift'
 _block() { tm_extract_between "$1" "$_BLK_START" "$_BLK_END"; }
 
-# _dist <site-packages> <name> <version> — an installed distribution, as pip
-# leaves it: <k>/__init__.py, <k>-<version>.dist-info/METADATA and a RECORD
-# with their sha256 (tests/lib/fake_dist.py; k = name with - and . as _).
-export STUB_FAKE_DIST="${TM_REPO_ROOT}/tests/lib/fake_dist.py" STUB_REAL_PY="$REAL_PY"
+# Fixture venvs are laid out as `python3 -m venv` lays them out (bin/python3
+# a link to THIS interpreter, pyvenv.cfg home = its directory) by
+# tests/lib/fake_venv.py, and distributions as pip leaves them (import
+# package, dist-info, RECORD with sha256) by tests/lib/fake_dist.py; pip in
+# them is tests/lib/fake_pip_main.py, run by the REAL interpreter.
+export STUB_FAKE_DIST="${TM_REPO_ROOT}/tests/lib/fake_dist.py"
+FAKE_VENV="${TM_REPO_ROOT}/tests/lib/fake_venv.py"
+PYMINOR="$("$REAL_PY" -c 'import sys; print(sys.version_info[1])')"
+SPREL="lib/python3.${PYMINOR}/site-packages"
 _dist() { "$REAL_PY" "$STUB_FAKE_DIST" "$1" "$2" "$3"; }
-PYVENV_CFG='home = /usr/bin
-include-system-site-packages = false
-version = 3.12.3'
-# The pass line for a venv holding the 16 locked packages as _dist writes
-# them: two hashed files each.
-PASS16="16 packages, exactly the lock (32 files match their RECORD)"
 # _venv_from_lock <venv> <lock> — a venv holding exactly what the lock pins.
 _venv_from_lock() {
-    local sp="${1}/lib/python3.12/site-packages" nv
-    mkdir -p "$sp"; printf '%s\n' "$PYVENV_CFG" > "${1}/pyvenv.cfg"
+    local sp="${1}/${SPREL}" nv
+    "$REAL_PY" "$FAKE_VENV" "$1" --clear
+    rm -rf "$sp"/pip "$sp"/pip-*.dist-info
     while IFS= read -r nv; do _dist "$sp" "${nv%%==*}" "${nv#*==}"; done \
         < <(sed -n 's/^\([A-Za-z0-9._-]*\)==\([^ \\]*\).*/\1==\2/p' "$2")
 }
+# The pass line for a venv holding the 16 locked packages as _dist writes
+# them: two hashed files each, and pip four more (__main__.py, three bin/).
+PYEXE="$("$REAL_PY" -c 'import os, sys; print(os.path.realpath(sys.executable))')"
+PYHOME="$("$REAL_PY" -c 'import os, sys; print(os.path.dirname(sys.executable))')"
+PASS16="16 packages, exactly the lock (36 files match their RECORD)"
 # _drift <venv> <lock> — the REAL venv_drift from install.sh; RC + out.
 _drift() {
     RC=0
@@ -159,55 +164,20 @@ b_lock_entry() {
 }
 tm_case "lock-entry-prints-one-packages-entry-or-refuses" linux b_lock_entry
 
-# A stand-in venv python: `-m pip install ... -r F` records its arguments and
-# a copy of F, then "installs" every column-0 entry of F (replacing an
-# installed version); `-m pip --version` reports the installed pip.
-_stub_venv_python() {   # _stub_venv_python <venv>
-    mkdir -p "${1}/bin" "${1}/lib/python3.12/site-packages"
-    printf '%s\n' "$PYVENV_CFG" > "${1}/pyvenv.cfg"
-    cat > "${1}/bin/python3" <<'STUB'
-#!/usr/bin/env bash
-V="$(cd "$(dirname "$0")/.." && pwd)"; SP="${V}/lib/python3.12/site-packages"
-if [ "$1" = "-m" ] && [ "$2" = "pip" ] && [ "$3" = "--version" ]; then
-    v=""; for d in "$SP"/pip-*.dist-info; do [ -d "$d" ] && { v="${d##*/pip-}"; v="${v%.dist-info}"; }; done
-    v="${STUB_PIP_REPORT:-$v}"
-    [ -n "$v" ] && echo "pip ${v} from ${SP}/pip (python 3.12)"; exit 0
-fi
-if [ "$1" = "-m" ] && [ "$2" = "pip" ] && [ "$3" = "install" ]; then
-    shift 3; n="$(ls "${STUB_LOG}".req.* 2>/dev/null | wc -l | tr -d ' ')"; n=$((n+1)); req=""
-    echo "pip install $*" >> "$STUB_LOG"
-    while [ $# -gt 0 ]; do [ "$1" = "-r" ] && req="$2"; shift; done
-    cp "$req" "${STUB_LOG}.req.${n}"
-    [ "${STUB_PIP_RC:-0}" -eq 0 ] || exit "$STUB_PIP_RC"
-    sed -n 's/^\([A-Za-z0-9._-]*\)==\([^ \\]*\).*/\1 \2/p' "$req" | while read -r nm ver; do
-        k="$(printf '%s' "$nm" | tr '.-' '__')"
-        rm -rf "$SP/${k}" "$SP/${k}"-*.dist-info
-        "$STUB_REAL_PY" "$STUB_FAKE_DIST" "$SP" "$nm" "$ver"
-    done
-    for x in ${STUB_EXTRA:-}; do "$STUB_REAL_PY" "$STUB_FAKE_DIST" "$SP" "$x" 1.0; done
-    exit 0
-fi
-[ "$1" = "-c" ] && exit 0
-echo "stub venv python3: unexpected $*" >&2; exit 9
-STUB
-    printf '#!/usr/bin/env bash\nexec "$(dirname "$0")/python3" -m pip "$@"\n' > "${1}/bin/pip"
-    printf '%s\n' '_OLD_PATH="$PATH"; PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd):$PATH"; export PATH' \
-        'deactivate() { PATH="$_OLD_PATH"; export PATH; unset -f deactivate; }' > "${1}/bin/activate"
-    chmod +x "${1}/bin/python3" "${1}/bin/pip"
-}
-# A stand-in system python3: `-m venv [--clear] DIR` makes the stand-in venv
-# seeded with pip 24.0, as Ubuntu 24.04's ensurepip does. Like the real one,
-# without --clear an EXISTING venv keeps what is installed in it (only bin/ is
-# refreshed). Anything else is the real interpreter (venv_drift runs it).
+# A stand-in `python3` for the installers: `-m venv [--clear] DIR` is
+# tests/lib/fake_venv.py (seeded with the stand-in pip 24.0, as Ubuntu 24.04's
+# ensurepip seeds 24.0); anything else is the real interpreter (venv_drift
+# runs it). The venv's own bin/python3 IS the real interpreter, so every
+# `<venv>/bin/python3 -m pip` and `<venv>/bin/pip` the installers run is the
+# stand-in pip, and `-c "import flask, ..."` really imports.
 _stub_system_python() {
-    mkdir -p "${TM_TMP}/sysbin"; rm -rf "${TM_TMP}/tpl"
-    _stub_venv_python "${TM_TMP}/tpl"; _dist "${TM_TMP}/tpl/lib/python3.12/site-packages" pip 24.0
+    mkdir -p "${TM_TMP}/sysbin"
     {
         printf '#!/usr/bin/env bash\n'
         printf 'if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then\n'
         printf '    for d in "$@"; do :; done; echo "venv $*" >> "$STUB_LOG"\n'
-        printf '    case " $* " in *" --clear "*) rm -rf "$d" ;; esac\n'
-        printf '    if [ -d "$d/lib" ]; then rm -rf "$d/bin"; cp -R "%s/tpl/bin" "$d/bin"; else rm -rf "$d"; cp -R "%s/tpl" "$d"; fi; exit 0\n' "$TM_TMP" "$TM_TMP"
+        printf '    c=""; case " $* " in *" --clear "*) c=--clear ;; esac\n'
+        printf '    exec "%s" "%s" "$d" $c\n' "$REAL_PY" "$FAKE_VENV"
         printf 'fi\nexec "%s" "$@"\n' "$REAL_PY"
     } > "${TM_TMP}/sysbin/python3"
     chmod +x "${TM_TMP}/sysbin/python3"
@@ -215,7 +185,7 @@ _stub_system_python() {
 
 b_bootstrap_pip() {
     local blk V L; blk="$(_block "$(tm_install_sh)")"; V="${TM_TMP}/v"; L="${TM_REPO_ROOT}/requirements.lock"
-    _stub_venv_python "$V"; _dist "$V/lib/python3.12/site-packages" pip 24.0
+    "$REAL_PY" "$FAKE_VENV" "$V" --clear
     export STUB_LOG="${TM_TMP}/log"
     RC=0; bash -c "${blk}"$'\n''venv_bootstrap_pip "$@"' _ "$V" "$L" --no-index --find-links=/bundle > "${TM_TMP}/out" 2>&1 || RC=$?
     tm_assert_rc 0 "$RC" "the pip bootstrap failed: $(cat "${TM_TMP}/out")"
@@ -229,7 +199,7 @@ b_bootstrap_pip() {
     cmp -s "${TM_TMP}/want" "${STUB_LOG}.req.1" || _tm_afail "the bootstrap installed from something other than the lock's pip entry: $(cat "${STUB_LOG}.req.1")"
     grep -q -- '--hash=sha256:' "${STUB_LOG}.req.1" || _tm_afail "the bootstrap's requirement carries no hash"
     # A failed install, and a pip that does not report the locked version: refused.
-    rm -f "${STUB_LOG}"*; _stub_venv_python "$V"
+    rm -f "${STUB_LOG}"*; "$REAL_PY" "$FAKE_VENV" "$V" --clear
     RC=0; STUB_PIP_RC=1 bash -c "${blk}"$'\n''venv_bootstrap_pip "$@"' _ "$V" "$L" > "${TM_TMP}/out" 2>&1 || RC=$?
     tm_assert_rc 1 "$RC" "the bootstrap passed a failed pip install"
     grep -q 'failed' "${TM_TMP}/out" || _tm_afail "the failed install was not said: $(cat "${TM_TMP}/out")"
@@ -314,15 +284,31 @@ o_upgrade_order() {
 }
 tm_case "upgrade-phase-8-venv-then-pip-then-lock-then-drift" linux o_upgrade_order
 
+# _assert_root_venv <venv> — every entry root:root, directories 0755, files
+# 0755/0644 by their execute bit, symlinks left as links.
+_assert_root_venv() {
+    local bad
+    bad="$(find "$1" \( ! -user root -o ! -group root \) -print)"
+    [ -z "$bad" ] || _tm_afail "not root:root after the install: $(head -n 3 <<<"$bad")"
+    bad="$(find "$1" \( \( -type d ! -perm 0755 \) -o \( -type f ! -perm 0755 ! -perm 0644 \) \) -print)"
+    [ -z "$bad" ] || _tm_afail "modes not 0755/0644: $(head -n 3 <<<"$bad")"
+    [ -L "$1/bin/python3" ] || _tm_afail "bin/python3 is no longer a link"
+    tm_assert_eq 755 "$(stat -c '%a' "$1/bin/pip")" "an entry point lost its execute bit"
+    tm_assert_eq 644 "$(stat -c '%a' "$1/pyvenv.cfg")" "pyvenv.cfg is not 0644"
+}
 o_install_order() {
-    _phase8_install true;  _assert_order true "${TM_TMP}/src"
+    # REG-0078: the venv is handed over app-owned and world-writable (as an
+    # older upgrade left it); install.sh must leave it root's.
+    export STUB_VENV_OWNER="$TM_WEB_USER"; _phase8_install true; unset STUB_VENV_OWNER
+    _assert_order true "${TM_TMP}/src"
+    _assert_root_venv "${TM_TMP}/venv"
     # A reinstall over a venv an older release left a package in: the
     # install starts from an empty venv, so the leftover is gone and the
     # drift check passes.
-    _dist "${TM_TMP}/venv/lib/python3.12/site-packages" leftover 0.9
+    _dist "${TM_TMP}/venv/${SPREL}" leftover 0.9
     _phase8_install true
     tm_assert_rc 0 "$RC" "a reinstall over a venv holding a leftover package failed: $(cat "${TM_TMP}/out")"
-    [ ! -e "${TM_TMP}/venv/lib/python3.12/site-packages/leftover-0.9.dist-info" ] \
+    [ ! -e "${TM_TMP}/venv/${SPREL}/leftover-0.9.dist-info" ] \
         || _tm_afail "the reinstall kept a package the old venv held (no --clear)"
     _phase8_install false; _assert_order false "${TM_TMP}/src"
     export STUB_EXTRA=six; _phase8_install true; unset STUB_EXTRA
@@ -330,12 +316,54 @@ o_install_order() {
     grep -q 'EXTRA six: 1.0 installed, not in the lock' "${TM_TMP}/out" || _tm_afail "the extra package was not named: $(cat "${TM_TMP}/out")"
     return 0
 }
-tm_case "install-sh-venv-then-pip-then-lock-then-drift" linux o_install_order
+tm_case "install-sh-venv-then-pip-then-lock-then-drift" linux,chown o_install_order
+
+# REG-0078: lock_down_venv itself, and the upgrade's Phase 10 calling it.
+r_lock_down() {
+    local blk V="${TM_TMP}/v"; blk="$(_block "$(tm_install_sh)")"
+    STUB_VENV_OWNER="$TM_WEB_USER" "$REAL_PY" "$FAKE_VENV" "$V" --clear
+    chmod 4755 "$V/bin/pip"; chmod 0700 "$V/${SPREL}"
+    : > "${TM_TMP}/victim"; chown "$TM_WEB_USER" "${TM_TMP}/victim"; chmod 666 "${TM_TMP}/victim"
+    ln -s "${TM_TMP}/victim" "$V/${SPREL}/link-out"
+    RC=0; bash -c "${blk}"$'\n''lock_down_venv "$1"' _ "$V" > "${TM_TMP}/out" 2>&1 || RC=$?
+    tm_assert_rc 0 "$RC" "lock_down_venv failed: $(cat "${TM_TMP}/out")"
+    _assert_root_venv "$V"
+    tm_assert_eq 755 "$(stat -c '%a' "$V/bin/pip")" "a setuid bit survived"
+    tm_assert_eq "666 ${TM_WEB_USER}" "$(stat -c '%a %U' "${TM_TMP}/victim")" "lock_down_venv followed a symlink out of the venv"
+    tm_assert_eq root "$(stat -c '%U' "$V/${SPREL}/link-out")" "the symlink itself was not taken"
+    # Not a directory, or a symlink to one: refused.
+    ln -s "$V" "${TM_TMP}/vlink"
+    RC=0; bash -c "${blk}"$'\n''lock_down_venv "$1"' _ "${TM_TMP}/vlink" > "${TM_TMP}/out" 2>&1 || RC=$?
+    tm_assert_rc 1 "$RC" "a symlinked venv path was locked down through the link"
+    RC=0; bash -c "${blk}"$'\n''lock_down_venv "$1"' _ "${TM_TMP}/none" > "${TM_TMP}/out" 2>&1 || RC=$?
+    tm_assert_rc 1 "$RC" "a missing venv was 'locked down'"
+}
+tm_case "lock-down-venv-makes-it-roots-without-following-links" linux,chown r_lock_down
+
+r_upgrade_phase10() {
+    local H="${TM_TMP}/app"
+    mkdir -p "$H/tm"; : > "$H/wsgi.py"
+    STUB_VENV_OWNER="$TM_WEB_USER" "$REAL_PY" "$FAKE_VENV" "$H/venv" --clear
+    {
+        echo 'set -euo pipefail'
+        echo 'fail() { echo "[FAIL] $*"; exit 1; }; apply_baseline() { :; }; safe_install_dir() { :; }'
+        _block "$(tm_upgrade_sh)"
+        echo "APP_HOME='$H'; VENV='$H/venv'; APP_USER='$TM_WEB_USER'"
+        tm_extract_between "$(tm_upgrade_sh)" '^chown -R "\$\{APP_USER\}:\$\{APP_USER\}" "\$\{APP_HOME\}/tm"' '^apply_baseline "\$\{APP_HOME\}/logs"'
+        echo 'echo PHASE10-DONE'
+    } > "${TM_TMP}/p10.sh"
+    RC=0; bash "${TM_TMP}/p10.sh" > "${TM_TMP}/out" 2>&1 || RC=$?
+    tm_assert_rc 0 "$RC" "the upgrade ownership step failed: $(cat "${TM_TMP}/out")"
+    tm_assert_grep PHASE10-DONE "${TM_TMP}/out" "the step did not run to its end"
+    _assert_root_venv "$H/venv"
+    tm_assert_eq "$TM_WEB_USER" "$(stat -c '%U' "$H/tm")" "tm/ is no longer the service account's"
+}
+tm_case "upgrade-phase-10-leaves-the-venv-roots" linux,chown r_upgrade_phase10
 
 # ─── the drift check ─────────────────────────────────────────────────────────
 d_drift() {
     local L="${TM_REPO_ROOT}/requirements.lock" V="${TM_TMP}/v" SP
-    SP="${V}/lib/python3.12/site-packages"
+    SP="${V}/${SPREL}"
     _venv_from_lock "$V" "$L"; _drift "$V" "$L"
     tm_assert_rc 0 "$RC" "a venv holding exactly the lock failed: $(cat "${TM_TMP}/out")"
     tm_assert_eq "$PASS16" "$(cat "${TM_TMP}/out")" "the pass line"
@@ -356,7 +384,7 @@ d_drift() {
     tm_assert_rc 1 "$RC" "a venv missing cffi passed"
     tm_assert_eq "MISSING cffi: not installed, the lock pins 2.1.1" "$(cat "${TM_TMP}/out")" "the missing line"
     # Names compare as pip compares them (PyYAML / pyyaml, confluent_kafka).
-    _dist "$SP" cffi 2.1.1; rm -rf "$SP"/PyYAML-* "$SP"/PyYAML; _dist "$SP" pyyaml 6.0.3; _drift "$V" "$L"
+    _dist "$SP" cffi 2.1.1; rm -rf "$SP"/PyYAML-* "$SP"/yaml; _dist "$SP" pyyaml 6.0.3; _drift "$V" "$L"
     tm_assert_rc 0 "$RC" "a differently-spelt name was read as drift: $(cat "${TM_TMP}/out")"
     # A distribution whose metadata names nothing: a finding, never skipped.
     mkdir -p "$SP/ghost-1.0.dist-info"; printf 'Metadata-Version: 2.1\n' > "$SP/ghost-1.0.dist-info/METADATA"
@@ -375,11 +403,12 @@ tm_case "the-drift-check-is-red-on-extra-missing-different-duplicate" linux d_dr
 # matches the lock but which can still import code outside it.
 d_drift_escapes() {
     local L="${TM_REPO_ROOT}/requirements.lock" V="${TM_TMP}/v" SP
-    SP="${V}/lib/python3.12/site-packages"
+    SP="${V}/${SPREL}"
     _venv_from_lock "$V" "$L"; _drift "$V" "$L"
     tm_assert_rc 0 "$RC" "the clean venv failed: $(cat "${TM_TMP}/out")"
+    cp "$V/pyvenv.cfg" "${TM_TMP}/cfg.ok"
     # A runtime byte-code cache of a RECORDed source is not an escape.
-    mkdir -p "$SP/Flask/__pycache__"; : > "$SP/Flask/__pycache__/__init__.cpython-312.pyc"; _drift "$V" "$L"
+    mkdir -p "$SP/flask/__pycache__"; : > "$SP/flask/__pycache__/__init__.cpython-3${PYMINOR}.pyc"; _drift "$V" "$L"
     tm_assert_rc 0 "$RC" "a run-time .pyc of a RECORDed source was a finding: $(cat "${TM_TMP}/out")"
     # P1: a package installed, then its dist-info deleted: six.py importable.
     _dist "$SP" six 1.17.0; rm -rf "$SP"/six-1.17.0.dist-info; _drift "$V" "$L"
@@ -387,10 +416,10 @@ d_drift_escapes() {
     tm_assert_eq "UNOWNED six/__init__.py: in site-packages, in no distribution's RECORD" "$(cat "${TM_TMP}/out")" "P1 line"
     rm -rf "$SP/six"
     # ... and a top-level orphan .pyc, a sitecustomize.py, a symlink out.
-    mkdir -p "$SP/__pycache__"; : > "$SP/__pycache__/evil.cpython-312.pyc"
+    mkdir -p "$SP/__pycache__"; : > "$SP/__pycache__/evil.cpython-3${PYMINOR}.pyc"
     : > "$SP/sitecustomize.py"; ln -s "${TM_TMP}" "$SP/outside"; _drift "$V" "$L"
     tm_assert_rc 1 "$RC" "an orphan .pyc / sitecustomize.py / symlink passed"
-    grep -qx "UNOWNED __pycache__/evil.cpython-312.pyc: in site-packages, in no distribution's RECORD" "${TM_TMP}/out" || _tm_afail "orphan .pyc not named: $(cat "${TM_TMP}/out")"
+    grep -qx "UNOWNED __pycache__/evil.cpython-3${PYMINOR}.pyc: in site-packages, in no distribution's RECORD" "${TM_TMP}/out" || _tm_afail "orphan .pyc not named: $(cat "${TM_TMP}/out")"
     grep -qx "UNOWNED sitecustomize.py: in site-packages, in no distribution's RECORD" "${TM_TMP}/out" || _tm_afail "sitecustomize.py not named: $(cat "${TM_TMP}/out")"
     grep -qx "UNOWNED outside (a symlink): in site-packages, in no distribution's RECORD" "${TM_TMP}/out" || _tm_afail "the symlink not named: $(cat "${TM_TMP}/out")"
     rm -rf "$SP/__pycache__" "$SP/sitecustomize.py" "$SP/outside"
@@ -411,11 +440,51 @@ d_drift_escapes() {
     _drift "$V" "$L"
     tm_assert_rc 1 "$RC" "P3: include-system-site-packages = true passed"
     tm_assert_eq "SYSTEM-SITE pyvenv.cfg: include-system-site-packages = true, so the system site-packages are importable too" "$(cat "${TM_TMP}/out")" "P3 line"
-    printf '%s\n' "$PYVENV_CFG" > "$V/pyvenv.cfg"
+    cp "${TM_TMP}/cfg.ok" "$V/pyvenv.cfg"
     rm -f "$V/pyvenv.cfg"; _drift "$V" "$L"; tm_assert_rc 3 "$RC" "no pyvenv.cfg was not 'cannot say'"
-    printf '%s\n' "$PYVENV_CFG" > "$V/pyvenv.cfg"
+    cp "${TM_TMP}/cfg.ok" "$V/pyvenv.cfg"
+    # REG-0076 (a): the key DELETED - Python reads a missing one as true.
+    grep -v '^include-system-site-packages' "${TM_TMP}/cfg.ok" > "$V/pyvenv.cfg"
+    _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "REG-0076a: a pyvenv.cfg with no include-system-site-packages line passed"
+    tm_assert_eq "SYSTEM-SITE pyvenv.cfg: no include-system-site-packages line, which Python reads as true, so the system site-packages are importable too" "$(cat "${TM_TMP}/out")" "REG-0076a line"
+    # ... and a later line saying true overrides an earlier false (last wins).
+    { cat "${TM_TMP}/cfg.ok"; echo 'include-system-site-packages = true'; } > "$V/pyvenv.cfg"; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "REG-0076a: a second, true, line passed"
+    # REG-0076 (b): home moved to another prefix; and home missing.
+    sed "s|^home = .*|home = ${TM_TMP}/evilprefix/bin|" "${TM_TMP}/cfg.ok" > "$V/pyvenv.cfg"; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "REG-0076b: home elsewhere passed"
+    tm_assert_eq "HOME pyvenv.cfg: home = ${TM_TMP}/evilprefix/bin, not ${PYHOME}, the directory of the python3 that made the venv" "$(cat "${TM_TMP}/out")" "REG-0076b line"
+    grep -v '^home' "${TM_TMP}/cfg.ok" > "$V/pyvenv.cfg"; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "REG-0076b: no home line passed"
+    grep -q '^HOME pyvenv.cfg: home = (none), ' "${TM_TMP}/out" || _tm_afail "no home not named: $(cat "${TM_TMP}/out")"
+    cp "${TM_TMP}/cfg.ok" "$V/pyvenv.cfg"
+    # REG-0076 (c): bin/. A wrapper in place of python3; a python3.N that is
+    # not a link at all; a missing link; bin/gunicorn.py; a directory.
+    rm "$V/bin/python3"; printf '#!/bin/sh\nexec %s "$@"\n' "$REAL_PY" > "$V/bin/python3"; chmod +x "$V/bin/python3"
+    _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "REG-0076c: a python3 wrapper passed"
+    grep -qx "BIN python3: not a link to the system interpreter ${PYEXE}" "${TM_TMP}/out" || _tm_afail "the wrapper not named: $(cat "${TM_TMP}/out")"
+    rm "$V/bin/python3"; ln -s "${TM_TMP}/elsewhere/python3" "$V/bin/python3"; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "REG-0076c: python3 linked elsewhere passed"
+    rm "$V/bin/python3"; ln -s "$REAL_PY" "$V/bin/python3"
+    rm "$V/bin/python"; _drift "$V" "$L"
+    tm_assert_eq "BIN python: not a link to the system interpreter ${PYEXE}" "$(cat "${TM_TMP}/out")" "a missing python link"
+    ln -s python3 "$V/bin/python"
+    printf 'import os\n' > "$V/bin/gunicorn.py"; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "REG-0076c: bin/gunicorn.py passed"
+    tm_assert_eq "BIN gunicorn.py: in the venv bin/, in no distribution's RECORD and not one of the venv's own files" "$(cat "${TM_TMP}/out")" "REG-0076c line"
+    rm -f "$V/bin/gunicorn.py"; mkdir "$V/bin/sub"; _drift "$V" "$L"
+    tm_assert_eq "BIN sub: not a regular file a distribution installed" "$(cat "${TM_TMP}/out")" "a directory in bin/"
+    rmdir "$V/bin/sub"
+    # A pip-written entry point (in pip's RECORD) and activate are fine; an
+    # edited entry point is MODIFIED (its RECORD hash).
+    _drift "$V" "$L"; tm_assert_rc 0 "$RC" "bin/ restored still fails: $(cat "${TM_TMP}/out")"
+    printf '# x\n' >> "$V/bin/pip"; _drift "$V" "$L"
+    grep -qx "MODIFIED pip: ../../../bin/pip does not match its RECORD hash" "${TM_TMP}/out" || _tm_afail "an edited bin/pip not named: $(cat "${TM_TMP}/out")"
+    _dist "$SP" pip 26.2.1
     # P4: Flask 3.1.2 installed, its METADATA edited to say 3.1.3.
-    rm -rf "$SP"/Flask "$SP"/Flask-*.dist-info; _dist "$SP" Flask 3.1.2
+    rm -rf "$SP"/flask "$SP"/Flask-*.dist-info; _dist "$SP" Flask 3.1.2
     sed -i 's/^Version: 3\.1\.2$/Version: 3.1.3/' "$SP/Flask-3.1.2.dist-info/METADATA"
     grep -q '^Version: 3.1.3$' "$SP/Flask-3.1.2.dist-info/METADATA" || tm_die "the P4 fixture changed nothing"
     _drift "$V" "$L"
@@ -426,13 +495,13 @@ d_drift_escapes() {
     mv "$SP/Flask-3.1.2.dist-info" "$SP/Flask-3.1.3.dist-info"; _drift "$V" "$L"
     tm_assert_rc 1 "$RC" "P4: a renamed relabelled dist-info passed"
     tm_assert_eq 1 "$(grep -c '^MODIFIED flask: ' "${TM_TMP}/out")" "P4: the RECORD check alone must catch it"
-    rm -rf "$SP"/Flask "$SP"/Flask-*.dist-info; _dist "$SP" Flask 3.1.3
+    rm -rf "$SP"/flask "$SP"/Flask-*.dist-info; _dist "$SP" Flask 3.1.3
     # A locked file edited, and one deleted.
-    printf 'import os\n' >> "$SP/Flask/__init__.py"; _drift "$V" "$L"
+    printf 'import os\n' >> "$SP/flask/__init__.py"; _drift "$V" "$L"
     tm_assert_rc 1 "$RC" "an edited locked file passed"
-    tm_assert_eq "MODIFIED flask: Flask/__init__.py does not match its RECORD hash" "$(cat "${TM_TMP}/out")" "edited file line"
-    rm -f "$SP/Flask/__init__.py"; _drift "$V" "$L"
-    tm_assert_eq "MODIFIED flask: Flask/__init__.py is missing" "$(cat "${TM_TMP}/out")" "missing file line"
+    tm_assert_eq "MODIFIED flask: flask/__init__.py does not match its RECORD hash" "$(cat "${TM_TMP}/out")" "edited file line"
+    rm -f "$SP/flask/__init__.py"; _drift "$V" "$L"
+    tm_assert_eq "MODIFIED flask: flask/__init__.py is missing" "$(cat "${TM_TMP}/out")" "missing file line"
     _dist "$SP" Flask 3.1.3
     # No RECORD: its files cannot be verified.
     rm -f "$SP/Flask-3.1.3.dist-info/RECORD"; _drift "$V" "$L"
@@ -467,7 +536,7 @@ a_audit_warns() {
     tm_assert_rc 0 "$RC" "the audit section failed: $(cat "${TM_TMP}/rows")"
     grep -qxF "PASS|venv packages|${PASS16}" "${TM_TMP}/rows" || _tm_afail "a venv holding the lock was not a PASS: $(cat "${TM_TMP}/rows")"
     # A v1.3.2 host: ensurepip's pip.
-    rm -rf "$V"/lib/python3.12/site-packages/pip-*; _dist "$V/lib/python3.12/site-packages" pip 24.0
+    rm -rf "$V"/${SPREL}/pip-*; _dist "$V/${SPREL}" pip 24.0
     _audit "$V" "$D"
     grep -q '^WARN|venv pip|24.0 installed, the lock pins 26.2.1 (DIFFERENT) — this upgrade rebuilds the venv from the lock and re-checks it$' "${TM_TMP}/rows" \
         || _tm_afail "pip 24.0 was not a WARN naming both versions: $(cat "${TM_TMP}/rows")"

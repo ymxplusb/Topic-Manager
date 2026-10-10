@@ -443,7 +443,17 @@ a_settings_v130() {
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const calls = [];
 let csv = null, answer = { ok: true, status: 200, json: async () => ({ ok: true, ended: 2, sessions: [] }) };
-const sandbox = { ClusterModal: {}, console, AbortController, setTimeout, clearTimeout, Date,
+// REG-0077 (v1.3.3): the CSV's "Generated" row is new Date().toISOString(),
+// to the millisecond, so two builds under load differed and the download
+// compare failed on a correct tree. The sandbox's clock is FROZEN: every
+// build of one document is then byte-identical, and the comparison below
+// still fails on any other document.
+const FROZEN = Date.parse('2026-10-10T12:34:56.789Z');
+class FrozenDate extends Date {
+    constructor(...a) { if (a.length) super(...a); else super(FROZEN); }
+    static now() { return FROZEN; }
+}
+const sandbox = { ClusterModal: {}, console, AbortController, setTimeout, clearTimeout, Date: FrozenDate,
     fetch: async (url, opts = {}) => { calls.push([url, opts.method || 'GET', opts.body]); return answer; },
     Blob: function (parts) { csv = parts.join(''); }, URL: { createObjectURL: () => 'blob:x' },
     document: { createElement: () => ({ click() {} }), getElementById: () => null, body: { style: {} } } };
@@ -474,6 +484,8 @@ vm.runInContext(fs.readFileSync(process.argv[2], 'utf8') + '\n;globalThis.__S = 
     assert.equal(inst.compliance, doc, 'the fetched compliance document is not kept for the download');
     inst.downloadCompliance();
     assert.equal(csv, sandbox.__csv(doc), 'the download is not the CSV of the fetched document');
+    assert.ok(csv.includes('"Generated","2026-10-10T12:34:56.789Z"'), 'the frozen clock did not reach the CSV builder (the compare would be racy again)');
+    assert.notEqual(csv, sandbox.__csv({ ...doc, rules: doc.rules.slice(1) }), 'the compare cannot tell another document apart');
     // v1.3.2: the section is the summary line and the buttons; it never lists
     // the rules on the page (the rules are the CSV).
     const from = S.template.indexOf('<!-- STIG compliance'), to = S.template.indexOf('<!-- About -->');
