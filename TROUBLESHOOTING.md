@@ -291,7 +291,14 @@ reports 'Y', not the locked X`. The run rolls back. Rebuild the bundle with this
 v1.3.3: after the install the venv must hold exactly the packages and versions in
 `requirements.lock` (pip included). Each following line names one difference: `EXTRA <name>`
 (installed, not locked), `MISSING <name>`, `DIFFERENT <name>: <installed> installed, the lock
-pins <version>`, `DUPLICATE <name>`. The upgrade rolls back; install.sh stops. A venv built
+pins <version>`, `DUPLICATE <name>`, and (REG-0069) anything else the venv could import:
+`UNOWNED <path>` (a file in site-packages that no installed distribution's RECORD lists — a
+package whose dist-info was deleted, a `sitecustomize.py`, a symlink), `PTH <file>` (a `.pth`
+file no distribution installed: it adds import paths or runs code at start-up),
+`SYSTEM-SITE pyvenv.cfg` (`include-system-site-packages` is not `false`), `MODIFIED <name>: <file>`
+(the file does not match the sha256 in its distribution's RECORD, or is missing),
+`MISLABELLED <name>` (the dist-info directory and its METADATA disagree on the version) and
+`NORECORD <name>`. The upgrade rolls back; install.sh stops. A venv built
 from the lock should hold exactly it, so treat any line here as a finding: something else
 installed into the venv during the run, or the lock and the wheels disagree. Keep the lines
 and report them; do not install or remove packages by hand to make it pass.

@@ -521,10 +521,12 @@ s_sca_needs_a_whole_answer() {
     _sca_tree55
     sed -i 's/^pip==26\.2\.1 /pip==24.0 /' "$S/requirements.lock"
     grep -q '^pip==24\.0 ' "$S/requirements.lock" || tm_die "the pip 24.0 fixture changed nothing"
-    for mode in empty token short endless http500; do
+    for mode in empty token short endless http500 curlfail; do
         RC=0
         if [ "$mode" = http500 ]; then
             STUB_OSV_HTTP=500 PATH="${TM_TMP}/osv:${PATH}" bash "$S/tools/sca-check.sh" > "${TM_TMP}/out" 2>&1 || RC=$?
+        elif [ "$mode" = curlfail ]; then
+            STUB_OSV_CURL_RC=28 PATH="${TM_TMP}/osv:${PATH}" bash "$S/tools/sca-check.sh" > "${TM_TMP}/out" 2>&1 || RC=$?
         else
             STUB_OSV_MODE="$mode" PATH="${TM_TMP}/osv:${PATH}" bash "$S/tools/sca-check.sh" > "${TM_TMP}/out" 2>&1 || RC=$?
         fi

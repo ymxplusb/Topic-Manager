@@ -15,7 +15,8 @@
 #   page     every first answer is {"next_page_token": "p1"}; the follow-up
 #            with page_token is the real answer (pagination is followed)
 #   endless  every answer, follow-ups included, is a page token
-# STUB_OSV_HTTP sets the querybatch HTTP status (default 200).
+# STUB_OSV_HTTP sets the querybatch HTTP status (default 200); STUB_OSV_CURL_RC
+# makes curl exit non-zero on the querybatch (a broken transfer), body intact.
 #
 # Copyright (c) 2025-2026 James Rodman. All Rights Reserved.
 # =============================================================================
@@ -27,10 +28,10 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-code=200; body=""
+code=200; body=""; rc=0
 case "$url" in
     https://api.osv.dev/v1/querybatch)
-        code="${STUB_OSV_HTTP:-200}"
+        code="${STUB_OSV_HTTP:-200}"; rc="${STUB_OSV_CURL_RC:-0}"
         body="$(python3 -c '
 import json, os, sys
 q = json.loads(sys.argv[1])["queries"]
@@ -54,4 +55,4 @@ print(json.dumps({"results": res}))
 esac
 if [ -n "$out" ]; then printf '%s' "$body" > "$out"; else printf '%s' "$body"; fi
 [ -z "$fmt" ] || printf '%b' "${fmt//%\{http_code\}/$code}"
-exit 0
+exit "$rc"

@@ -31,6 +31,20 @@ upgrade itself.
   an extra, missing, different or duplicate package fails the run (the upgrade rolls back).
   `--audit-only` reports the same comparison for the installed venv as WARN rows.
   `install.sh` now creates the venv with `--clear`, so a reinstall starts empty.
+- **The drift check covers everything the venv can import (REG-0069).** Beyond names and
+  versions it refuses `include-system-site-packages` other than `false`, a `.pth` file no
+  locked distribution installed, any file in site-packages that no installed distribution's
+  RECORD lists (a package whose metadata was deleted, `sitecustomize.py`, a symlink out), a
+  dist-info whose directory and METADATA disagree on the version, and any file that does not
+  match the sha256 its RECORD gives (or is missing). Measured on a real Ubuntu 24.04 venv:
+  the installed venv passes (1220 files verified), and each of the four escapes the
+  gatekeeper found fails it.
+- **The SCA gate no longer reads a non-answer as clean (REG-0070).** `tools/sca-check.sh`
+  sends every query in ONE OSV `/v1/querybatch` and takes a verdict only from a well-formed
+  answer for every query: HTTP 200 and `{"results": [...]}` with one entry per query. A bare
+  `{}`, a page token alone, a short result list or another status is "could not check"
+  (exit 2) — before, `{}` or `{"next_page_token": ...}` showed pip 24.0 CLEAN, exit 0. A page
+  token is followed for that package (up to five pages), then "could not check".
 - `tools/gen-requirements-lock.py` refuses a resolution that drops or changes a direct pin
   (pip included) instead of writing a lock without it.
 

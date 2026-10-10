@@ -8122,3 +8122,237 @@ ANCHOR|            pins[lockparse.norm(m.group(1))] = m.group(2)
 ANCHOR|    return pins
 REPLACE|            pins[lockparse.norm(m.group(1))] = m.group(2)
 REPLACE|    return {}
+
+# ─── v1.3.3 REG-0069: the drift check holds everything the venv can import (t55) ───
+--- M969
+DESC|REG-0069 SYSTEM-SITE: the include-system-site-packages test is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if k.strip().lower() == "include-system-site-packages" and v.strip().lower() != "false":
+REPLACE|    if k.strip().lower() == "include-system-site-packages" and v.strip().lower() == "false":
+
+--- M970
+DESC|REG-0069 no pyvenv.cfg exits 0
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    print("cannot read %s/pyvenv.cfg: %s" % (venv, e)); sys.exit(3)
+REPLACE|    print("cannot read %s/pyvenv.cfg: %s" % (venv, e)); sys.exit(0)
+
+--- M971
+DESC|REG-0069 MISLABELLED: the directory-vs-METADATA version test is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if label != ver:
+REPLACE|    if label == ver:
+
+--- M972
+DESC|REG-0069 NORECORD: the no-RECORD guard is neutralised
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|    if record is None:
+REPLACE|    if False:
+
+--- M973
+DESC|REG-0069 a RECORD row outside the venv is not refused
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if not path.startswith(venv + os.sep):
+REPLACE|        if False:
+
+--- M974
+DESC|REG-0069 no RECORD hash is checked (every row treated as unhashed)
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if not digest:
+REPLACE|        if True:
+
+--- M975
+DESC|REG-0069 the RECORD hash comparison is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if base64.urlsafe_b64encode(h.digest()).rstrip(b"=").decode() != value:
+REPLACE|        if base64.urlsafe_b64encode(h.digest()).rstrip(b"=").decode() == value:
+
+--- M976
+DESC|REG-0069 a missing RECORDed file is not reported
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            probs.append("MODIFIED %s: %s is missing" % (key, f))
+REPLACE|            pass
+
+--- M977
+DESC|REG-0069 the hash-algorithm test is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if mode != "sha256":
+REPLACE|        if mode == "sha256":
+
+--- M978
+DESC|REG-0069 RECORDed files are not counted as owned
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        owned.add(os.path.relpath(path, site))
+REPLACE|        pass
+
+--- M979
+DESC|REG-0069 the walk descends into dist-info directories
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        dirs[:] = [x for x in dirs if not x.endswith(".dist-info")]
+REPLACE|        pass
+
+--- M980
+DESC|REG-0069 a symlinked directory is not reported
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if rel not in owned:
+REPLACE|        if False:
+
+--- M981
+DESC|REG-0069 the owned-file test is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if rel in owned:
+REPLACE|        if rel not in owned:
+
+--- M982
+DESC|REG-0069 a run-time .pyc is allowed whatever its source
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|            if src in owned:
+REPLACE|            if src not in owned:
+
+--- M983
+DESC|REG-0069 the __pycache__ test is flipped
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if os.path.basename(rel_root) == "__pycache__" and fn.endswith(".pyc"):
+REPLACE|        if os.path.basename(rel_root) != "__pycache__" and fn.endswith(".pyc"):
+
+--- M984
+DESC|REG-0069 a .pth is not named as one
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|        if rel_root == "." and fn.endswith(".pth"):
+REPLACE|        if False:
+
+--- M985
+DESC|REG-0069 eleven unowned files are named, not ten
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|for u in unowned[:10]:
+REPLACE|for u in unowned[:11]:
+
+--- M986
+DESC|REG-0069 the "and N more" line needs more than eleven
+TESTS|t55-venv-tooling-v133.sh
+TARGET|install
+EQUIV|no
+ANCHOR|if len(unowned) > 10:
+REPLACE|if len(unowned) > 11:
+
+# ─── v1.3.3 REG-0070: SCA takes a verdict only from a whole, well-formed OSV answer (t25, t55) ───
+--- M987
+DESC|REG-0070 an envelope with another key is accepted
+TESTS|t25-requirements-lock.sh t55-venv-tooling-v133.sh
+TARGET|sca
+EQUIV|no
+ANCHOR|if not isinstance(d, dict) or set(d) != {"results"}:
+REPLACE|if not isinstance(d, dict) or "results" not in d:
+
+--- M988
+DESC|REG-0070 fewer results than queries are accepted
+TESTS|t25-requirements-lock.sh t55-venv-tooling-v133.sh
+TARGET|sca
+EQUIV|no
+ANCHOR|if not isinstance(r, list) or len(r) != n:
+REPLACE|if not isinstance(r, list) or len(r) > n:
+
+--- M989
+DESC|REG-0070 a result with unknown keys is accepted
+TESTS|t25-requirements-lock.sh t55-venv-tooling-v133.sh
+TARGET|sca
+EQUIV|no
+ANCHOR|    if not isinstance(e, dict) or any(k not in ("vulns", "next_page_token") for k in e):
+REPLACE|    if not isinstance(e, dict):
+
+--- M990
+DESC|REG-0070 the advisory test is flipped
+TESTS|t25-requirements-lock.sh t55-venv-tooling-v133.sh
+TARGET|sca
+EQUIV|no
+ANCHOR|    if v:
+REPLACE|    if not v:
+
+--- M991
+DESC|REG-0070 a page token with no advisory reads as CLEAN
+TESTS|t25-requirements-lock.sh t55-venv-tooling-v133.sh
+TARGET|sca
+EQUIV|no
+ANCHOR|    elif t:
+REPLACE|    elif False:
+
+--- M992
+DESC|REG-0070 a non-200 answer is judged
+TESTS|t55-venv-tooling-v133.sh
+TARGET|sca
+EQUIV|no
+ANCHOR|    [[ "$code" == 200 ]] || { echo "BAD HTTP ${code:-none}"; return 0; }
+REPLACE|    true
+
+--- M993
+DESC|REG-0070 a failed transfer is judged
+TESTS|t55-venv-tooling-v133.sh
+TARGET|sca
+EQUIV|no
+ANCHOR|    [[ $rc -eq 0 ]] || { echo "BAD curl exit ${rc}"; return 0; }
+REPLACE|    true
+
+--- M994
+DESC|REG-0070 the whole-batch BAD line is not given to every package
+TESTS|t55-venv-tooling-v133.sh
+TARGET|sca
+EQUIV|no
+ANCHOR|if [[ "$(grep -c '' "$V_FILE")" -ne "$NQ" ]]; then
+REPLACE|if [[ "$(grep -c '' "$V_FILE")" -eq "$NQ" ]]; then
+
+--- M995
+DESC|REG-0070 pagination is never followed
+TESTS|t55-venv-tooling-v133.sh
+TARGET|sca
+EQUIV|no
+ANCHOR|OSV_MAX_PAGES=5
+REPLACE|OSV_MAX_PAGES=0
+
+--- M996
+DESC|REG-0070 a followed page's verdict is not put back
+TESTS|t55-venv-tooling-v133.sh
+TARGET|sca
+EQUIV|no
+ANCHOR|    v[int(i) - 1] = line
+REPLACE|    pass
+
+--- M997
+DESC|REG-0070 the printed-verdict count check is flipped
+TESTS|t25-requirements-lock.sh t55-venv-tooling-v133.sh
+TARGET|sca
+EQUIV|no
+ANCHOR|if [[ $QI -ne $NQ ]]; then
+REPLACE|if [[ $QI -eq $NQ ]]; then
