@@ -353,21 +353,35 @@ venv_bootstrap_pip() {   # venv_bootstrap_pip <venv> <lock> [pip source option..
     echo "$got"
 }
 
-# venv_drift <venv> <lock> — does the venv hold EXACTLY the locked set? Read by
-# the SYSTEM python3 from the venv's site-packages metadata (nothing in the
-# venv is executed, so no .pth file runs as root). One line per difference:
+# venv_drift <venv> <lock> — does the venv hold EXACTLY the locked set, and
+# nothing else it could import? Read by the SYSTEM python3 from the venv's
+# files (nothing in the venv is executed, so no .pth file runs as root).
+# REG-0069 (v1.3.3, gatekeeper + Daybreak Blue F-01): reading dist-info
+# names and versions alone passed four venvs that import code outside the
+# lock — a package whose dist-info was deleted, a .pth pointing elsewhere,
+# include-system-site-packages = true, and flask 3.1.2 with its METADATA
+# edited to 3.1.3. So it also holds pyvenv.cfg, every file in site-packages
+# (it must be in some installed distribution's RECORD) and every RECORD hash.
+# One line per finding:
 #   DIFFERENT <name>: <installed> installed, the lock pins <version>
 #   EXTRA <name>: <installed> installed, not in the lock
 #   MISSING <name>: not installed, the lock pins <version>
 #   DUPLICATE <name>: installed twice (<v1>, <v2>)
-# Exit 0 (one "<n> packages, exactly the lock" line), 1 on any difference,
-# 3 when it cannot say (no lock, no site-packages) — never a pass it did not
-# earn.
+#   UNREADABLE <name>: a distribution with no name or version
+#   MISLABELLED <name>: <dir> says one version, its METADATA another
+#   NORECORD <name>: no RECORD, so its files cannot be verified
+#   MODIFIED <name>: <file> does not match its RECORD hash (or is missing)
+#   PTH <file>: a .pth file no installed distribution put there
+#   UNOWNED <path>: in site-packages, in no distribution's RECORD
+#   SYSTEM-SITE pyvenv.cfg: include-system-site-packages = <value>
+# Exit 0 (one "<n> packages, exactly the lock (<f> files match their
+# RECORD)" line), 1 on any finding, 3 when it cannot say (no lock, no
+# pyvenv.cfg, no site-packages) — never a pass it did not earn.
 venv_drift() {   # venv_drift <venv> <lock>
     python3 -I - "$1" "$2" <<'PYVENV'
-import glob, os, re, sys
+import base64, csv, glob, hashlib, io, os, pathlib, re, sys
 from importlib import metadata
-venv, lock = sys.argv[1], sys.argv[2]
+venv, lock = os.path.abspath(sys.argv[1]), sys.argv[2]
 def norm(n):
     return re.sub(r"[-_.]+", "-", n).lower()
 try:
@@ -385,15 +399,63 @@ if not locked:
 sites = glob.glob(os.path.join(venv, "lib", "python3*", "site-packages"))
 if len(sites) != 1:
     print("%s: expected one lib/python3*/site-packages, found %d" % (venv, len(sites))); sys.exit(3)
-have, probs = {}, []
-for d in metadata.distributions(path=sites):
+site = sites[0]
+try:
+    with open(os.path.join(venv, "pyvenv.cfg"), encoding="utf-8") as f:
+        cfg = f.read()
+except (OSError, UnicodeError) as e:
+    print("cannot read %s/pyvenv.cfg: %s" % (venv, e)); sys.exit(3)
+probs = []
+for line in cfg.splitlines():
+    k, _, v = line.partition("=")
+    if k.strip().lower() == "include-system-site-packages" and v.strip().lower() != "false":
+        probs.append("SYSTEM-SITE pyvenv.cfg: include-system-site-packages = %s, so the system site-packages are importable too" % v.strip())
+have, owned, nfiles = {}, set(), 0
+for dist_dir in sorted(glob.glob(os.path.join(site, "*.dist-info"))):
+    d = metadata.PathDistribution(pathlib.Path(dist_dir))
     # .get, not [...]: a missing field is None either way, but [...] warns on
     # 3.12 and is to raise KeyError later, which would be a crash, not a finding.
     name, ver = d.metadata.get("Name"), d.metadata.get("Version")
     if not name or not ver:
         probs.append("UNREADABLE %s: a distribution with no name or version" % (name or "?"))
         continue
-    have.setdefault(norm(name), []).append(ver)
+    key = norm(name)
+    have.setdefault(key, []).append(ver)
+    label = os.path.basename(dist_dir)[:-len(".dist-info")].rpartition("-")[2]
+    if label != ver:
+        probs.append("MISLABELLED %s: %s says %s, its METADATA says %s" % (key, os.path.basename(dist_dir), label, ver))
+    # RECORD read here, not through Distribution.files: since 3.12 that
+    # silently drops every listed file that no longer exists.
+    record = d.read_text("RECORD")
+    if record is None:
+        probs.append("NORECORD %s: no RECORD, so its files cannot be verified" % key)
+        continue
+    for row in csv.reader(io.StringIO(record)):
+        if not row:
+            continue
+        f, digest = row[0], (row[1] if len(row) > 1 else "")
+        path = os.path.normpath(os.path.join(site, f))
+        if not path.startswith(venv + os.sep):
+            probs.append("MODIFIED %s: its RECORD lists %s, outside the venv" % (key, f))
+            continue
+        owned.add(os.path.relpath(path, site))
+        if not digest:
+            continue
+        mode, _, value = digest.partition("=")
+        if mode != "sha256":
+            probs.append("MODIFIED %s: %s has a %s hash in RECORD, not sha256" % (key, f, mode))
+            continue
+        try:
+            h = hashlib.sha256()
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+        except OSError:
+            probs.append("MODIFIED %s: %s is missing" % (key, f))
+            continue
+        if base64.urlsafe_b64encode(h.digest()).rstrip(b"=").decode() != value:
+            probs.append("MODIFIED %s: %s does not match its RECORD hash" % (key, f))
+        nfiles += 1
 for n in sorted(set(have) | set(locked)):
     vs, want = have.get(n, []), locked.get(n)
     if len(vs) > 1:
@@ -404,9 +466,38 @@ for n in sorted(set(have) | set(locked)):
         probs.append("EXTRA %s: %s installed, not in the lock" % (n, vs[0]))
     elif vs[0] != want:
         probs.append("DIFFERENT %s: %s installed, the lock pins %s" % (n, vs[0], want))
+# Everything else in site-packages must be some RECORD's: a package whose
+# dist-info was removed, a .pth, a sitecustomize.py, a symlink out. The one
+# exception is a byte-code cache Python writes at run time for a source file
+# that IS in a RECORD (<dir>/__pycache__/<stem>.<tag>.pyc).
+unowned = []
+for root, dirs, fnames in os.walk(site):
+    rel_root = os.path.relpath(root, site)
+    if rel_root == ".":
+        dirs[:] = [x for x in dirs if not x.endswith(".dist-info")]
+    for x in [x for x in dirs if os.path.islink(os.path.join(root, x))]:
+        rel = os.path.normpath(os.path.join(rel_root, x))
+        if rel not in owned:
+            unowned.append(rel + " (a symlink)")
+    for fn in fnames:
+        rel = os.path.normpath(os.path.join(rel_root, fn))
+        if rel in owned:
+            continue
+        if os.path.basename(rel_root) == "__pycache__" and fn.endswith(".pyc"):
+            src = os.path.normpath(os.path.join(os.path.dirname(rel_root), fn.split(".")[0] + ".py"))
+            if src in owned:
+                continue
+        if rel_root == "." and fn.endswith(".pth"):
+            probs.append("PTH %s: a .pth file no installed distribution put there (it adds import paths or runs code at start-up)" % fn)
+            continue
+        unowned.append(rel)
+for u in unowned[:10]:
+    probs.append("UNOWNED %s: in site-packages, in no distribution's RECORD" % u)
+if len(unowned) > 10:
+    probs.append("UNOWNED ...: and %d more files in no distribution's RECORD" % (len(unowned) - 10))
 if probs:
     print("\n".join(probs)); sys.exit(1)
-print("%d packages, exactly the lock" % len(locked))
+print("%d packages, exactly the lock (%d files match their RECORD)" % (len(locked), nfiles))
 PYVENV
 }
 # <<< v1.3.3 venv tooling and drift

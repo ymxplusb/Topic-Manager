@@ -44,16 +44,20 @@ _BLK_END='^# <<< v1\.3\.3 venv tooling and drift'
 _block() { tm_extract_between "$1" "$_BLK_START" "$_BLK_END"; }
 
 # _dist <site-packages> <name> <version> — an installed distribution, as pip
-# leaves it: <name>-<version>.dist-info/METADATA.
-_dist() {
-    local d="${1}/$(printf '%s' "$2" | tr '.-' '__')-${3}.dist-info"
-    mkdir -p "$d"
-    printf 'Metadata-Version: 2.1\nName: %s\nVersion: %s\n' "$2" "$3" > "${d}/METADATA"
-}
+# leaves it: <k>/__init__.py, <k>-<version>.dist-info/METADATA and a RECORD
+# with their sha256 (tests/lib/fake_dist.py; k = name with - and . as _).
+export STUB_FAKE_DIST="${TM_REPO_ROOT}/tests/lib/fake_dist.py" STUB_REAL_PY="$REAL_PY"
+_dist() { "$REAL_PY" "$STUB_FAKE_DIST" "$1" "$2" "$3"; }
+PYVENV_CFG='home = /usr/bin
+include-system-site-packages = false
+version = 3.12.3'
+# The pass line for a venv holding the 16 locked packages as _dist writes
+# them: two hashed files each.
+PASS16="16 packages, exactly the lock (32 files match their RECORD)"
 # _venv_from_lock <venv> <lock> — a venv holding exactly what the lock pins.
 _venv_from_lock() {
     local sp="${1}/lib/python3.12/site-packages" nv
-    mkdir -p "$sp"
+    mkdir -p "$sp"; printf '%s\n' "$PYVENV_CFG" > "${1}/pyvenv.cfg"
     while IFS= read -r nv; do _dist "$sp" "${nv%%==*}" "${nv#*==}"; done \
         < <(sed -n 's/^\([A-Za-z0-9._-]*\)==\([^ \\]*\).*/\1==\2/p' "$2")
 }
@@ -160,6 +164,7 @@ tm_case "lock-entry-prints-one-packages-entry-or-refuses" linux b_lock_entry
 # installed version); `-m pip --version` reports the installed pip.
 _stub_venv_python() {   # _stub_venv_python <venv>
     mkdir -p "${1}/bin" "${1}/lib/python3.12/site-packages"
+    printf '%s\n' "$PYVENV_CFG" > "${1}/pyvenv.cfg"
     cat > "${1}/bin/python3" <<'STUB'
 #!/usr/bin/env bash
 V="$(cd "$(dirname "$0")/.." && pwd)"; SP="${V}/lib/python3.12/site-packages"
@@ -176,12 +181,10 @@ if [ "$1" = "-m" ] && [ "$2" = "pip" ] && [ "$3" = "install" ]; then
     [ "${STUB_PIP_RC:-0}" -eq 0 ] || exit "$STUB_PIP_RC"
     sed -n 's/^\([A-Za-z0-9._-]*\)==\([^ \\]*\).*/\1 \2/p' "$req" | while read -r nm ver; do
         k="$(printf '%s' "$nm" | tr '.-' '__')"
-        rm -rf "$SP/${k}"-*.dist-info; mkdir -p "$SP/${k}-${ver}.dist-info"
-        printf 'Metadata-Version: 2.1\nName: %s\nVersion: %s\n' "$nm" "$ver" > "$SP/${k}-${ver}.dist-info/METADATA"
+        rm -rf "$SP/${k}" "$SP/${k}"-*.dist-info
+        "$STUB_REAL_PY" "$STUB_FAKE_DIST" "$SP" "$nm" "$ver"
     done
-    for x in ${STUB_EXTRA:-}; do
-        mkdir -p "$SP/${x}-1.0.dist-info"; printf 'Metadata-Version: 2.1\nName: %s\nVersion: 1.0\n' "$x" > "$SP/${x}-1.0.dist-info/METADATA"
-    done
+    for x in ${STUB_EXTRA:-}; do "$STUB_REAL_PY" "$STUB_FAKE_DIST" "$SP" "$x" 1.0; done
     exit 0
 fi
 [ "$1" = "-c" ] && exit 0
@@ -296,7 +299,7 @@ _assert_order() {
     [[ "$l3" == *"--require-hashes --only-binary :all:${src}"* ]] \
         || _tm_afail "the lock install is not from the same source: ${l3}"
     grep -q 'venv tooling: pip 26.2.1' "${TM_TMP}/out" || _tm_afail "the pip stage did not report 26.2.1: $(cat "${TM_TMP}/out")"
-    grep -q '16 packages, exactly the lock' "${TM_TMP}/out" || _tm_afail "the drift check did not pass the installed venv: $(cat "${TM_TMP}/out")"
+    grep -qF "$PASS16" "${TM_TMP}/out" || _tm_afail "the drift check did not pass the installed venv: $(cat "${TM_TMP}/out")"
 }
 o_upgrade_order() {
     _phase8_upgrade true;  _assert_order true "${TM_TMP}/work"
@@ -335,12 +338,12 @@ d_drift() {
     SP="${V}/lib/python3.12/site-packages"
     _venv_from_lock "$V" "$L"; _drift "$V" "$L"
     tm_assert_rc 0 "$RC" "a venv holding exactly the lock failed: $(cat "${TM_TMP}/out")"
-    tm_assert_eq "16 packages, exactly the lock" "$(cat "${TM_TMP}/out")" "the pass line"
+    tm_assert_eq "$PASS16" "$(cat "${TM_TMP}/out")" "the pass line"
     # An extra package.
     _dist "$SP" six 1.17.0; _drift "$V" "$L"
     tm_assert_rc 1 "$RC" "an extra package (six) passed"
     tm_assert_eq "EXTRA six: 1.17.0 installed, not in the lock" "$(cat "${TM_TMP}/out")" "the extra package line"
-    rm -rf "$SP"/six-*
+    rm -rf "$SP"/six-* "$SP"/six
     # The wrong pip: ensurepip's, as a v1.3.2 host has it.
     rm -rf "$SP"/pip-*; _dist "$SP" pip 24.0; _drift "$V" "$L"
     tm_assert_rc 1 "$RC" "pip 24.0 against a lock pinning 26.2.1 passed"
@@ -349,11 +352,11 @@ d_drift() {
     _dist "$SP" pip 26.2.1; _drift "$V" "$L"
     tm_assert_rc 1 "$RC" "two pip installs passed"
     grep -q '^DUPLICATE pip: installed twice (24.0, 26.2.1)$' "${TM_TMP}/out" || _tm_afail "the duplicate was not named: $(cat "${TM_TMP}/out")"
-    rm -rf "$SP"/pip-24.0.dist-info "$SP"/cffi-*; _drift "$V" "$L"
+    rm -rf "$SP"/pip-24.0.dist-info "$SP"/cffi-* "$SP"/cffi; _drift "$V" "$L"
     tm_assert_rc 1 "$RC" "a venv missing cffi passed"
     tm_assert_eq "MISSING cffi: not installed, the lock pins 2.1.1" "$(cat "${TM_TMP}/out")" "the missing line"
     # Names compare as pip compares them (PyYAML / pyyaml, confluent_kafka).
-    _dist "$SP" cffi 2.1.1; rm -rf "$SP"/PyYAML-*; _dist "$SP" pyyaml 6.0.3; _drift "$V" "$L"
+    _dist "$SP" cffi 2.1.1; rm -rf "$SP"/PyYAML-* "$SP"/PyYAML; _dist "$SP" pyyaml 6.0.3; _drift "$V" "$L"
     tm_assert_rc 0 "$RC" "a differently-spelt name was read as drift: $(cat "${TM_TMP}/out")"
     # A distribution whose metadata names nothing: a finding, never skipped.
     mkdir -p "$SP/ghost-1.0.dist-info"; printf 'Metadata-Version: 2.1\n' > "$SP/ghost-1.0.dist-info/METADATA"
@@ -367,6 +370,83 @@ d_drift() {
     _drift "${TM_TMP}/novenv" "$L"; tm_assert_rc 3 "$RC" "a missing venv was not 'cannot say'"
 }
 tm_case "the-drift-check-is-red-on-extra-missing-different-duplicate" linux d_drift
+
+# REG-0069 (gatekeeper P1-P4 + Daybreak Blue F-01): venvs whose metadata
+# matches the lock but which can still import code outside it.
+d_drift_escapes() {
+    local L="${TM_REPO_ROOT}/requirements.lock" V="${TM_TMP}/v" SP
+    SP="${V}/lib/python3.12/site-packages"
+    _venv_from_lock "$V" "$L"; _drift "$V" "$L"
+    tm_assert_rc 0 "$RC" "the clean venv failed: $(cat "${TM_TMP}/out")"
+    # A runtime byte-code cache of a RECORDed source is not an escape.
+    mkdir -p "$SP/Flask/__pycache__"; : > "$SP/Flask/__pycache__/__init__.cpython-312.pyc"; _drift "$V" "$L"
+    tm_assert_rc 0 "$RC" "a run-time .pyc of a RECORDed source was a finding: $(cat "${TM_TMP}/out")"
+    # P1: a package installed, then its dist-info deleted: six.py importable.
+    _dist "$SP" six 1.17.0; rm -rf "$SP"/six-1.17.0.dist-info; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "P1: a package with its dist-info removed passed"
+    tm_assert_eq "UNOWNED six/__init__.py: in site-packages, in no distribution's RECORD" "$(cat "${TM_TMP}/out")" "P1 line"
+    rm -rf "$SP/six"
+    # ... and a top-level orphan .pyc, a sitecustomize.py, a symlink out.
+    mkdir -p "$SP/__pycache__"; : > "$SP/__pycache__/evil.cpython-312.pyc"
+    : > "$SP/sitecustomize.py"; ln -s "${TM_TMP}" "$SP/outside"; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "an orphan .pyc / sitecustomize.py / symlink passed"
+    grep -qx "UNOWNED __pycache__/evil.cpython-312.pyc: in site-packages, in no distribution's RECORD" "${TM_TMP}/out" || _tm_afail "orphan .pyc not named: $(cat "${TM_TMP}/out")"
+    grep -qx "UNOWNED sitecustomize.py: in site-packages, in no distribution's RECORD" "${TM_TMP}/out" || _tm_afail "sitecustomize.py not named: $(cat "${TM_TMP}/out")"
+    grep -qx "UNOWNED outside (a symlink): in site-packages, in no distribution's RECORD" "${TM_TMP}/out" || _tm_afail "the symlink not named: $(cat "${TM_TMP}/out")"
+    rm -rf "$SP/__pycache__" "$SP/sitecustomize.py" "$SP/outside"
+    # Many unowned files: ten named, the rest counted.
+    mkdir -p "$SP/junk"; for i in 01 02 03 04 05 06 07 08 09 10 11 12; do : > "$SP/junk/m${i}.py"; done; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "twelve unowned files passed"
+    tm_assert_eq 11 "$(grep -c '^UNOWNED ' "${TM_TMP}/out")" "ten named + one count line"
+    tm_assert_eq "UNOWNED ...: and 2 more files in no distribution's RECORD" "$(tail -n 1 "${TM_TMP}/out")" "the count line"
+    rm -rf "$SP/junk"
+    # P2: a .pth pointing outside the venv.
+    printf '/w/extra\n' > "$SP/evil.pth"; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "P2: a .pth passed"
+    tm_assert_eq "PTH evil.pth: a .pth file no installed distribution put there (it adds import paths or runs code at start-up)" "$(cat "${TM_TMP}/out")" "P2 line"
+    rm -f "$SP/evil.pth"
+    # P3: the system site-packages switched on.
+    sed -i 's/^include-system-site-packages = false$/include-system-site-packages = true/' "$V/pyvenv.cfg"
+    grep -q '= true$' "$V/pyvenv.cfg" || tm_die "the P3 fixture changed nothing"
+    _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "P3: include-system-site-packages = true passed"
+    tm_assert_eq "SYSTEM-SITE pyvenv.cfg: include-system-site-packages = true, so the system site-packages are importable too" "$(cat "${TM_TMP}/out")" "P3 line"
+    printf '%s\n' "$PYVENV_CFG" > "$V/pyvenv.cfg"
+    rm -f "$V/pyvenv.cfg"; _drift "$V" "$L"; tm_assert_rc 3 "$RC" "no pyvenv.cfg was not 'cannot say'"
+    printf '%s\n' "$PYVENV_CFG" > "$V/pyvenv.cfg"
+    # P4: Flask 3.1.2 installed, its METADATA edited to say 3.1.3.
+    rm -rf "$SP"/Flask "$SP"/Flask-*.dist-info; _dist "$SP" Flask 3.1.2
+    sed -i 's/^Version: 3\.1\.2$/Version: 3.1.3/' "$SP/Flask-3.1.2.dist-info/METADATA"
+    grep -q '^Version: 3.1.3$' "$SP/Flask-3.1.2.dist-info/METADATA" || tm_die "the P4 fixture changed nothing"
+    _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "P4: flask 3.1.2 relabelled 3.1.3 passed"
+    grep -qx "MODIFIED flask: Flask-3.1.2.dist-info/METADATA does not match its RECORD hash" "${TM_TMP}/out" || _tm_afail "P4: the edited METADATA was not named: $(cat "${TM_TMP}/out")"
+    grep -qx "MISLABELLED flask: Flask-3.1.2.dist-info says 3.1.2, its METADATA says 3.1.3" "${TM_TMP}/out" || _tm_afail "P4: the label was not named: $(cat "${TM_TMP}/out")"
+    # ... and, with the dist-info renamed to match, the RECORD hash alone.
+    mv "$SP/Flask-3.1.2.dist-info" "$SP/Flask-3.1.3.dist-info"; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "P4: a renamed relabelled dist-info passed"
+    tm_assert_eq 1 "$(grep -c '^MODIFIED flask: ' "${TM_TMP}/out")" "P4: the RECORD check alone must catch it"
+    rm -rf "$SP"/Flask "$SP"/Flask-*.dist-info; _dist "$SP" Flask 3.1.3
+    # A locked file edited, and one deleted.
+    printf 'import os\n' >> "$SP/Flask/__init__.py"; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "an edited locked file passed"
+    tm_assert_eq "MODIFIED flask: Flask/__init__.py does not match its RECORD hash" "$(cat "${TM_TMP}/out")" "edited file line"
+    rm -f "$SP/Flask/__init__.py"; _drift "$V" "$L"
+    tm_assert_eq "MODIFIED flask: Flask/__init__.py is missing" "$(cat "${TM_TMP}/out")" "missing file line"
+    _dist "$SP" Flask 3.1.3
+    # No RECORD: its files cannot be verified.
+    rm -f "$SP/Flask-3.1.3.dist-info/RECORD"; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "a distribution with no RECORD passed"
+    grep -qx "NORECORD flask: no RECORD, so its files cannot be verified" "${TM_TMP}/out" || _tm_afail "NORECORD not named: $(cat "${TM_TMP}/out")"
+    _dist "$SP" Flask 3.1.3
+    # A RECORD row that points outside the venv.
+    printf '../../../../../etc/passwd,sha256=AAAA,1\n' >> "$SP/Flask-3.1.3.dist-info/RECORD"; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "a RECORD pointing outside the venv passed"
+    grep -q "^MODIFIED flask: its RECORD lists .*etc/passwd, outside the venv$" "${TM_TMP}/out" || _tm_afail "outside path not named: $(cat "${TM_TMP}/out")"
+    _dist "$SP" Flask 3.1.3; _drift "$V" "$L"
+    tm_assert_rc 0 "$RC" "the restored venv failed: $(cat "${TM_TMP}/out")"
+}
+tm_case "the-drift-check-is-red-on-code-outside-the-lock-reg-0069" linux d_drift_escapes
 
 # ─── --audit-only: the INSTALLED venv against the release's lock ─────────────
 _audit() {   # _audit <venv> <script-dir> -> rows in ${TM_TMP}/rows
@@ -385,7 +465,7 @@ a_audit_warns() {
     _venv_from_lock "$V" "$L"
     _audit "$V" "$D"
     tm_assert_rc 0 "$RC" "the audit section failed: $(cat "${TM_TMP}/rows")"
-    grep -qx 'PASS|venv packages|16 packages, exactly the lock' "${TM_TMP}/rows" || _tm_afail "a venv holding the lock was not a PASS: $(cat "${TM_TMP}/rows")"
+    grep -qxF "PASS|venv packages|${PASS16}" "${TM_TMP}/rows" || _tm_afail "a venv holding the lock was not a PASS: $(cat "${TM_TMP}/rows")"
     # A v1.3.2 host: ensurepip's pip.
     rm -rf "$V"/lib/python3.12/site-packages/pip-*; _dist "$V/lib/python3.12/site-packages" pip 24.0
     _audit "$V" "$D"
