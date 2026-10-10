@@ -82,7 +82,7 @@ l_lock_carries_pip() {
         echo 'set -euo pipefail'; echo 'fail() { echo "[FAIL] $*"; exit 1; }'
         tm_extract_func "$(tm_upgrade_sh)" load_pins; tm_extract_func "$(tm_upgrade_sh)" require_pins
         echo 'declare -A PINS; load_pins "$1"'
-        tm_extract_line "$(tm_upgrade_sh)" '^require_pins [a-z -]+$'
+        tm_extract_line "$(tm_upgrade_sh)" '^require_pins [a-z0-9 -]+$'
         echo 'echo "CLAIMED pip=${PINS[pip]}"'
     } > "${TM_TMP}/rp.sh"
     RC=0; bash "${TM_TMP}/rp.sh" "$req" > "${TM_TMP}/out" 2>&1 || RC=$?

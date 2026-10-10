@@ -386,7 +386,9 @@ if len(sites) != 1:
     print("%s: expected one lib/python3*/site-packages, found %d" % (venv, len(sites))); sys.exit(3)
 have, probs = {}, []
 for d in metadata.distributions(path=sites):
-    name, ver = d.metadata["Name"], d.version
+    # .get, not [...]: a missing field is None either way, but [...] warns on
+    # 3.12 and is to raise KeyError later, which would be a crash, not a finding.
+    name, ver = d.metadata.get("Name"), d.metadata.get("Version")
     if not name or not ver:
         probs.append("UNREADABLE %s: a distribution with no name or version" % (name or "?"))
         continue
