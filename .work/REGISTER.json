@@ -865,6 +865,15 @@
       "where": "install.sh / install/upgrade-full.sh venv_drift (RECORD rows with no digest are owned, not hashed)",
       "accepted_because": "ACCEPTED, root-only (James 2026-10-10 'Practical hardening'): with REG-0078 the venv is root:root and not writable by the service account, so both need root on the host, which can change anything the check itself reads.",
       "closes_when": "(if revisited) install with --no-compile and refuse install-time __pycache__, and keep the locked wheels' RECORD digests on the host, root-owned, to compare with"
+    },
+    {
+      "id": "REG-0085",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0009 builder round 3, 2026-10-10",
+      "finding": "/opt/topic-manager itself stays owned by the service account (0750), so that account (outside the running service, whose unit makes /opt read-only) could rename the now root-owned venv directory away and drop in its own.",
+      "where": "install.sh / install/upgrade-full.sh ownership of /opt/topic-manager",
+      "closes_when": "/opt/topic-manager is root-owned with only the paths the app must write delegated to the service account, proven by an upgrade + restore"
     }
   ]
 }
