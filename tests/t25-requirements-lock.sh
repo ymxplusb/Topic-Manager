@@ -397,7 +397,7 @@ h_pypi_silent() {
 }
 tm_case "online-an-unanswered-release-is-exit-3" none h_pypi_silent
 
-SCA="${TM_REPO_ROOT}/tools/sca-check.sh"
+SCA="${TM_SCA_CHECK:-${TM_REPO_ROOT}/tools/sca-check.sh}"   # tests/mutate.sh TARGET sca
 s_osv_any_vuln_is_a_finding() {
     {
         echo 'PY="${PYTHON:-python3}"; "$PY" -c "import json" >/dev/null 2>&1 || PY=python'
@@ -422,6 +422,7 @@ s_osv_any_vuln_is_a_finding() {
     got="$(_j 1 '{"next_page_token": "abc"}')"; [[ "$got" == BAD* ]] || _tm_afail "a bare page token was read as a verdict: ${got}"
     got="$(_j 2 '{"results": [{}]}')"; [[ "$got" == BAD* ]] || _tm_afail "1 result for 2 queries was read as a verdict: ${got}"
     got="$(_j 1 '{"results": [{}], "extra": 1}')"; [[ "$got" == BAD* ]] || _tm_afail "an envelope with another key: ${got}"
+    got="$(_j 1 '{"results": [{"vulns": [], "other": 1}]}')"; [[ "$got" == BAD* ]] || _tm_afail "a result with another key: ${got}"
     got="$(_j 2 '{"results": [{}, {"vulns": "x"}]}')"
     tm_assert_eq "CLEAN"$'\n'"BAD a result has a malformed vulns list or page token" "$got" "a malformed entry is BAD for that query only"
 }

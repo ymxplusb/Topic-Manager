@@ -394,11 +394,11 @@ d_drift_escapes() {
     grep -qx "UNOWNED sitecustomize.py: in site-packages, in no distribution's RECORD" "${TM_TMP}/out" || _tm_afail "sitecustomize.py not named: $(cat "${TM_TMP}/out")"
     grep -qx "UNOWNED outside (a symlink): in site-packages, in no distribution's RECORD" "${TM_TMP}/out" || _tm_afail "the symlink not named: $(cat "${TM_TMP}/out")"
     rm -rf "$SP/__pycache__" "$SP/sitecustomize.py" "$SP/outside"
-    # Many unowned files: ten named, the rest counted.
-    mkdir -p "$SP/junk"; for i in 01 02 03 04 05 06 07 08 09 10 11 12; do : > "$SP/junk/m${i}.py"; done; _drift "$V" "$L"
-    tm_assert_rc 1 "$RC" "twelve unowned files passed"
+    # Many unowned files: ten named, the rest (here exactly one) counted.
+    mkdir -p "$SP/junk"; for i in 01 02 03 04 05 06 07 08 09 10 11; do : > "$SP/junk/m${i}.py"; done; _drift "$V" "$L"
+    tm_assert_rc 1 "$RC" "eleven unowned files passed"
     tm_assert_eq 11 "$(grep -c '^UNOWNED ' "${TM_TMP}/out")" "ten named + one count line"
-    tm_assert_eq "UNOWNED ...: and 2 more files in no distribution's RECORD" "$(tail -n 1 "${TM_TMP}/out")" "the count line"
+    tm_assert_eq "UNOWNED ...: and 1 more files in no distribution's RECORD" "$(tail -n 1 "${TM_TMP}/out")" "the count line"
     rm -rf "$SP/junk"
     # P2: a .pth pointing outside the venv.
     printf '/w/extra\n' > "$SP/evil.pth"; _drift "$V" "$L"
