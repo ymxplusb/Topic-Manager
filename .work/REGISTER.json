@@ -701,6 +701,56 @@
       "closes_when": "pip is pinned and hash-locked, scanned by sca, installed first from the lock by every installer (online and offline), and the installed venv is held to exactly the locked set",
       "closed_by": "v1.3.3 (WO-0009): pip==26.2.1 pinned (venv tooling) and locked; install.sh/upgrade-full.sh upgrade it first (--require-hashes, PyPI or bundle) then hold the venv to exactly the lock (drift fails the run; upgrade rolls back; --audit-only WARNs); sca 17 clean and RED with pip 24.0 in the lock; e2e in ubuntu:24.04 from a prepare-offline.sh bundle: pip 26.2.1, drift exit 0, exit 1 after `pip install six`",
       "date": "2026-10-09"
+    },
+    {
+      "id": "REG-0069",
+      "severity": "Medium",
+      "status": "open",
+      "source": "gatekeeper WO-0009 (v1.3.3) at ccf5b7b, 2026-10-09: gatekeeper probe + Daybreak Blue F-01 (Codex rated HIGH; gatekeeper MEDIUM: every escape needs root tampering of a venv the installer created seconds earlier from the hash-locked lock) (gpt-daybreak-blue-latest/xhigh, banner), reproduced by the gatekeeper on a copy in a fresh python:3.12-bookworm container on .81",
+      "finding": "venv_drift prints '16 packages, exactly the lock' (exit 0) on four venvs whose interpreter imports code outside the lock: (P1) `pip install six` then its six-*.dist-info deleted - six.py importable; (P2) a .pth in site-packages pointing at /w/extra holding evilmod.py; (P3) pyvenv.cfg include-system-site-packages = true with six in the system site; (P4) flask 3.1.2 installed with its METADATA Version edited to 3.1.3. It reads dist-info Name/Version in one lib/python3*/site-packages; it does not look at .pth files, metadata-less modules, pyvenv.cfg, or file hashes (RECORD). The defect class REG-0068 targets (ensurepip pip 24.0, pip-installed extras, version drift, duplicates) IS detected (t55 + real-venv P0/P5).",
+      "where": "install.sh / install/upgrade-full.sh shared block, PYVENV heredoc (sites glob + metadata.distributions(path=sites))",
+      "closes_when": "the drift check refuses include-system-site-packages=true and any .pth not written by a locked distribution's RECORD, flags top-level modules/packages in site-packages not owned by any RECORD, and the printed claim says 'distribution metadata matches the lock' unless those are checked; t55 cases for P1-P3",
+      "date": "2026-10-09"
+    },
+    {
+      "id": "REG-0070",
+      "severity": "Medium",
+      "status": "open",
+      "source": "gatekeeper WO-0009 (v1.3.3) at ccf5b7b, 2026-10-09: Daybreak Blue hypothesis (gpt-daybreak-blue-latest/xhigh, banner), reproduced by the gatekeeper on a copy in a fresh python:3.12-bookworm container on .81 (Daybreak Blue F-03, Codex rated HIGH; gatekeeper MEDIUM: pre-existing since v1.1.x and needs OSV or a proxy to answer {} / an empty page with a token)",
+      "finding": "tools/sca-check.sh reads an OSV answer of {} or {\"next_page_token\":\"abc\"} as CLEAN: it neither checks the HTTP status (curl without -f / -w http_code) nor follows or refuses next_page_token. With a stub curl answering OSV that way and pip==24.0 in the lock: 'pip 24.0 CLEAN', 'clean 18 / vulnerable 0 / skipped 0', exit 0 (real OSV: 24.0 VULNERABLE, exit 1). An error object ({\"code\":13,...}) is correctly SKIPPED, exit 2.",
+      "where": "tools/sca-check.sh osv_verdict (~120-133) and query_osv curl (~139)",
+      "closes_when": "each OSV query requires HTTP 200; a next_page_token is followed to the end or is a SKIP; t-case with a stub curl for both shapes",
+      "date": "2026-10-09"
+    },
+    {
+      "id": "REG-0071",
+      "severity": "Low",
+      "status": "open",
+      "source": "gatekeeper WO-0009 (v1.3.3) at ccf5b7b, 2026-10-09: Daybreak Blue hypothesis (gpt-daybreak-blue-latest/xhigh, banner), reproduced by the gatekeeper on a copy in a fresh python:3.12-bookworm container on .81 (Daybreak Blue F-02, Codex rated HIGH; gatekeeper LOW: needs a test-only env var deliberately exported plus a crafted JSON; CI never sets it)",
+      "finding": "check-requirements-lock.sh --require-online honours an inherited TM_LOCK_METADATA (a tests-only hook in gen-requirements-lock.py --check-set): with blinker dropped from the lock and a JSON mapping every remaining entry to [] exported, it prints 'PASS - 15 releases', exit 0; the same lock without the hook is 'FAIL - the lock does not cover the resolved set', exit 1. The generator's 'closure judged from TM_LOCK_METADATA (no resolution)' line is swallowed because the gate echoes only the last line.",
+      "where": "tools/gen-requirements-lock.py:295; tools/check-requirements-lock.sh:140",
+      "closes_when": "the gate unsets (or refuses) TM_LOCK_METADATA and, under --require-online, TM_LOCK_OFFLINE_OK; t25/t41 assert it",
+      "date": "2026-10-09"
+    },
+    {
+      "id": "REG-0072",
+      "severity": "Low",
+      "status": "open",
+      "source": "gatekeeper WO-0009 (v1.3.3) at ccf5b7b, 2026-10-09: Daybreak Blue hypothesis (gpt-daybreak-blue-latest/xhigh, banner), reproduced by the gatekeeper on a copy in a fresh python:3.12-bookworm container on .81 (Daybreak Blue F-05, Codex rated MEDIUM; gatekeeper LOW: needs an author to add a duplicate tag)",
+      "finding": "tools/check-heredocs.sh compiles only the FIRST body of a tag (set(found) + re.search): a 1-line `: <<'PYVENV' / pass / PYVENV` decoy placed before the real venv_drift, with `def broken(:::` in the real PYVENV body, prints 'OK PYVENV install.sh (1 lines)' and exits 0; bash -n also passes.",
+      "where": "tools/check-heredocs.sh (for tag in sorted(set(found)) / re.search)",
+      "closes_when": "every occurrence is compiled and an expected tag must occur exactly once per file",
+      "date": "2026-10-09"
+    },
+    {
+      "id": "REG-0073",
+      "severity": "Low",
+      "status": "open",
+      "source": "gatekeeper WO-0009 (v1.3.3) at ccf5b7b, 2026-10-09: Daybreak Blue hypothesis (gpt-daybreak-blue-latest/xhigh, banner), reproduced by the gatekeeper on a copy in a fresh python:3.12-bookworm container on .81 (Daybreak Blue F-07, Codex rated MEDIUM; gatekeeper LOW: needs a second section for one package)",
+      "finding": "check-sbom-consistency.sh reads NOTICES.md per-package sections last-write-wins (found[key] = ver), unlike SBOM/About which go through record(): an earlier '## pip / Version: 24.0' section above the real 26.2.1 one passes ('all 3 copies agree', exit 0).",
+      "where": "tools/check-sbom-consistency.sh:~254",
+      "closes_when": "NOTICES entries go through record() and a duplicate section is a failure",
+      "date": "2026-10-09"
     }
   ]
 }

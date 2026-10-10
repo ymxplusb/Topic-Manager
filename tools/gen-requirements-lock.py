@@ -62,6 +62,8 @@ REQ = os.path.join(ROOT, 'requirements.txt')
 LOCK = os.path.join(ROOT, 'requirements.lock')
 # A resolution that hangs (a stalled index, a proxy that never answers) is a
 # "could not verify", not a gate that never returns (round 11, TM-RL-005).
+# One spelling of a pin, name==version, for every message and key below.
+PIN_FMT = '%s==%s'
 RESOLVE_TIMEOUT = int(os.environ.get('TM_LOCK_RESOLVE_TIMEOUT') or 600)
 PLATFORMS = ['manylinux_2_34_x86_64', 'manylinux_2_28_x86_64',
              'manylinux_2_17_x86_64', 'manylinux2014_x86_64']
@@ -108,7 +110,7 @@ def resolve():
     # v1.3.3: a direct pin the resolution left out (pip special-casing
     # itself, say) is refused here, never written as a lock without it.
     got = {lockparse.norm(n): v for n, v in pins}
-    lost = ['%s==%s' % nv for nv in sorted(direct_pins().items()) if got.get(nv[0]) != nv[1]]
+    lost = [PIN_FMT % nv for nv in sorted(direct_pins().items()) if got.get(nv[0]) != nv[1]]
     if lost:
         raise SystemExit('the resolution does not carry the direct pin(s) %s; refusing to write '
                          'a lock without them' % ', '.join(lost))
@@ -196,7 +198,7 @@ def metadata_file(src):
             for k, v in json.load(open(src, encoding='utf-8')).items()}
 
     def deps(name, version):
-        key = '%s==%s' % (name, version)
+        key = PIN_FMT % (name, version)
         if key not in meta:
             raise LookupError('no metadata for %s' % key)
         return meta[key] or []
@@ -237,7 +239,7 @@ def check_closure(locked, deps):
             if not _applies_to_target(r, extras):
                 continue
             dep = lockparse.norm(r.name)
-            problem = _closure_problem(r, dep, locked, version_cls, '%s==%s' % (name, version), spec)
+            problem = _closure_problem(r, dep, locked, version_cls, PIN_FMT % (name, version), spec)
             if problem:
                 problems.append(problem)
             wanted_extras.setdefault(dep, set()).update(r.extras)
