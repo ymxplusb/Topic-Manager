@@ -193,8 +193,9 @@ STUB
     chmod +x "${1}/bin/python3" "${1}/bin/pip"
 }
 # A stand-in system python3: `-m venv [--clear] DIR` makes the stand-in venv
-# seeded with pip 24.0, as Ubuntu 24.04's ensurepip does; anything else is
-# the real interpreter (venv_drift runs it).
+# seeded with pip 24.0, as Ubuntu 24.04's ensurepip does. Like the real one,
+# without --clear an EXISTING venv keeps what is installed in it (only bin/ is
+# refreshed). Anything else is the real interpreter (venv_drift runs it).
 _stub_system_python() {
     mkdir -p "${TM_TMP}/sysbin"; rm -rf "${TM_TMP}/tpl"
     _stub_venv_python "${TM_TMP}/tpl"; _dist "${TM_TMP}/tpl/lib/python3.12/site-packages" pip 24.0
@@ -202,7 +203,8 @@ _stub_system_python() {
         printf '#!/usr/bin/env bash\n'
         printf 'if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then\n'
         printf '    for d in "$@"; do :; done; echo "venv $*" >> "$STUB_LOG"\n'
-        printf '    rm -rf "$d"; cp -R "%s/tpl" "$d"; exit 0\n' "$TM_TMP"
+        printf '    case " $* " in *" --clear "*) rm -rf "$d" ;; esac\n'
+        printf '    if [ -d "$d/lib" ]; then rm -rf "$d/bin"; cp -R "%s/tpl/bin" "$d/bin"; else rm -rf "$d"; cp -R "%s/tpl" "$d"; fi; exit 0\n' "$TM_TMP" "$TM_TMP"
         printf 'fi\nexec "%s" "$@"\n' "$REAL_PY"
     } > "${TM_TMP}/sysbin/python3"
     chmod +x "${TM_TMP}/sysbin/python3"
@@ -311,7 +313,14 @@ tm_case "upgrade-phase-8-venv-then-pip-then-lock-then-drift" linux o_upgrade_ord
 
 o_install_order() {
     _phase8_install true;  _assert_order true "${TM_TMP}/src"
-    grep -q '^venv -m venv --clear ' "$STUB_LOG" || _tm_afail "install.sh does not start from an empty venv (--clear): $(sed -n 1p "$STUB_LOG")"
+    # A reinstall over a venv an older release left a package in: the
+    # install starts from an empty venv, so the leftover is gone and the
+    # drift check passes.
+    _dist "${TM_TMP}/venv/lib/python3.12/site-packages" leftover 0.9
+    _phase8_install true
+    tm_assert_rc 0 "$RC" "a reinstall over a venv holding a leftover package failed: $(cat "${TM_TMP}/out")"
+    [ ! -e "${TM_TMP}/venv/lib/python3.12/site-packages/leftover-0.9.dist-info" ] \
+        || _tm_afail "the reinstall kept a package the old venv held (no --clear)"
     _phase8_install false; _assert_order false "${TM_TMP}/src"
     export STUB_EXTRA=six; _phase8_install true; unset STUB_EXTRA
     tm_assert_rc 1 "$RC" "install.sh passed a venv holding a package the lock does not pin"

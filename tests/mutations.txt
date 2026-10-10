@@ -7784,9 +7784,13 @@ REPLACE|            a.href = URL.createObjectURL(new Blob([settingsComplianceCsv
 # only when a BEHAVIOURAL case is among its red cases (read the report).
 --- M927
 DESC|v1.3.3 lock_entry: the missing-lock guard is neutralised
+# EQUIVALENT (measured 2026-10-09: red only on the byte-identity case): with
+# no lock the `done < "$lock"` redirection fails, the loop never runs, n stays
+# 0 and `[[ $n -eq 1 ]]` returns 1, the guard's exit status. The guard only
+# spares bash's "No such file" line on stderr.
 TESTS|t55-venv-tooling-v133.sh
 TARGET|install
-EQUIV|no
+EQUIV|yes
 ANCHOR|    [[ -f "$lock" ]] || return 1
 REPLACE|    true
 
