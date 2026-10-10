@@ -873,7 +873,62 @@
       "source": "WO-0009 builder round 3, 2026-10-10",
       "finding": "/opt/topic-manager itself stays owned by the service account (0750), so that account (outside the running service, whose unit makes /opt read-only) could rename the now root-owned venv directory away and drop in its own.",
       "where": "install.sh / install/upgrade-full.sh ownership of /opt/topic-manager",
-      "closes_when": "/opt/topic-manager is root-owned with only the paths the app must write delegated to the service account, proven by an upgrade + restore"
+      "closes_when": "/opt/topic-manager is root-owned with only the paths the app must write delegated to the service account, proven by an upgrade + restore",
+      "note": "Gatekeeper round 3: upgrade-full.sh (~3532) also chowns tm/ and wsgi.py recursively to the service account; covered by this entry's close condition."
+    },
+    {
+      "id": "REG-0086",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0009 gatekeeper round 3 @ 14bf695 (stage 0), 2026-10-10",
+      "finding": "pyvenv.cfg parsing in the drift check differs from CPython's: a later line containing a form feed/VT/FS/GS/RS/U+0085/U+2028 can hide include-system-site-packages = true, and with two home= lines the check reads the last while Python uses the first. Needs root since REG-0078 (same class as REG-0084).",
+      "where": "install.sh / install/upgrade-full.sh venv drift check (~416-430)",
+      "closes_when": "parse pyvenv.cfg exactly as CPython's site.py does (first match, splitlines semantics) and refuse duplicate/odd lines, with tests"
+    },
+    {
+      "id": "REG-0087",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0009 gatekeeper round 3 @ 14bf695 (stage 0), 2026-10-10",
+      "finding": "venv/bin can be replaced by a symlink to an outside, world-writable directory: the lock-down (no symlink following) exits 0 and the drift check passes. Needs root (or the REG-0085 rename).",
+      "where": "install.sh / upgrade-full.sh venv lock-down + drift check",
+      "closes_when": "refuse a symlinked bin/ (or any symlinked directory inside the venv other than lib64), with a test"
+    },
+    {
+      "id": "REG-0088",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0009 gatekeeper round 3 @ 14bf695 (stage 0), 2026-10-10",
+      "finding": "The lock-down's closing find check ignores find's exit status (install.sh:558-559; t55 lines ~291/293 likewise): a find error with no output returns 0. Backstop only (M1016 equivalent).",
+      "where": "install.sh, upgrade-full.sh, tests/t55",
+      "closes_when": "check find's status and fail closed"
+    },
+    {
+      "id": "REG-0089",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0009 gatekeeper round 3 @ 14bf695 (stage 0), 2026-10-10",
+      "finding": "pipefail-consumers passes when its parser crashes (RecursionError on 3000 nested $(): exit 1 is accepted, prints 'no early-exit consumer').",
+      "where": "tools/check-pipefail-consumers.sh:61",
+      "closes_when": "a parser crash is exit 2 (could not check)"
+    },
+    {
+      "id": "REG-0090",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0009 gatekeeper round 3 @ 14bf695 (stage 0), 2026-10-10",
+      "finding": "frontend-syntax never checks inline <script> blocks in index.html (collects only src= scripts).",
+      "where": "tools/check-frontend-syntax.sh",
+      "closes_when": "inline scripts are parsed too, with a test"
+    },
+    {
+      "id": "REG-0091",
+      "severity": "Low",
+      "status": "open",
+      "source": "WO-0009 gatekeeper round 3 @ 14bf695 (stage 0), 2026-10-10",
+      "finding": "version-surfaces takes the FIRST match: a decoy/commented ['Version','1.3.3' before the real (stale) row passes.",
+      "where": "tools/check-version-surfaces.sh",
+      "closes_when": "every occurrence must agree (or the real row is anchored), with a test"
     }
   ]
 }
