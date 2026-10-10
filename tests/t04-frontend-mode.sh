@@ -204,7 +204,7 @@ _build_phase10() {
         echo 'for _p in "${BASELINE_PATHS[@]}"; do case "$_p" in "$FAKEROOT"/*) ;; *) echo "REFUSING: $_p" >&2; exit 90 ;; esac; done'
         local f
         for f in record_baseline baseline_stream baseline_is_legacy baseline_assert_record \
-                 baseline_lookup apply_baseline safe_install_dir enforce_audit_db_modes normalise_frontend_ownership; do
+                 baseline_lookup apply_baseline safe_install_dir enforce_audit_db_modes normalise_frontend_ownership lock_down_venv; do
             tm_extract_func "$UP" "$f"
         done
         tm_extract_line "$UP" '^baseline_has\(\)'
