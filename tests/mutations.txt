@@ -8501,9 +8501,12 @@ REPLACE|    true
 
 --- M1016
 DESC|REG-0078 lock_down_venv: the closing check is neutralised
+# EQUIVALENT (measured 2026-10-10: red only on the byte-identity case): the
+# chown and the three chmods before it always leave nothing for it to find;
+# it is the backstop for a filesystem that refuses one of them silently.
 TESTS|t55-venv-tooling-v133.sh
 TARGET|install
-EQUIV|no
+EQUIV|yes
 ANCHOR|    [[ -z "$bad" ]] || { echo "${bad} is not root:root and closed to group/other writes"; return 1; }
 REPLACE|    true
 
